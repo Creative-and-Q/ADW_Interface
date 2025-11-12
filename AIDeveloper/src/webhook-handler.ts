@@ -220,8 +220,8 @@ function parseCustomEvent(payload: any): {
   const source = payload._source || 'custom';
 
   return {
-    workflowType: payload.workflowType as WorkflowType,
-    taskDescription: payload.taskDescription,
+    workflowType: payload.workflowType as WorkflowType || WorkflowType.FEATURE,
+    taskDescription: payload.taskDescription || 'Manual workflow execution',
     webhookPayload: {
       source: source as 'custom' | 'manual',
       repository: payload.repository,

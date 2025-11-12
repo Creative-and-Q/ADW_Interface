@@ -12,13 +12,13 @@ import * as logger from './utils/logger.js';
  */
 export async function logWebhook(
   source: string,
-  eventType: string,
+  eventType: string | undefined,
   payload: any
 ): Promise<number> {
   try {
     const webhookLogId = await insert('webhook_logs', {
       source,
-      event_type: eventType,
+      event_type: eventType || null,
       payload: JSON.stringify(payload),
       response_status: 200,
     });
