@@ -68,14 +68,18 @@ export class PlanAgent extends BaseAgent {
       }
       const systemPrompt = await this.loadSystemPrompt('plan-agent-prompt.md');
 
+      // Extract review feedback from context (for retry attempts)
+      const reviewFeedback = input.context?.reviewFeedback;
+
       // Log step: Build planning prompt
       if (this.executionLogger) {
         await this.executionLogger.logStep('Building planning prompt', {
           taskDescriptionLength: taskDescription.length,
           codebaseContextLength: codebaseContext.length,
+          hasReviewFeedback: !!reviewFeedback,
         });
       }
-      const userPrompt = this.buildPlanningPrompt(taskDescription, codebaseContext);
+      const userPrompt = this.buildPlanningPrompt(taskDescription, codebaseContext, reviewFeedback);
 
       // Call AI API (already logged by BaseAgent)
       logger.info('Calling AI for plan generation');
@@ -239,12 +243,94 @@ ${structureStr}
   /**
    * Build planning prompt
    */
-  private buildPlanningPrompt(taskDescription: string, codebaseContext: string): string {
-    return `
+  private buildPlanningPrompt(
+    taskDescription: string,
+    codebaseContext: string,
+    reviewFeedback?: any
+  ): string {
+    let prompt = `
 Task: ${taskDescription}
 
 Context:
-${codebaseContext}
+${codebaseContext}`;
+
+    // Add review/security feedback if this is a retry attempt
+    if (reviewFeedback) {
+      prompt += `
+
+IMPORTANT - RETRY ATTEMPT:
+This is a retry attempt. The previous implementation failed review/security checks.
+You MUST address ALL of the following issues in your new plan:
+
+`;
+
+      // Handle security lint feedback
+      if (reviewFeedback.issues || reviewFeedback.blockers) {
+        prompt += `
+Security Issues Found:
+- Total Issues: ${reviewFeedback.totalIssues || 0}
+- Blockers (Critical/High): ${reviewFeedback.blockers?.length || 0}
+
+`;
+
+        if (reviewFeedback.blockers && reviewFeedback.blockers.length > 0) {
+          prompt += `Blocking Security Issues:\n`;
+          reviewFeedback.blockers.forEach((issue: any, i: number) => {
+            prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.message}
+   File: ${issue.file}${issue.line ? `:${issue.line}` : ''}
+   Recommendation: ${issue.recommendation}\n`;
+          });
+          prompt += '\n';
+        }
+
+        if (reviewFeedback.issues && reviewFeedback.issues.length > 0) {
+          prompt += `All Security Issues:\n`;
+          reviewFeedback.issues.forEach((issue: any, i: number) => {
+            prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.message}
+   File: ${issue.file}${issue.line ? `:${issue.line}` : ''}
+   Recommendation: ${issue.recommendation}\n`;
+          });
+          prompt += '\n';
+        }
+      }
+
+      // Handle review feedback
+      if (reviewFeedback.securityIssues || reviewFeedback.qualityIssues) {
+        if (reviewFeedback.securityIssues && reviewFeedback.securityIssues.length > 0) {
+          prompt += `Review - Security Issues:\n`;
+          reviewFeedback.securityIssues.forEach((issue: any, i: number) => {
+            prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.description}
+   ${issue.filePath ? `File: ${issue.filePath}${issue.lineNumber ? `:${issue.lineNumber}` : ''}` : ''}
+   ${issue.suggestion ? `Suggestion: ${issue.suggestion}` : ''}\n`;
+          });
+          prompt += '\n';
+        }
+
+        if (reviewFeedback.qualityIssues && reviewFeedback.qualityIssues.length > 0) {
+          prompt += `Review - Quality Issues:\n`;
+          reviewFeedback.qualityIssues.forEach((issue: any, i: number) => {
+            prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.description}
+   ${issue.filePath ? `File: ${issue.filePath}${issue.lineNumber ? `:${issue.lineNumber}` : ''}` : ''}
+   ${issue.suggestion ? `Suggestion: ${issue.suggestion}` : ''}\n`;
+          });
+          prompt += '\n';
+        }
+      }
+
+      prompt += `
+YOUR PLAN MUST:
+1. Address EVERY security issue listed above with specific fixes
+2. Include proper input validation, sanitization, and security controls
+3. Follow OWASP Top 10 guidelines (no SQL injection, XSS, command injection, etc.)
+4. Implement proper authentication and authorization where needed
+5. Include security-specific test cases to verify fixes
+6. Document all security improvements made
+
+Your revised plan should be significantly different from the failed attempt and explicitly describe how each security issue will be resolved.
+`;
+    }
+
+    prompt += `
 
 Please analyze this task and create a detailed implementation plan following the format specified in your system prompt. Provide a JSON response with the plan structure including:
 - summary
@@ -257,6 +343,8 @@ Please analyze this task and create a detailed implementation plan following the
 - testStrategy
 - dependencies
     `.trim();
+
+    return prompt;
   }
 
   /**

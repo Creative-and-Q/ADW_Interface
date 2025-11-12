@@ -14,6 +14,7 @@ import {
 } from './workflow-state.js';
 import { PlanAgent } from './agents/plan-agent.js';
 import { CodeAgent } from './agents/code-agent.js';
+import { SecurityLintAgent } from './agents/security-lint-agent.js';
 import { TestAgent } from './agents/test-agent.js';
 import { ReviewAgent } from './agents/review-agent.js';
 import { DocumentAgent } from './agents/document-agent.js';
@@ -204,6 +205,9 @@ export class AgentManager extends EventEmitter {
         break;
       case AgentType.CODE:
         agent = new CodeAgent();
+        break;
+      case AgentType.SECURITY_LINT:
+        agent = new SecurityLintAgent();
         break;
       case AgentType.TEST:
         agent = new TestAgent();

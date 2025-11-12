@@ -64,12 +64,13 @@ export class Orchestrator extends BaseAgent {
   private initializeWorkflowConfigs(): Map<WorkflowType, WorkflowConfig> {
     const configs = new Map<WorkflowType, WorkflowConfig>();
 
-    // Feature workflow: Plan → Code → Test → Review → Document
+    // Feature workflow: Plan → Code → Security Lint → Test → Review → Document
     configs.set(WorkflowType.FEATURE, {
       type: WorkflowType.FEATURE,
       agents: [
         AgentType.PLAN,
         AgentType.CODE,
+        AgentType.SECURITY_LINT,
         AgentType.TEST,
         AgentType.REVIEW,
         AgentType.DOCUMENT,
@@ -78,20 +79,21 @@ export class Orchestrator extends BaseAgent {
       timeoutMs: config.agents.timeoutMs,
     });
 
-    // Bugfix workflow: Plan → Code → Test → Review
+    // Bugfix workflow: Plan → Code → Security Lint → Test → Review
     configs.set(WorkflowType.BUGFIX, {
       type: WorkflowType.BUGFIX,
-      agents: [AgentType.PLAN, AgentType.CODE, AgentType.TEST, AgentType.REVIEW],
+      agents: [AgentType.PLAN, AgentType.CODE, AgentType.SECURITY_LINT, AgentType.TEST, AgentType.REVIEW],
       maxRetries: 3,
       timeoutMs: config.agents.timeoutMs,
     });
 
-    // Refactor workflow: Plan → Code → Test → Review → Document
+    // Refactor workflow: Plan → Code → Security Lint → Test → Review → Document
     configs.set(WorkflowType.REFACTOR, {
       type: WorkflowType.REFACTOR,
       agents: [
         AgentType.PLAN,
         AgentType.CODE,
+        AgentType.SECURITY_LINT,
         AgentType.TEST,
         AgentType.REVIEW,
         AgentType.DOCUMENT,
@@ -273,15 +275,20 @@ export class Orchestrator extends BaseAgent {
    */
   private async executeWorkflow(
     plan: ExecutionPlan,
-    branchName: string
+    branchName: string,
+    retryCount: number = 0,
+    reviewFeedback?: any
   ): Promise<AgentOutput> {
     const results: AgentOutput[] = [];
     const artifacts: any[] = [];
+    const maxRetries = 5; // Allow up to 5 retries on review failure
 
     logger.info('Executing workflow', {
       workflowId: plan.workflowId,
       type: plan.config.type,
       steps: plan.steps,
+      retryCount,
+      hasReviewFeedback: !!reviewFeedback,
     });
 
     // Execute each agent in sequence
@@ -307,7 +314,9 @@ export class Orchestrator extends BaseAgent {
         const result = await this.executeAgent(
           plan.workflowId,
           agentType,
-          results
+          results,
+          branchName,
+          reviewFeedback
         );
 
         const duration = Date.now() - startTime;
@@ -330,6 +339,44 @@ export class Orchestrator extends BaseAgent {
             workflowId: plan.workflowId,
             summary: result.summary,
           });
+
+          // Check if this is a SECURITY_LINT or REVIEW failure and we can retry
+          if (
+            (agentType === AgentType.SECURITY_LINT || agentType === AgentType.REVIEW) &&
+            retryCount < maxRetries
+          ) {
+            const stageName = agentType === AgentType.SECURITY_LINT ? 'Security Lint' : 'Review';
+
+            logger.info(`${stageName} failed - attempting retry with feedback`, {
+              workflowId: plan.workflowId,
+              retryCount: retryCount + 1,
+              maxRetries,
+            });
+
+            // Extract feedback from artifacts
+            const feedbackReport = result.artifacts?.[0]?.content
+              ? JSON.parse(result.artifacts[0].content)
+              : null;
+
+            // Log retry attempt
+            await logAgentStage(plan.workflowId, branchName, AgentType.PLAN, 'start', {
+              input: {
+                reason: `${stageName} failed - retrying from PLAN stage with feedback`,
+                retryCount: retryCount + 1,
+                maxRetries,
+                feedback: feedbackReport,
+                failedStage: agentType,
+              },
+            });
+
+            // Retry workflow from PLAN stage with feedback
+            return await this.executeWorkflow(
+              plan,
+              branchName,
+              retryCount + 1,
+              feedbackReport
+            );
+          }
 
           return {
             success: false,
@@ -392,7 +439,9 @@ export class Orchestrator extends BaseAgent {
   private async executeAgent(
     workflowId: number,
     agentType: AgentType,
-    previousResults: AgentOutput[]
+    previousResults: AgentOutput[],
+    branchName: string,
+    reviewFeedback?: any
   ): Promise<AgentOutput> {
     // Fetch workflow data to get task description and payload
     const workflow = await getWorkflow(workflowId);
@@ -409,10 +458,12 @@ export class Orchestrator extends BaseAgent {
 
     const input: AgentInput = {
       workflowId,
+      branchName,
       taskDescription,
       webhookPayload: workflow.payload,
       context: {
         previousResults,
+        reviewFeedback, // Pass review feedback for retry attempts
       },
     };
 
@@ -455,6 +506,9 @@ export class Orchestrator extends BaseAgent {
         break;
       case AgentType.CODE:
         status = WorkflowStatus.CODING;
+        break;
+      case AgentType.SECURITY_LINT:
+        status = WorkflowStatus.SECURITY_LINTING;
         break;
       case AgentType.TEST:
         status = WorkflowStatus.TESTING;

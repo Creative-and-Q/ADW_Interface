@@ -16,6 +16,7 @@ export enum WorkflowStatus {
   PENDING = 'pending',
   PLANNING = 'planning',
   CODING = 'coding',
+  SECURITY_LINTING = 'security_linting',
   TESTING = 'testing',
   REVIEWING = 'reviewing',
   DOCUMENTING = 'documenting',
@@ -28,6 +29,7 @@ export enum AgentType {
   ORCHESTRATOR = 'orchestrator',
   PLAN = 'plan',
   CODE = 'code',
+  SECURITY_LINT = 'security_lint',
   TEST = 'test',
   REVIEW = 'review',
   DOCUMENT = 'document',
@@ -45,6 +47,7 @@ export enum AgentStatus {
 export enum ArtifactType {
   PLAN = 'plan',
   CODE = 'code',
+  SECURITY_LINT = 'security_lint',
   TEST = 'test',
   REVIEW_REPORT = 'review_report',
   DOCUMENTATION = 'documentation',
@@ -120,6 +123,7 @@ export interface AgentInput {
   workflowId: number;
   workflowType?: WorkflowType;
   taskDescription?: string;
+  branchName?: string;
   webhookPayload?: WebhookPayload;
   codebaseContext?: CodebaseContext;
   previousArtifacts?: Artifact[];
@@ -127,6 +131,7 @@ export interface AgentInput {
   metadata?: Record<string, any>;
   context?: {
     previousResults?: AgentOutput[];
+    reviewFeedback?: any;
     [key: string]: any;
   };
 }
