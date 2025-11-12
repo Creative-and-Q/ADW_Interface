@@ -168,11 +168,57 @@ export class CodeAgent extends BaseAgent {
     const taskDescription =
       input.taskDescription || plan.summary || 'No description';
 
-    return `
+    const reviewFeedback = input.context?.reviewFeedback;
+
+    let prompt = `
 Task: ${taskDescription}
 
 Implementation Plan:
-${JSON.stringify(plan, null, 2)}
+${JSON.stringify(plan, null, 2)}`;
+
+    // Add feedback from previous failed attempt if this is a retry
+    if (reviewFeedback) {
+      prompt += `
+
+CRITICAL - THIS IS A RETRY ATTEMPT:
+The previous implementation failed security/quality checks.
+You MUST fix ALL issues identified below:
+
+`;
+
+      if (reviewFeedback.issues || reviewFeedback.blockers) {
+        prompt += `Security Lint Issues:\n`;
+        const issueList = reviewFeedback.blockers || reviewFeedback.issues || [];
+        issueList.forEach((issue: any, i: number) => {
+          prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.message}
+   File: ${issue.file}${issue.line ? ` (line ${issue.line})` : ''}
+   Fix: ${issue.recommendation}\n`;
+        });
+        prompt += '\n';
+      }
+
+      if (reviewFeedback.securityIssues) {
+        prompt += `Review Security Issues:\n`;
+        reviewFeedback.securityIssues.forEach((issue: any, i: number) => {
+          prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.description}
+   ${issue.suggestion || ''}\n`;
+        });
+        prompt += '\n';
+      }
+
+      if (reviewFeedback.qualityIssues) {
+        prompt += `Review Quality Issues:\n`;
+        reviewFeedback.qualityIssues.forEach((issue: any, i: number) => {
+          prompt += `${i + 1}. [${issue.severity}] ${issue.category}: ${issue.description}
+   ${issue.suggestion || ''}\n`;
+        });
+        prompt += '\n';
+      }
+
+      prompt += `IMPORTANT: Your implementation MUST address every issue listed above. Double-check the security checklist in your system prompt.\n`;
+    }
+
+    prompt += `
 
 Please generate the code to implement this plan. Follow these guidelines:
 1. Create clean, well-documented TypeScript code
@@ -181,6 +227,7 @@ Please generate the code to implement this plan. Follow these guidelines:
 4. Include proper error handling
 5. Add JSDoc comments for public APIs
 6. Ensure security best practices (no SQL injection, XSS, etc.)
+7. CRITICAL: Follow ALL security requirements from your system prompt
 
 Respond with JSON following this format:
 {
@@ -201,6 +248,8 @@ Respond with JSON following this format:
   "notes": ["any important notes"]
 }
     `.trim();
+
+    return prompt;
   }
 
   /**
