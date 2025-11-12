@@ -45,4 +45,5 @@ workflows/*/artifacts/
 AIDeveloper/.git/
 modules/*/.git/
 
-modules/IntentInterpreter/.cache/*
+*/.cache/*
+/workflows/*
