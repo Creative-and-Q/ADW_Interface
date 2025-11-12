@@ -96,8 +96,8 @@ function setupRoutes() {
   app.post('/webhooks/:source', async (req: Request, res: Response) => {
     try {
       const { handleWebhook } = await import('./webhook-handler.js');
-      const source = req.params.source;
-      const result = await handleWebhook(source, req.body);
+      const source = req.params.source as 'github' | 'gitlab' | 'custom' | 'manual';
+      const result = await handleWebhook(req.body, source);
       res.json(result);
     } catch (error) {
       logger.error('Webhook handler error', error as Error);
