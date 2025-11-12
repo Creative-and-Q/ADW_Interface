@@ -1,0 +1,22 @@
+meta {
+  name: Process Character Input copy
+  type: http
+  seq: 4
+}
+
+post {
+  url: http://127.0.0.1:3031/process
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "user_id": "user1",
+    "input": "My Ally CreativeBuilds will destroy you. he is a lvl 10 Wizard and his fireball is gigantic."
+  }
+}

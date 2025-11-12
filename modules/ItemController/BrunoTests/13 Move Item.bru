@@ -1,0 +1,24 @@
+meta {
+  name: Move Item
+  type: http
+  seq: 13
+}
+
+post {
+  url: http://localhost:3034/item/1/move
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "owner_type": "poi",
+    "owner_id": "poi_1",
+    "x_coord": 10,
+    "y_coord": 10
+  }
+}

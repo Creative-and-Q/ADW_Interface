@@ -1,0 +1,47 @@
+--- a/src/ai-agent.ts
++++ b/src/ai-agent.ts
+@@ -282,6 +282,31 @@ export class AIAgent {
+   async chat(messages: Message[]): Promise<{ role: string; content: string }> {
+     if (!this.apiKey) {
+       return {
+         role: 'assistant',
+         content: 'AI Agent is not configured. Please set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable.'
+       };
+     }
+ 
++    // Check for direct function calls based on user message
++    const lastMessage = messages[messages.length - 1];
++    if (lastMessage && lastMessage.role === 'user') {
++      const userMessage = lastMessage.content.toLowerCase();
++      
++      // Direct function calls for common queries
++      if (userMessage.includes('show me all') && userMessage.includes('chains')) {
++        try {
++          const result = await this.executeFunction('list_chains', {});
++          const chainsData = JSON.parse(result);
++          
++          let response = 'Here are all the chains currently in the system:\n\n';
++          if (chainsData.count === 0) {
++            response += '- **No chains found.**\n  The system is empty right now.';
++          } else {
++            chainsData.chains.forEach((chain: any) => {
++              response += - **Chain #: **\n;
++              if (chain.description) response +=   \n;
++              response +=   Owner: , Steps: \n\n;
++            });
++          }
++          
++          return {
++            role: 'assistant',
++            content: response
++          };
++        } catch (error: any) {
++          return {
++            role: 'assistant',
++            content: Sorry, I encountered an error retrieving chains: 
++          };
++        }
++      }
++    }
++
+     try {

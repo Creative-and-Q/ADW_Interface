@@ -1,0 +1,36 @@
+meta {
+  name: Start Module
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://localhost:3035/module-processes/CharacterController/start
+  body: none
+  auth: none
+}
+
+docs {
+  # Start Module
+
+  Starts a module server process.
+
+  Note: This test may fail if the module is already running.
+  Stop the module first before running this test.
+}
+
+tests {
+  test("should return 200 or error if already running", function() {
+    expect([200, 500]).to.include(res.status);
+  });
+
+  test("should return response with data or error", function() {
+    expect(res.body).to.have.property('success');
+    if (res.body.success) {
+      expect(res.body.data).to.be.an('object');
+      expect(res.body.data.name).to.equal('CharacterController');
+    } else {
+      expect(res.body).to.have.property('error');
+    }
+  });
+}

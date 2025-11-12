@@ -1,0 +1,23 @@
+meta {
+  name: Drop Item
+  type: http
+  seq: 11
+}
+
+post {
+  url: http://localhost:3034/item/1/drop
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "character_id": "char_thorin",
+    "x_coord": 0,
+    "y_coord": 0
+  }
+}

@@ -1,0 +1,22 @@
+meta {
+  name: Process Character Input
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://127.0.0.1:3031/process
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "user_id": "user1",
+    "input": "I am Thorin, a level 5 dwarf fighter"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "name": "scene-controller",
+  "version": "1.0.0",
+  "description": "AI-powered scene and location management system with coordinate grid and position tracking",
+  "main": "dist/server.js",
+  "type": "module",
+  "scripts": {
+    "predev": "bash -c \"echo '🧹 Cleaning up port 3033...' && (lsof -ti:3033 | xargs kill -9 2>/dev/null || true) && sleep 1 && echo '✅ Port cleared'\"",
+    "prestart": "bash -c \"echo '🧹 Cleaning up port 3033...' && (lsof -ti:3033 | xargs kill -9 2>/dev/null || true) && sleep 1 && echo '✅ Port cleared'\"",
+    "start": "node --loader ts-node/esm src/server.ts",
+    "build": "tsc",
+    "dev": "ts-node src/server.ts",
+    "db:setup": "node --loader ts-node/esm db/setup.ts",
+    "db:migrate": "node --loader ts-node/esm db/migrate.ts",
+    "cli": "node --loader ts-node/esm src/cli.ts",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "lint": "eslint src tests --ext .ts",
+    "lint:fix": "eslint src tests --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "scene",
+    "location",
+    "coordinates",
+    "poi",
+    "position-tracking",
+    "ai",
+    "openrouter",
+    "rpg"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "mysql2": "^3.15.3",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.6",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.2",
+    "jest": "^29.7.0",
+    "prettier": "^3.1.1",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

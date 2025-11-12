@@ -1,0 +1,15 @@
+meta {
+  name: Check Name Availability
+  type: http
+  seq: 5
+}
+
+get {
+  url: http://127.0.0.1:3031/check-name/Thorin?userId=user2
+  body: none
+  auth: none
+}
+
+params:query {
+  userId: user2
+}

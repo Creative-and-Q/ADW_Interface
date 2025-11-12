@@ -1,0 +1,128 @@
+{
+  "examples": [
+    {
+      "description": "Simple character creation",
+      "input": {
+        "user_id": "user123",
+        "input": "Create a new character named Thorin, he's a dwarf warrior",
+        "user_character": "Thorin"
+      }
+    },
+    {
+      "description": "Adding items without explicit character name",
+      "input": {
+        "input": "I find a longsword and 50 gold pieces",
+        "user_character": "Elara"
+      }
+    },
+    {
+      "description": "With IntentInterpreter metadata - attack action",
+      "input": {
+        "input": "I attack the goblin with my sword",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "attack",
+          "confidence": 0.95,
+          "entities": {
+            "target": "goblin",
+            "weapon": "sword"
+          }
+        }
+      }
+    },
+    {
+      "description": "With IntentInterpreter metadata - spell casting",
+      "input": {
+        "input": "I cast fireball at the enemies",
+        "user_character": "Elara",
+        "meta_data": {
+          "intent": "cast_spell",
+          "confidence": 0.92,
+          "entities": {
+            "spell": "fireball",
+            "target": "enemies"
+          }
+        }
+      }
+    },
+    {
+      "description": "With IntentInterpreter metadata - movement",
+      "input": {
+        "input": "I move to the north door",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "movement",
+          "confidence": 0.88,
+          "entities": {
+            "direction": "north",
+            "destination": "door"
+          }
+        }
+      }
+    },
+    {
+      "description": "Updating character stats",
+      "input": {
+        "input": "My strength is 16, dexterity is 14, constitution is 15",
+        "user_character": "Thorin"
+      }
+    },
+    {
+      "description": "Learning a spell",
+      "input": {
+        "input": "I learn the spell Magic Missile",
+        "user_character": "Elara"
+      }
+    },
+    {
+      "description": "Adding condition with metadata",
+      "input": {
+        "input": "I am poisoned by the trap",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "status_effect",
+          "confidence": 0.91,
+          "entities": {
+            "condition": "poisoned",
+            "source": "trap"
+          }
+        }
+      }
+    },
+    {
+      "description": "Equipment management",
+      "input": {
+        "input": "I equip my battleaxe and shield",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "equipment",
+          "confidence": 0.93,
+          "entities": {
+            "items": ["battleaxe", "shield"],
+            "action": "equip"
+          }
+        }
+      }
+    },
+    {
+      "description": "Complex action with full context",
+      "input": {
+        "input": "I sneak past the guards using my cloak of invisibility",
+        "user_character": "Elara",
+        "meta_data": {
+          "intent": "stealth",
+          "confidence": 0.89,
+          "entities": {
+            "action": "sneak",
+            "target": "guards",
+            "item": "cloak of invisibility"
+          },
+          "additional_context": {
+            "location": "castle hallway",
+            "time": "night"
+          }
+        }
+      }
+    }
+  ]
+}

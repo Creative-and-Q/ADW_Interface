@@ -1,0 +1,23 @@
+meta {
+  name: Process Scene Input
+  type: http
+  seq: 7
+}
+
+post {
+  url: http://127.0.0.1:3033/process
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "user_id": "user1",
+    "entity_id": "char_thorin",
+    "input": "I move to 0,0"
+  }
+}

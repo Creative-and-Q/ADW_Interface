@@ -1,0 +1,33 @@
+meta {
+  name: Get Module Process
+  type: http
+  seq: 2
+}
+
+get {
+  url: http://localhost:3035/module-processes/CharacterController
+  body: none
+  auth: none
+}
+
+tests {
+  test("should return 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("should return success", function() {
+    expect(res.body.success).to.equal(true);
+  });
+
+  test("should return module info", function() {
+    expect(res.body.data).to.be.an('object');
+    expect(res.body.data.name).to.equal('CharacterController');
+  });
+
+  test("should have required fields", function() {
+    const module = res.body.data;
+    expect(module).to.have.property('status');
+    expect(module).to.have.property('port');
+    expect(module.port).to.equal(3031);
+  });
+}

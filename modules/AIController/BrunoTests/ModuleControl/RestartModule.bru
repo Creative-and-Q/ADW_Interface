@@ -1,0 +1,39 @@
+meta {
+  name: Restart Module
+  type: http
+  seq: 5
+}
+
+post {
+  url: http://localhost:3035/module-processes/CharacterController/restart
+  body: none
+  auth: none
+}
+
+docs {
+  # Restart Module
+
+  Restarts a module server process (stop then start).
+
+  This can be run regardless of whether the module is running or stopped.
+  If stopped, it will just start. If running, it will stop then start.
+}
+
+tests {
+  test("should return 200", function() {
+    expect(res.status).to.equal(200);
+  });
+
+  test("should return success", function() {
+    expect(res.body.success).to.equal(true);
+  });
+
+  test("should return module info", function() {
+    expect(res.body.data).to.be.an('object');
+    expect(res.body.data.name).to.equal('CharacterController');
+  });
+
+  test("should have success message", function() {
+    expect(res.body.message).to.include('restarted successfully');
+  });
+}

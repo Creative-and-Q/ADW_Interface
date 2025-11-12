@@ -1,0 +1,197 @@
+{
+  "examples": [
+    {
+      "description": "Simple character creation (first time, checks for name conflicts)",
+      "input": {
+        "user_id": "user123",
+        "input": "Create a new character named Thorin, he's a dwarf warrior"
+      },
+      "notes": "When user_character is empty, AI detects 'Thorin' and checks if name is available"
+    },
+    {
+      "description": "Character creation with user_character specified",
+      "input": {
+        "user_id": "user456",
+        "input": "My character is an elf mage",
+        "user_character": "Elara"
+      }
+    },
+    {
+      "description": "Adding items",
+      "input": {
+        "user_id": "user123",
+        "input": "I find a longsword and 50 gold pieces",
+        "user_character": "Thorin"
+      }
+    },
+    {
+      "description": "Attack with IntentInterpreter metadata",
+      "input": {
+        "user_id": "user123",
+        "input": "I attack the goblin with my sword",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "attack",
+          "confidence": 0.95,
+          "entities": {
+            "target": "goblin",
+            "weapon": "sword"
+          }
+        }
+      }
+    },
+    {
+      "description": "Spell casting",
+      "input": {
+        "user_id": "user456",
+        "input": "I cast fireball at the enemies",
+        "user_character": "Elara",
+        "meta_data": {
+          "intent": "cast_spell",
+          "confidence": 0.92,
+          "entities": {
+            "spell": "fireball",
+            "target": "enemies"
+          }
+        }
+      }
+    },
+    {
+      "description": "Name change attempt (triggers conflict check)",
+      "input": {
+        "user_id": "user123",
+        "input": "I want to rename my character to Gandalf",
+        "user_character": "Thorin"
+      },
+      "expectedResponse": "NAME_CONFLICT error if 'Gandalf' is taken"
+    },
+    {
+      "description": "Movement with metadata",
+      "input": {
+        "user_id": "user123",
+        "input": "I move to the north door",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "movement",
+          "confidence": 0.88,
+          "entities": {
+            "direction": "north",
+            "destination": "door"
+          }
+        }
+      }
+    },
+    {
+      "description": "Updating character stats",
+      "input": {
+        "user_id": "user123",
+        "input": "My strength is 16, dexterity is 14, constitution is 15",
+        "user_character": "Thorin"
+      }
+    },
+    {
+      "description": "Learning a spell",
+      "input": {
+        "user_id": "user456",
+        "input": "I learn the spell Magic Missile",
+        "user_character": "Elara"
+      }
+    },
+    {
+      "description": "Adding condition with metadata",
+      "input": {
+        "user_id": "user123",
+        "input": "I am poisoned by the trap",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "status_effect",
+          "confidence": 0.91,
+          "entities": {
+            "condition": "poisoned",
+            "source": "trap"
+          }
+        }
+      }
+    },
+    {
+      "description": "Equipment management",
+      "input": {
+        "user_id": "user123",
+        "input": "I equip my battleaxe and shield",
+        "user_character": "Thorin",
+        "meta_data": {
+          "intent": "equipment",
+          "confidence": 0.93,
+          "entities": {
+            "items": ["battleaxe", "shield"],
+            "action": "equip"
+          }
+        }
+      }
+    },
+    {
+      "description": "Complex action with full context",
+      "input": {
+        "user_id": "user456",
+        "input": "I sneak past the guards using my cloak of invisibility",
+        "user_character": "Elara",
+        "meta_data": {
+          "intent": "stealth",
+          "confidence": 0.89,
+          "entities": {
+            "action": "sneak",
+            "target": "guards",
+            "item": "cloak of invisibility"
+          },
+          "additional_context": {
+            "location": "castle hallway",
+            "time": "night"
+          }
+        }
+      }
+    }
+  ],
+  "errorExamples": [
+    {
+      "description": "Name conflict on first character creation",
+      "input": {
+        "user_id": "user789",
+        "input": "My character is Thorin"
+      },
+      "expectedResponse": {
+        "success": false,
+        "error": {
+          "code": "NAME_CONFLICT",
+          "attemptedName": "Thorin",
+          "message": "Character name \"Thorin\" is already taken"
+        }
+      }
+    },
+    {
+      "description": "Name conflict on rename",
+      "input": {
+        "user_id": "user123",
+        "input": "Rename my character to Elara",
+        "user_character": "Thorin"
+      },
+      "expectedResponse": {
+        "success": false,
+        "error": {
+          "code": "NAME_CONFLICT",
+          "attemptedName": "Elara",
+          "message": "Character name \"Elara\" is already taken by another user"
+        }
+      }
+    },
+    {
+      "description": "Missing user_id",
+      "input": {
+        "input": "Create character"
+      },
+      "expectedResponse": {
+        "success": false,
+        "error": "Missing \"user_id\" field in JSON"
+      }
+    }
+  ]
+}

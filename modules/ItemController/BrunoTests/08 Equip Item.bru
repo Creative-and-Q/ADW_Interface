@@ -1,0 +1,22 @@
+meta {
+  name: Equip Item
+  type: http
+  seq: 8
+}
+
+post {
+  url: http://localhost:3034/item/1/equip
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "character_id": "char_thorin",
+    "slot": "main_hand"
+  }
+}

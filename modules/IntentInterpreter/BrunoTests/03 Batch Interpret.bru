@@ -1,0 +1,25 @@
+meta {
+  name: Batch Interpret
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://127.0.0.1:3032/interpret/batch
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "messages": [
+      "I want to create a new character named Thorin",
+      "Show me my character sheet",
+      "I move north to the tavern"
+    ]
+  }
+}

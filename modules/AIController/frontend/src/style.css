@@ -1,0 +1,75 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-colors;
+  }
+
+  .btn-primary {
+    @apply bg-primary-600 text-white hover:bg-primary-700 disabled:bg-gray-300 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-700 hover:bg-gray-300;
+  }
+
+  .btn-danger {
+    @apply bg-red-600 text-white hover:bg-red-700;
+  }
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+  }
+
+  .card {
+    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+  }
+
+  .badge {
+    @apply px-2 py-1 text-xs font-medium rounded-full;
+  }
+
+  .badge-intent {
+    @apply bg-purple-100 text-purple-800;
+  }
+
+  .badge-character {
+    @apply bg-blue-100 text-blue-800;
+  }
+
+  .badge-scene {
+    @apply bg-green-100 text-green-800;
+  }
+
+  .badge-item {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+
+  .badge-storyteller {
+    @apply bg-pink-100 text-pink-800;
+  }
+
+  .step-card {
+    @apply bg-white rounded-lg shadow-sm border-2 border-gray-200 p-4 hover:border-primary-300 transition-colors;
+  }
+
+  .step-card.selected {
+    @apply border-primary-500 bg-primary-50;
+  }
+
+  .json-viewer {
+    @apply bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto font-mono text-sm;
+  }
+}

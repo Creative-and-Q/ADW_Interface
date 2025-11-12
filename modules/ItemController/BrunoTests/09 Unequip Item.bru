@@ -1,0 +1,21 @@
+meta {
+  name: Unequip Item
+  type: http
+  seq: 9
+}
+
+post {
+  url: http://localhost:3034/item/1/unequip
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "character_id": "char_thorin"
+  }
+}

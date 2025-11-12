@@ -1,0 +1,21 @@
+meta {
+  name: Interpret Intent
+  type: http
+  seq: 2
+}
+
+post {
+  url: http://127.0.0.1:3032/interpret
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "message": "I want to create a new character named Thorin"
+  }
+}

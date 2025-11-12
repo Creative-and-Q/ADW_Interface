@@ -1,0 +1,26 @@
+meta {
+  name: Create Region
+  type: http
+  seq: 3
+}
+
+post {
+  url: http://127.0.0.1:3033/region
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "continent_id": 1,
+    "name": "The Shire",
+    "description": "A peaceful region of rolling hills and Hobbit holes",
+    "x_coord": 0,
+    "y_coord": 0,
+    "radius": 100
+  }
+}

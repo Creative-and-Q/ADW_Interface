@@ -1,0 +1,25 @@
+meta {
+  name: Create Location
+  type: http
+  seq: 4
+}
+
+post {
+  url: http://127.0.0.1:3033/location
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "Tavern",
+    "location_type": "building",
+    "x_coord": 0,
+    "y_coord": 0,
+    "region_id": 1
+  }
+}
