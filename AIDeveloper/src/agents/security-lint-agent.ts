@@ -60,21 +60,30 @@ interface SecurityLintResult {
 export class SecurityLintAgent extends BaseAgent {
   // Security patterns to check (regex-based rules)
   private readonly securityPatterns = [
+    // SQL Injection - only flag template literals in actual database queries
     {
-      pattern: /\$\{.*?\}/g,
+      pattern: /\.(query|raw|execute)\s*\([^)]*`[^`]*\$\{/gi,
       severity: SecuritySeverity.HIGH,
       category: 'CWE-89',
       rule: 'no-sql-injection',
-      message: 'Possible SQL injection: Template literal used in query',
-      recommendation: 'Use parameterized queries or ORM methods',
+      message: 'SQL injection vulnerability: Template literal used in database query',
+      recommendation: 'Use parameterized queries or ORM methods instead of string interpolation',
     },
     {
-      pattern: /`SELECT.*\$\{/gi,
+      pattern: /`\s*(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\s+[^`]*\$\{/gi,
       severity: SecuritySeverity.HIGH,
       category: 'CWE-89',
       rule: 'no-sql-injection',
-      message: 'SQL injection vulnerability: String interpolation in SQL query',
+      message: 'SQL injection vulnerability: String interpolation in SQL statement',
       recommendation: 'Use prepared statements with parameter binding',
+    },
+    {
+      pattern: /(db|knex|connection|pool|sequelize|mongoose)\.(query|raw|execute)\s*\(`[^`]*\$\{/gi,
+      severity: SecuritySeverity.HIGH,
+      category: 'CWE-89',
+      rule: 'no-sql-injection',
+      message: 'SQL injection vulnerability: User input in database query',
+      recommendation: 'Use parameterized queries or ORM methods',
     },
     {
       pattern: /exec\([^)]*\$\{/g,
