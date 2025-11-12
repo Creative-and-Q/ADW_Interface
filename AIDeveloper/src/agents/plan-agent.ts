@@ -379,29 +379,14 @@ Please analyze this task and create a detailed implementation plan following the
     } catch (error) {
       logger.error('Failed to parse plan response', error as Error);
 
-      // Return a basic plan as fallback
-      return {
-        summary: 'AI-generated plan (parsing failed, using fallback)',
-        scope: 'feature',
-        complexity: 'medium',
-        estimatedFiles: 1,
-        files: {
-          create: [],
-          modify: [],
-          delete: [],
-        },
-        steps: [
-          {
-            number: 1,
-            action: 'Implement requested feature',
-            files: [],
-            reason: 'Complete the task as described',
-          },
-        ],
-        risks: [],
-        testStrategy: 'Add appropriate tests',
-        dependencies: [],
-      };
+      // Log the raw response for debugging
+      logger.error('Raw AI response that failed to parse', { response });
+
+      // Throw error instead of returning useless fallback - a bad plan is worse than no plan
+      throw new Error(
+        `Failed to parse plan from AI response: ${(error as Error).message}. ` +
+        'The AI may not be following the required JSON format.'
+      );
     }
   }
 
