@@ -81,6 +81,10 @@ export const deploymentsAPI = {
   get: (operationId: string) => api.get(`/deployments/${operationId}`),
 };
 
+export const systemAPI = {
+  rebuildRestart: () => api.post('/system/rebuild-restart'),
+};
+
 // ============================================================================
 // AIController Chain Management API
 // ============================================================================

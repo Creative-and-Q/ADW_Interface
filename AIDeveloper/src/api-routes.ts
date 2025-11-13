@@ -716,4 +716,76 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
   }
 });
 
+// ============================================================================
+// System Control Routes
+// ============================================================================
+
+/**
+ * POST /api/system/rebuild-restart
+ * Rebuild and restart the entire AIDeveloper application
+ */
+router.post('/system/rebuild-restart', async (_req: Request, res: Response) => {
+  try {
+    logger.info('Rebuild and restart triggered via API');
+
+    // Return success immediately - the restart will happen asynchronously
+    res.json({
+      success: true,
+      message: 'Rebuild and restart initiated. The server will restart in a few seconds.'
+    });
+
+    // Execute rebuild and restart asynchronously
+    setTimeout(async () => {
+      try {
+        const { spawn } = await import('child_process');
+
+        // Create a detached process that will survive this server shutdown
+        const restartScript = spawn('bash', ['-c', `
+          echo "Starting rebuild and restart process..."
+
+          # Build backend
+          echo "Building backend..."
+          npm run build
+
+          # Build frontend
+          echo "Building frontend..."
+          npm run build:frontend
+
+          # Find and kill the current server process
+          echo "Stopping server..."
+          pkill -f "node.*dist/server.js" || true
+          pkill -f "tsx.*src/server.ts" || true
+
+          # Wait a moment for processes to terminate
+          sleep 2
+
+          # Start the server again
+          echo "Starting server..."
+          npm start > /dev/null 2>&1 &
+
+          echo "Rebuild and restart complete!"
+        `], {
+          detached: true,
+          stdio: 'ignore',
+          cwd: process.cwd()
+        });
+
+        restartScript.unref();
+
+        // Exit this process to allow restart
+        setTimeout(() => {
+          process.exit(0);
+        }, 1000);
+
+      } catch (error) {
+        logger.error('Failed to execute rebuild and restart', error as Error);
+      }
+    }, 500);
+
+  } catch (error) {
+    logger.error('Failed to initiate rebuild and restart', error as Error);
+    return res.status(500).json({ error: 'Failed to initiate rebuild and restart' });
+  }
+});
+
 export default router;
