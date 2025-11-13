@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { statsAPI } from '../services/api';
+import { statsAPI, systemAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import {
   BarChart,
@@ -23,11 +23,13 @@ import {
   Clock,
   TrendingUp,
   Zap,
+  RefreshCw,
 } from 'lucide-react';
 
 export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [restarting, setRestarting] = useState(false);
   const { socket, connected } = useWebSocket();
 
   useEffect(() => {
@@ -56,6 +58,27 @@ export default function Dashboard() {
     }
   };
 
+  const handleRebuildRestart = async () => {
+    if (!confirm('This will rebuild and restart the entire AIDeveloper application. Continue?')) {
+      return;
+    }
+
+    setRestarting(true);
+    try {
+      await systemAPI.rebuildRestart();
+      alert('Rebuild and restart initiated. The page will reload in 10 seconds...');
+
+      // Wait for server to restart and reload the page
+      setTimeout(() => {
+        window.location.reload();
+      }, 10000);
+    } catch (error) {
+      console.error('Failed to trigger rebuild and restart:', error);
+      alert('Failed to trigger rebuild and restart. Check console for details.');
+      setRestarting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -81,15 +104,28 @@ export default function Dashboard() {
             Real-time overview of your AI development workflows
           </p>
         </div>
-        <div className="flex items-center space-x-2">
-          <div
-            className={`h-3 w-3 rounded-full ${
-              connected ? 'bg-green-500' : 'bg-red-500'
-            } animate-pulse-slow`}
-          ></div>
-          <span className="text-sm font-medium text-gray-600">
-            {connected ? 'Connected' : 'Disconnected'}
-          </span>
+        <div className="flex items-center space-x-4">
+          <button
+            onClick={handleRebuildRestart}
+            disabled={restarting}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-md transition-colors duration-200 shadow-sm"
+            title="Rebuild and restart the entire application"
+          >
+            <RefreshCw className={`h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
+            <span className="text-sm font-medium">
+              {restarting ? 'Restarting...' : 'Rebuild & Restart'}
+            </span>
+          </button>
+          <div className="flex items-center space-x-2">
+            <div
+              className={`h-3 w-3 rounded-full ${
+                connected ? 'bg-green-500' : 'bg-red-500'
+              } animate-pulse-slow`}
+            ></div>
+            <span className="text-sm font-medium text-gray-600">
+              {connected ? 'Connected' : 'Disconnected'}
+            </span>
+          </div>
         </div>
       </div>
 
