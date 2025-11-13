@@ -17,12 +17,14 @@ import {
 import * as logger from '../utils/logger.js';
 import { insert, update, query } from '../database.js';
 import { ExecutionLogger, createExecutionLogger } from '../utils/execution-logger.js';
+import { saveWorkflowArtifact } from '../utils/workflow-directory-manager.js';
 
 export abstract class BaseAgent {
   protected agentType: AgentType;
   protected model: string;
   protected executionId?: number;
   protected workflowId?: number;
+  protected branchName?: string;
   protected startTime?: number;
   protected executionLogger?: ExecutionLogger;
 
@@ -42,6 +44,7 @@ export abstract class BaseAgent {
    */
   protected async initializeExecution(input: AgentInput): Promise<number> {
     this.workflowId = input.workflowId;
+    this.branchName = input.branchName;
     this.startTime = Date.now();
 
     this.executionId = await insert('agent_executions', {
@@ -105,7 +108,7 @@ export abstract class BaseAgent {
   }
 
   /**
-   * Save artifact to database
+   * Save artifact to database and filesystem
    */
   protected async saveArtifact(artifact: Artifact): Promise<number> {
     if (!this.executionId || !this.workflowId) {
@@ -121,12 +124,62 @@ export abstract class BaseAgent {
       metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
     });
 
-    logger.debug(`Saved artifact: ${artifact.type}`, {
+    logger.debug(`Saved artifact to database: ${artifact.type}`, {
       artifactId,
       executionId: this.executionId,
     });
 
+    // Also save to filesystem if we have branch name
+    if (this.branchName) {
+      try {
+        // Generate filename for artifact
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = artifact.filePath
+          ? `${artifact.type}-${artifactId}-${artifact.filePath.replace(/\//g, '_')}`
+          : `${artifact.type}-${artifactId}-${timestamp}.${this.getFileExtension(artifact.type)}`;
+
+        await saveWorkflowArtifact(
+          this.workflowId,
+          this.branchName,
+          filename,
+          artifact.content
+        );
+
+        logger.debug(`Saved artifact to filesystem: ${filename}`, {
+          artifactId,
+          executionId: this.executionId,
+        });
+      } catch (error) {
+        // Log error but don't fail the operation - database artifact is primary
+        logger.warn('Failed to save artifact to filesystem', {
+          error: (error as Error).message,
+          artifactId,
+        });
+      }
+    }
+
     return artifactId;
+  }
+
+  /**
+   * Get file extension for artifact type
+   */
+  private getFileExtension(artifactType: string): string {
+    switch (artifactType) {
+      case 'plan':
+        return 'json';
+      case 'code':
+        return 'txt';
+      case 'security_lint':
+      case 'review_report':
+        return 'json';
+      case 'test':
+        return 'txt';
+      case 'documentation':
+        return 'md';
+      default:
+        return 'txt';
+    }
   }
 
   /**
