@@ -380,7 +380,7 @@ Please analyze this task and create a detailed implementation plan following the
       logger.error('Failed to parse plan response', error as Error);
 
       // Log the raw response for debugging
-      logger.error('Raw AI response that failed to parse', { response });
+      logger.error('Raw AI response that failed to parse', undefined, { response });
 
       // Throw error instead of returning useless fallback - a bad plan is worse than no plan
       throw new Error(

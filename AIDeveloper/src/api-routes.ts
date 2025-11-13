@@ -724,7 +724,7 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
  * POST /api/system/rebuild-restart
  * Rebuild and restart the entire AIDeveloper application
  */
-router.post('/system/rebuild-restart', async (_req: Request, res: Response) => {
+router.post('/system/rebuild-restart', async (_req: Request, res: Response): Promise<void> => {
   try {
     logger.info('Rebuild and restart triggered via API');
 
@@ -735,7 +735,7 @@ router.post('/system/rebuild-restart', async (_req: Request, res: Response) => {
     });
 
     // Execute rebuild and restart asynchronously
-    setTimeout(async () => {
+    setTimeout(async (): Promise<void> => {
       try {
         const { spawn } = await import('child_process');
 
@@ -784,7 +784,8 @@ router.post('/system/rebuild-restart', async (_req: Request, res: Response) => {
 
   } catch (error) {
     logger.error('Failed to initiate rebuild and restart', error as Error);
-    return res.status(500).json({ error: 'Failed to initiate rebuild and restart' });
+    res.status(500).json({ error: 'Failed to initiate rebuild and restart' });
+    return;
   }
 });
 
