@@ -23,7 +23,7 @@ import {
   resetWorkflowForResume,
 } from './workflow-state.js';
 import { agentManager } from './agent-manager.js';
-import { createBranch } from './utils/git-helper.js';
+import { createBranch, pushChanges } from './utils/git-helper.js';
 import {
   createWorkflowDirectory,
   logAgentStage,
@@ -180,6 +180,18 @@ export class Orchestrator extends BaseAgent {
         );
         logger.info(`Workflow ${input.workflowId} completed successfully`);
 
+        // Push branch to remote
+        logger.info('Pushing branch to remote', { branch: branchName });
+        const pushResult = await pushChanges(branchName, workflowRepoPath);
+        if (pushResult.success) {
+          logger.info('Branch pushed to remote successfully', { branch: branchName });
+        } else {
+          logger.warn('Failed to push branch to remote', {
+            branch: branchName,
+            error: pushResult.error
+          });
+        }
+
         // Create pull request on GitHub
         const prResult = await createPullRequest(
           input.workflowId,
@@ -309,6 +321,18 @@ export class Orchestrator extends BaseAgent {
 
         // Get the workflow repository path
         const workflowRepoPath = getWorkflowRepoPath(workflowId, branchName);
+
+        // Push branch to remote
+        logger.info('Pushing branch to remote', { branch: branchName });
+        const pushResult = await pushChanges(branchName, workflowRepoPath);
+        if (pushResult.success) {
+          logger.info('Branch pushed to remote successfully', { branch: branchName });
+        } else {
+          logger.warn('Failed to push branch to remote', {
+            branch: branchName,
+            error: pushResult.error
+          });
+        }
 
         // Create pull request on GitHub
         const prResult = await createPullRequest(
