@@ -12,9 +12,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { config } from './config.js';
 import * as logger from './utils/logger.js';
-import { initializeDatabase, checkDatabaseHealth } from './database.js';
+import { initializeDatabase, checkDatabaseHealth, query } from './database.js';
 import { setSocketIo } from './websocket-emitter.js';
 import apiRoutes from './api-routes.js';
+import { deploymentManager } from './utils/deployment-manager.js';
 
 // ES Module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -125,6 +126,48 @@ function setupRoutes() {
 }
 
 /**
+ * Auto-start modules that have auto_load enabled
+ */
+async function autoStartModules() {
+  try {
+    logger.info('Checking for auto-load modules...');
+
+    const autoLoadModules = await query(
+      'SELECT module_name FROM module_settings WHERE auto_load = TRUE'
+    );
+
+    if (autoLoadModules.length === 0) {
+      logger.info('No auto-load modules configured');
+      return;
+    }
+
+    logger.info(`Found ${autoLoadModules.length} auto-load module(s)`, {
+      modules: autoLoadModules.map((m: any) => m.module_name)
+    });
+
+    // Start each module with a delay between starts
+    for (const row of autoLoadModules) {
+      const moduleName = row.module_name;
+      try {
+        logger.info(`Auto-starting module: ${moduleName}`);
+        await deploymentManager.startModule(moduleName);
+        logger.info(`Auto-started module: ${moduleName}`);
+
+        // Wait a bit before starting the next module
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        logger.error(`Failed to auto-start module: ${moduleName}`, error as Error);
+        // Continue with other modules even if one fails
+      }
+    }
+
+    logger.info('Auto-load complete');
+  } catch (error) {
+    logger.error('Failed to auto-start modules', error as Error);
+  }
+}
+
+/**
  * Configure WebSocket handlers
  */
 function setupWebSocket() {
@@ -179,7 +222,7 @@ async function initialize() {
     setupWebSocket();
 
     // Start server
-    httpServer.listen(config.port, () => {
+    httpServer.listen(config.port, async () => {
       logger.info(`=� AIDeveloper server running on port ${config.port}`, {
         port: config.port,
         nodeEnv: config.nodeEnv,
@@ -196,6 +239,9 @@ async function initialize() {
       console.log(`API:          http://localhost:${config.port}/api`);
       console.log(`Health:       http://localhost:${config.port}/health`);
       console.log(`${'='.repeat(60)}\n`);
+
+      // Auto-start modules with auto_load enabled
+      await autoStartModules();
     });
 
   } catch (error) {
