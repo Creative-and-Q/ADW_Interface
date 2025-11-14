@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Activity, Code2, AlertCircle, FileText, LayoutDashboard, Package, Link2 } from 'lucide-react';
+import { Toaster } from 'react-hot-toast';
 import Dashboard from './pages/Dashboard';
 import Workflows from './pages/Workflows';
 import WorkflowDetail from './pages/WorkflowDetail';
@@ -75,6 +76,30 @@ function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#363636',
+              color: '#fff',
+            },
+            success: {
+              duration: 3000,
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              duration: 5000,
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
         <Navigation />
         <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
           <Routes>
