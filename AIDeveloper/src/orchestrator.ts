@@ -26,7 +26,9 @@ import {
   logAgentStage,
   createStageDoc,
   updateWorkflowStatus as updateWorkflowDirStatus,
+  getWorkflowRepoPath,
 } from './utils/workflow-directory-manager.js';
+import { createPullRequest } from './utils/github-helper.js';
 
 /**
  * Workflow configuration
@@ -140,11 +142,17 @@ export class Orchestrator extends BaseAgent {
         throw new Error('Failed to create execution plan');
       }
 
-      // Create git branch for this workflow
-      branchName = await this.createWorkflowBranch(input.workflowId, plan.config.type);
+      // Generate branch name
+      branchName = this.generateBranchName(input.workflowId, plan.config.type);
 
-      // Create workflow directory
+      // Create workflow directory (clones repo, installs deps, builds)
       await createWorkflowDirectory(input.workflowId, branchName, plan.config.type);
+
+      // Get the workflow repository path
+      const workflowRepoPath = getWorkflowRepoPath(input.workflowId, branchName);
+
+      // Create git branch in the workflow repository
+      await this.createWorkflowBranch(branchName, workflowRepoPath);
 
       // Update workflow status with branch name
       await updateWorkflowStatus(input.workflowId, WorkflowStatus.PLANNING, branchName);
@@ -168,6 +176,22 @@ export class Orchestrator extends BaseAgent {
           result.summary
         );
         logger.info(`Workflow ${input.workflowId} completed successfully`);
+
+        // Create pull request on GitHub
+        const prResult = await createPullRequest(
+          input.workflowId,
+          branchName,
+          plan.config.type,
+          workflowRepoPath,
+          result.summary
+        );
+
+        if (prResult.success) {
+          logger.info('Pull request created', { prUrl: prResult.prUrl });
+          result.summary += `\n\nPull Request: ${prResult.prUrl}`;
+        } else {
+          logger.warn('Failed to create pull request', { error: prResult.error });
+        }
       } else {
         await failWorkflow(input.workflowId, result.summary);
         await updateWorkflowDirStatus(
@@ -251,23 +275,30 @@ export class Orchestrator extends BaseAgent {
   }
 
   /**
-   * Create workflow branch
+   * Generate workflow branch name
    */
-  private async createWorkflowBranch(
+  private generateBranchName(
     workflowId: number,
     workflowType: WorkflowType
-  ): Promise<string> {
+  ): string {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const branchName = `workflow/${workflowType}-${workflowId}-${timestamp}`;
+    return `workflow/${workflowType}-${workflowId}-${timestamp}`;
+  }
 
-    const result = await createBranch(branchName);
+  /**
+   * Create workflow branch in the isolated repository
+   */
+  private async createWorkflowBranch(
+    branchName: string,
+    workingDir: string
+  ): Promise<void> {
+    const result = await createBranch(branchName, workingDir);
 
     if (!result.success) {
       throw new Error(`Failed to create branch: ${result.error}`);
     }
 
-    logger.info(`Created workflow branch: ${branchName}`);
-    return branchName;
+    logger.info(`Created workflow branch: ${branchName}`, { workingDir });
   }
 
   /**
@@ -456,11 +487,15 @@ export class Orchestrator extends BaseAgent {
       payload?.taskDescription ||
       '';
 
+    // Get workflow repository path (isolated workspace)
+    const workingDir = getWorkflowRepoPath(workflowId, branchName);
+
     const input: AgentInput = {
       workflowId,
       branchName,
       taskDescription,
       webhookPayload: workflow.payload,
+      workingDir, // Pass isolated repository directory to agents
       context: {
         previousResults,
         reviewFeedback, // Pass review feedback for retry attempts
