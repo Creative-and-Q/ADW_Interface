@@ -37,6 +37,9 @@ export const workflowsAPI = {
   cancel: (id: number) => api.delete(`/workflows/${id}`),
   getLogs: (id: number, agentExecutionId?: number) =>
     api.get(`/workflows/${id}/logs`, { params: { agentExecutionId } }),
+  getResumeState: (id: number) => api.get(`/workflows/${id}/resume-state`),
+  resumeWorkflow: (id: number, fromAgentIndex?: number) =>
+    api.post(`/workflows/${id}/resume`, { fromAgentIndex }),
 };
 
 export const statsAPI = {

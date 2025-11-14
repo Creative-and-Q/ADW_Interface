@@ -10,6 +10,7 @@ import {
   AgentOutput,
   WorkflowType,
   WorkflowStatus,
+  AgentStatus,
 } from './types.js';
 import { config } from './config.js';
 import * as logger from './utils/logger.js';
@@ -18,6 +19,8 @@ import {
   updateWorkflowStatus,
   completeWorkflow,
   failWorkflow,
+  getWorkflowResumeState,
+  resetWorkflowForResume,
 } from './workflow-state.js';
 import { agentManager } from './agent-manager.js';
 import { createBranch } from './utils/git-helper.js';
@@ -224,6 +227,225 @@ export class Orchestrator extends BaseAgent {
         summary: `Orchestrator failed: ${(error as Error).message}`,
       };
     }
+  }
+
+  /**
+   * Resume a failed/cancelled workflow from its last checkpoint
+   * Loads completed agent outputs and continues from the failure point
+   */
+  async resumeWorkflow(workflowId: number, fromAgentIndex?: number): Promise<AgentOutput> {
+    logger.info(`Resuming workflow ${workflowId}`, { fromAgentIndex });
+
+    try {
+      // Get workflow resume state
+      const resumeState = await getWorkflowResumeState(workflowId);
+
+      if (!resumeState) {
+        throw new Error('Workflow not found');
+      }
+
+      if (!resumeState.canResume) {
+        throw new Error(
+          `Workflow cannot be resumed. Status: ${resumeState.workflow.status}, ` +
+          `Completed agents: ${resumeState.completedAgents.length}`
+        );
+      }
+
+      // Get the workflow branch name
+      const branchName = resumeState.workflow.branchName;
+      if (!branchName) {
+        throw new Error('Workflow branch name not found');
+      }
+
+      logger.info('Workflow resume state loaded', {
+        workflowId,
+        completedAgents: resumeState.completedAgents.length,
+        failedAgent: resumeState.failedAgent?.agentType,
+        branchName,
+      });
+
+      // Create execution plan
+      const plan = await this.createExecutionPlan(workflowId);
+      if (!plan) {
+        throw new Error('Failed to create execution plan');
+      }
+
+      // Determine resume point (default to after last completed agent)
+      const resumeFromIdx = fromAgentIndex ?? resumeState.resumeFromIndex;
+
+      // Validate resume index
+      if (resumeFromIdx < 0 || resumeFromIdx >= plan.steps.length) {
+        throw new Error(
+          `Invalid resume index ${resumeFromIdx}. Valid range: 0-${plan.steps.length - 1}`
+        );
+      }
+
+      // Reconstruct previous agent outputs for context
+      const previousResults: AgentOutput[] = resumeState.completedAgents.map(agent => ({
+        success: agent.status === AgentStatus.COMPLETED,
+        summary: agent.output?.summary || '',
+        artifacts: agent.output?.artifacts || [],
+      }));
+
+      logger.info(`Resuming from agent ${resumeFromIdx}: ${plan.steps[resumeFromIdx]}`, {
+        previousResults: previousResults.length,
+      });
+
+      // Reset workflow status to PENDING
+      await resetWorkflowForResume(workflowId);
+
+      // Execute remaining agents starting from resume point
+      const result = await this.executeWorkflowFromCheckpoint(
+        plan,
+        branchName,
+        resumeFromIdx,
+        previousResults
+      );
+
+      if (result.success) {
+        await completeWorkflow(workflowId);
+        await updateWorkflowDirStatus(workflowId, branchName, 'completed', result.summary);
+        logger.info(`Workflow ${workflowId} completed after resume`);
+
+        // Get the workflow repository path
+        const workflowRepoPath = getWorkflowRepoPath(workflowId, branchName);
+
+        // Create pull request on GitHub
+        const prResult = await createPullRequest(
+          workflowId,
+          branchName,
+          plan.config.type,
+          workflowRepoPath,
+          result.summary
+        );
+
+        if (prResult.success) {
+          logger.info('Pull request created', { prUrl: prResult.prUrl });
+          result.summary += `\n\nPull Request: ${prResult.prUrl}`;
+        }
+      } else {
+        await failWorkflow(workflowId, result.summary);
+        await updateWorkflowDirStatus(workflowId, branchName, 'failed', result.summary);
+        logger.error(`Workflow ${workflowId} failed after resume: ${result.summary}`);
+      }
+
+      return result;
+    } catch (error) {
+      logger.error('Workflow resume failed', error as Error);
+      await failWorkflow(workflowId, (error as Error).message);
+
+      return {
+        success: false,
+        artifacts: [],
+        summary: `Resume failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Execute workflow from a specific checkpoint (resume point)
+   * @param plan Execution plan
+   * @param branchName Git branch name
+   * @param startIndex Index of first agent to execute (checkpoint)
+   * @param previousResults Outputs from completed agents before checkpoint
+   */
+  private async executeWorkflowFromCheckpoint(
+    plan: ExecutionPlan,
+    branchName: string,
+    startIndex: number,
+    previousResults: AgentOutput[]
+  ): Promise<AgentOutput> {
+    const results: AgentOutput[] = [...previousResults];
+    const artifacts: any[] = [];
+
+    logger.info('Executing workflow from checkpoint', {
+      workflowId: plan.workflowId,
+      startIndex,
+      totalSteps: plan.steps.length,
+      previousResults: previousResults.length,
+    });
+
+    // Execute remaining agents starting from checkpoint
+    for (let i = startIndex; i < plan.steps.length; i++) {
+      const agentType = plan.steps[i];
+      const stageNumber = i + 1;
+      const startTime = Date.now();
+
+      try {
+        logger.info(
+          `Executing step ${stageNumber}/${plan.steps.length}: ${agentType} (resumed)`,
+          { workflowId: plan.workflowId }
+        );
+
+        // Update workflow status
+        await this.updateWorkflowStatusForAgent(plan.workflowId, agentType);
+
+        // Log agent stage start
+        await logAgentStage(plan.workflowId, branchName, agentType, 'start', {
+          input: { workflowId: plan.workflowId, previousResults: results },
+        });
+
+        // Execute agent
+        const result = await this.executeAgent(
+          plan.workflowId,
+          agentType,
+          results,
+          branchName
+        );
+
+        const duration = Date.now() - startTime;
+        results.push(result);
+
+        if (result.artifacts) {
+          artifacts.push(...result.artifacts);
+        }
+
+        if (!result.success) {
+          // Log agent stage failure
+          await logAgentStage(plan.workflowId, branchName, agentType, 'failed', {
+            output: result,
+            error: result.summary,
+            duration,
+          });
+
+          logger.error(`Agent ${agentType} failed during resume`, undefined, {
+            workflowId: plan.workflowId,
+            summary: result.summary,
+          });
+
+          return {
+            success: false,
+            artifacts,
+            summary: `Agent ${agentType} failed: ${result.summary}`,
+          };
+        }
+
+        // Log agent stage completion
+        await logAgentStage(plan.workflowId, branchName, agentType, 'complete', {
+          output: result,
+          duration,
+        });
+
+        logger.info(`Agent ${agentType} completed successfully during resume`, {
+          workflowId: plan.workflowId,
+          duration,
+        });
+      } catch (error) {
+        logger.error(`Agent ${agentType} execution error during resume`, error as Error);
+
+        return {
+          success: false,
+          artifacts,
+          summary: `Agent ${agentType} error: ${(error as Error).message}`,
+        };
+      }
+    }
+
+    return {
+      success: true,
+      artifacts,
+      summary: 'Workflow resumed and completed successfully',
+    };
   }
 
   /**

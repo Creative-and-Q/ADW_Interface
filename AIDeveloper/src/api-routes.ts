@@ -485,6 +485,61 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/workflows/:id/resume
+ * Resume a failed/cancelled workflow from its last checkpoint
+ * Optional body: { fromAgentIndex?: number } to resume from specific agent
+ */
+router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { fromAgentIndex } = req.body || {};
+
+    // Import orchestrator dynamically to avoid circular dependency
+    const { Orchestrator } = await import('./orchestrator.js');
+    const orchestrator = new Orchestrator();
+
+    logger.info('Resuming workflow', { workflowId: id, fromAgentIndex });
+
+    // Resume workflow in background
+    orchestrator.resumeWorkflow(id, fromAgentIndex).catch((error) => {
+      logger.error('Workflow resume failed', error as Error, { workflowId: id });
+    });
+
+    return res.json({
+      success: true,
+      message: 'Workflow resumption started',
+      workflowId: id,
+    });
+  } catch (error) {
+    logger.error('Failed to start workflow resume', error as Error);
+    return res.status(500).json({ error: 'Failed to resume workflow' });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/resume-state
+ * Get workflow resume state to check if workflow can be resumed
+ */
+router.get('/workflows/:id/resume-state', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    // Import getWorkflowResumeState dynamically
+    const { getWorkflowResumeState } = await import('./workflow-state.js');
+    const resumeState = await getWorkflowResumeState(id);
+
+    if (!resumeState) {
+      return res.status(404).json({ error: 'Workflow not found' });
+    }
+
+    return res.json(resumeState);
+  } catch (error) {
+    logger.error('Failed to get workflow resume state', error as Error);
+    return res.status(500).json({ error: 'Failed to get resume state' });
+  }
+});
+
+/**
  * GET /api/modules
  * List all discovered modules
  */

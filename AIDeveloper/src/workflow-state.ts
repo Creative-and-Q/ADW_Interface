@@ -323,3 +323,83 @@ export async function failWorkflow(id: number, reason?: string): Promise<void> {
     throw error;
   }
 }
+
+/**
+ * Get workflow resume state for checkpoint restoration
+ * Returns all completed agent outputs and metadata needed to resume execution
+ */
+export interface WorkflowResumeState {
+  workflow: WorkflowExecution;
+  completedAgents: AgentExecution[];
+  failedAgent: AgentExecution | null;
+  pendingAgents: AgentExecution[];
+  canResume: boolean;
+  resumeFromIndex: number;
+}
+
+export async function getWorkflowResumeState(id: number): Promise<WorkflowResumeState | null> {
+  try {
+    const workflow = await getWorkflow(id);
+    if (!workflow) {
+      return null;
+    }
+
+    const allAgents = await getAgentExecutions(id);
+
+    // Separate agents by status
+    const completedAgents = allAgents.filter(
+      a => a.status === AgentStatus.COMPLETED
+    );
+
+    const failedAgent = allAgents.find(
+      a => a.status === AgentStatus.FAILED
+    ) || null;
+
+    const pendingAgents = allAgents.filter(
+      a => a.status === AgentStatus.PENDING
+    );
+
+    // Can resume if workflow is failed and there are completed agents
+    const canResume =
+      workflow.status === WorkflowStatus.FAILED &&
+      completedAgents.length > 0;
+
+    // Resume from the index after the last completed agent
+    const resumeFromIndex = completedAgents.length;
+
+    logger.debug('Workflow resume state retrieved', {
+      workflowId: id,
+      completed: completedAgents.length,
+      failed: failedAgent ? 1 : 0,
+      pending: pendingAgents.length,
+      canResume,
+      resumeFromIndex,
+    });
+
+    return {
+      workflow,
+      completedAgents,
+      failedAgent,
+      pendingAgents,
+      canResume,
+      resumeFromIndex,
+    };
+  } catch (error) {
+    logger.error('Failed to get workflow resume state', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Reset workflow to allow resumption
+ * Changes status from FAILED to PENDING
+ */
+export async function resetWorkflowForResume(id: number): Promise<void> {
+  try {
+    await updateWorkflowStatus(id, WorkflowStatus.PENDING);
+    logger.info(`Workflow ${id} reset for resumption`);
+  } catch (error) {
+    logger.error('Failed to reset workflow for resume', error as Error);
+    throw error;
+  }
+}

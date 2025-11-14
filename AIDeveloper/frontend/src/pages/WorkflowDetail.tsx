@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { workflowsAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
+import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   FileText,
@@ -9,6 +10,7 @@ import {
   TestTube,
   Search,
   FileCode,
+  Play,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -22,6 +24,8 @@ export default function WorkflowDetail() {
   const [selectedAgentLogs, setSelectedAgentLogs] = useState<number | null>(null);
   const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [resumeState, setResumeState] = useState<any>(null);
+  const [isResuming, setIsResuming] = useState(false);
   const { socket, subscribe } = useWebSocket();
 
   useEffect(() => {
@@ -54,10 +58,39 @@ export default function WorkflowDetail() {
       setAgents(data.agents);
       setArtifacts(data.artifacts);
       await loadLogs();
+      // Load resume state if workflow failed
+      if (data.workflow.status === 'failed') {
+        await loadResumeState();
+      }
     } catch (error) {
       console.error('Failed to load workflow:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadResumeState = async () => {
+    try {
+      const { data } = await workflowsAPI.getResumeState(parseInt(id!));
+      setResumeState(data);
+    } catch (error) {
+      console.error('Failed to load resume state:', error);
+    }
+  };
+
+  const handleResume = async () => {
+    try {
+      setIsResuming(true);
+      await workflowsAPI.resumeWorkflow(parseInt(id!));
+      toast.success('Workflow resumption started');
+      // Reload workflow after short delay
+      setTimeout(() => {
+        loadWorkflow();
+        setIsResuming(false);
+      }, 1000);
+    } catch (error: any) {
+      toast.error(`Failed to resume workflow: ${error.message}`);
+      setIsResuming(false);
     }
   };
 
@@ -129,10 +162,46 @@ export default function WorkflowDetail() {
             </p>
           </div>
         </div>
-        <div className={`px-4 py-2 rounded-full font-medium ${getStatusColor(workflow.status)}`}>
-          {workflow.status}
+        <div className="flex items-center space-x-3">
+          {resumeState?.canResume && (
+            <button
+              onClick={handleResume}
+              disabled={isResuming}
+              className="btn btn-primary flex items-center"
+              title="Resume workflow from last checkpoint"
+            >
+              <Play className="h-4 w-4 mr-2" />
+              {isResuming ? 'Resuming...' : 'Resume Workflow'}
+            </button>
+          )}
+          <div className={`px-4 py-2 rounded-full font-medium ${getStatusColor(workflow.status)}`}>
+            {workflow.status}
+          </div>
         </div>
       </div>
+
+      {/* Resume Info Banner */}
+      {resumeState?.canResume && (
+        <div className="card bg-blue-50 border-blue-200">
+          <div className="flex items-start space-x-3">
+            <Play className="h-5 w-5 text-blue-600 mt-0.5" />
+            <div>
+              <h3 className="text-lg font-semibold text-blue-900 mb-2">
+                Workflow Can Be Resumed
+              </h3>
+              <p className="text-sm text-blue-700 mb-3">
+                This workflow failed but can be resumed from its last checkpoint.
+                {resumeState.completedAgents.length} agent(s) completed successfully and will be skipped.
+              </p>
+              <div className="text-sm text-blue-600">
+                <strong>Resume from:</strong> {resumeState.failedAgent ?
+                  `${resumeState.failedAgent.agentType} (failed)` :
+                  `Agent ${resumeState.resumeFromIndex + 1}`}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Task Description */}
       {workflow.task_description && (
