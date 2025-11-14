@@ -668,6 +668,59 @@ router.get('/modules/:name/logs', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/modules/:name/auto-load
+ * Get auto-load setting for a module
+ */
+router.get('/modules/:name/auto-load', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const result = await query(
+      'SELECT auto_load FROM module_settings WHERE module_name = ?',
+      [name]
+    );
+
+    const autoLoad = result.length > 0 ? result[0].auto_load : false;
+    return res.json({ moduleName: name, autoLoad: Boolean(autoLoad) });
+  } catch (error) {
+    logger.error('Failed to get auto-load setting', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-load setting' });
+  }
+});
+
+/**
+ * PUT /api/modules/:name/auto-load
+ * Update auto-load setting for a module
+ */
+router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { autoLoad } = req.body;
+
+    if (typeof autoLoad !== 'boolean') {
+      return res.status(400).json({ error: 'autoLoad must be a boolean' });
+    }
+
+    // Insert or update the setting
+    await query(
+      `INSERT INTO module_settings (module_name, auto_load)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE auto_load = ?, updated_at = CURRENT_TIMESTAMP`,
+      [name, autoLoad, autoLoad]
+    );
+
+    logger.info('Module auto-load setting updated', { module: name, autoLoad });
+    return res.json({
+      moduleName: name,
+      autoLoad,
+      message: `Auto-load ${autoLoad ? 'enabled' : 'disabled'}`
+    });
+  } catch (error) {
+    logger.error('Failed to update auto-load setting', error as Error);
+    return res.status(500).json({ error: 'Failed to update auto-load setting' });
+  }
+});
+
+/**
  * GET /api/deployments
  * Get all deployment operations
  */
@@ -738,39 +791,21 @@ router.post('/system/rebuild-restart', async (_req: Request, res: Response): Pro
     setTimeout(async (): Promise<void> => {
       try {
         const { spawn } = await import('child_process');
+        const path = await import('path');
+
+        // Get the script path
+        const scriptPath = path.join(process.cwd(), 'scripts', 'rebuild-restart.sh');
 
         // Create a detached process that will survive this server shutdown
-        const restartScript = spawn('bash', ['-c', `
-          echo "Starting rebuild and restart process..."
-
-          # Build backend
-          echo "Building backend..."
-          npm run build
-
-          # Build frontend
-          echo "Building frontend..."
-          npm run build:frontend
-
-          # Find and kill the current server process
-          echo "Stopping server..."
-          pkill -f "node.*dist/server.js" || true
-          pkill -f "tsx.*src/server.ts" || true
-
-          # Wait a moment for processes to terminate
-          sleep 2
-
-          # Start the server again
-          echo "Starting server..."
-          npm start > /dev/null 2>&1 &
-
-          echo "Rebuild and restart complete!"
-        `], {
+        const restartProcess = spawn('bash', [scriptPath], {
           detached: true,
           stdio: 'ignore',
           cwd: process.cwd()
         });
 
-        restartScript.unref();
+        restartProcess.unref();
+
+        logger.info('Restart script launched, shutting down current server');
 
         // Exit this process to allow restart
         setTimeout(() => {
