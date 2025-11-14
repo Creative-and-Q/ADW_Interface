@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { modulesAPI, moduleProcessesAPI, chainsAPI } from '../services/api';
 import type { ModuleProcessInfo } from '../types/aicontroller';
 import ModuleLogViewer from '../components/ModuleLogViewer';
@@ -210,10 +211,10 @@ export default function Modules() {
 
       // Reload module statuses
       await loadModules();
-      alert(`Bulk ${action} operation completed. Check individual modules for status.`);
+      toast.success(`Bulk ${action} operation completed. Check individual modules for status.`);
     } catch (error: any) {
       console.error(`Bulk ${action} failed:`, error);
-      alert(`Error during bulk ${action}: ${error.message}`);
+      toast.error(`Error during bulk ${action}: ${error.message}`);
     } finally {
       setBulkActionLoading(null);
     }
@@ -252,7 +253,11 @@ export default function Modules() {
             result = await moduleProcessesAPI.stop(moduleName);
           }
 
-          alert(`${action} operation ${result.data.success ? 'succeeded' : 'failed'}: ${result.data.message}`);
+          if (result.data.success) {
+            toast.success(`${action} operation succeeded: ${result.data.message}`);
+          } else {
+            toast.error(`${action} operation failed: ${result.data.message}`);
+          }
 
           // Reload module processes to get updated status
           const processesResponse = await moduleProcessesAPI.list();
@@ -267,7 +272,7 @@ export default function Modules() {
           return;
         } catch (error: any) {
           console.error(`Failed to ${action} module via AIController:`, error);
-          alert(`Error: ${error.response?.data?.error || error.message}`);
+          toast.error(`Error: ${error.response?.data?.error || error.message}`);
           return;
         }
       }
@@ -291,7 +296,7 @@ export default function Modules() {
           break;
       }
 
-      alert(`${action} operation started: ${result.data.message}`);
+      toast.success(`${action} operation started: ${result.data.message}`);
 
       // Update module status after start/stop
       if (action === 'start' || action === 'stop') {
@@ -303,7 +308,7 @@ export default function Modules() {
       }
     } catch (error: any) {
       console.error(`Failed to ${action} module:`, error);
-      alert(`Error: ${error.response?.data?.error || error.message}`);
+      toast.error(`Error: ${error.response?.data?.error || error.message}`);
     } finally {
       setDeploymentLoading(null);
     }

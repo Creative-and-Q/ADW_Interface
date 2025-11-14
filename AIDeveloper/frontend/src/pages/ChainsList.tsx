@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import {
   Link2,
   Search,
@@ -49,9 +50,10 @@ export default function ChainsList() {
       await chainsAPI.delete(chainId);
       setChains(chains.filter((c) => c.id !== chainId));
       setDeleteConfirm(null);
+      toast.success('Chain deleted successfully');
     } catch (err: any) {
       console.error('Failed to delete chain:', err);
-      alert(`Failed to delete chain: ${err.message}`);
+      toast.error(`Failed to delete chain: ${err.message}`);
     }
   };
 

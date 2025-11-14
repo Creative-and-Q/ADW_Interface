@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import { workflowsAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import {
@@ -213,11 +214,12 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
 
     try {
       await workflowsAPI.create({ workflowType, taskDescription });
+      toast.success('Workflow created successfully');
       onSuccess();
       onClose();
     } catch (error) {
       console.error('Failed to create workflow:', error);
-      alert('Failed to create workflow');
+      toast.error('Failed to create workflow');
     } finally {
       setSubmitting(false);
     }
