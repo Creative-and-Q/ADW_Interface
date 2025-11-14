@@ -65,19 +65,40 @@ async function cloneRepository(
     const workflowGit = getGit(repoDir);
     await workflowGit.checkout(developBranch);
 
-    // Install dependencies
+    // Install dependencies (including devDependencies)
     logger.info('Installing dependencies');
-    execSync('npm install', {
-      stdio: 'inherit',
-      cwd: path.join(repoDir, 'AIDeveloper'),
-    });
+    try {
+      const installOutput = execSync('npm install --include=dev', {
+        cwd: path.join(repoDir, 'AIDeveloper'),
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        env: { ...process.env, NODE_ENV: 'development' }, // Ensure devDependencies are installed
+      });
+      logger.info('Dependencies installed successfully', { output: installOutput.slice(-500) });
+    } catch (error: any) {
+      logger.error('npm install failed', error, {
+        stdout: error.stdout?.toString().slice(-500),
+        stderr: error.stderr?.toString().slice(-500),
+      });
+      throw new Error(`npm install failed: ${error.message}`);
+    }
 
     // Build the project
     logger.info('Building project');
-    execSync('npm run build', {
-      stdio: 'inherit',
-      cwd: path.join(repoDir, 'AIDeveloper'),
-    });
+    try {
+      const buildOutput = execSync('npm run build', {
+        cwd: path.join(repoDir, 'AIDeveloper'),
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+      });
+      logger.info('Build completed successfully', { output: buildOutput.slice(-500) });
+    } catch (error: any) {
+      logger.error('npm run build failed', error, {
+        stdout: error.stdout?.toString().slice(-500),
+        stderr: error.stderr?.toString().slice(-500),
+      });
+      throw new Error(`Build failed: ${error.message}`);
+    }
 
     logger.info('Repository cloned and built successfully');
   } catch (error) {
