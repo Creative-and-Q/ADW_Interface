@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [restarting, setRestarting] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const { socket, connected } = useWebSocket();
 
   useEffect(() => {
@@ -66,18 +67,29 @@ export default function Dashboard() {
     setRestarting(true);
     try {
       await systemAPI.rebuildRestart();
-      alert('Rebuild and restart initiated. The page will reload in 10 seconds...');
-
-      // Wait for server to restart and reload the page
-      setTimeout(() => {
-        window.location.reload();
-      }, 10000);
+      setCountdown(30);
     } catch (error) {
       console.error('Failed to trigger rebuild and restart:', error);
       alert('Failed to trigger rebuild and restart. Check console for details.');
       setRestarting(false);
     }
   };
+
+  // Countdown effect
+  useEffect(() => {
+    if (countdown === null) return;
+
+    if (countdown === 0) {
+      window.location.reload();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setCountdown(countdown - 1);
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [countdown]);
 
   if (loading) {
     return (
@@ -302,6 +314,33 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Restart Countdown Modal */}
+      {countdown !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full mx-4">
+            <div className="text-center">
+              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-blue-100 mb-4">
+                <RefreshCw className="h-10 w-10 text-blue-600 animate-spin" />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                Rebuilding & Restarting
+              </h3>
+              <p className="text-gray-600 mb-6">
+                The application is being rebuilt and restarted. The page will automatically reload when ready.
+              </p>
+              <div className="bg-blue-50 rounded-lg p-6 border-2 border-blue-200">
+                <div className="text-6xl font-bold text-blue-600 mb-2">
+                  {countdown}
+                </div>
+                <div className="text-sm font-medium text-blue-900">
+                  seconds until reload
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
