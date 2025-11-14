@@ -124,6 +124,12 @@ export const config: AppConfig = {
     defaultBranch: getOptionalEnv('GIT_DEFAULT_BRANCH', 'main'),
   },
 
+  github: {
+    token: process.env.GITHUB_TOKEN, // Optional: for PR creation
+    owner: getOptionalEnv('GITHUB_OWNER', ''), // e.g., 'QoobSweet'
+    repo: getOptionalEnv('GITHUB_REPO', ''), // e.g., 'ex_nihilo'
+  },
+
   agents: {
     maxConcurrent: getOptionalNumericEnv('MAX_CONCURRENT_AGENTS', 5),
     timeoutMs: getOptionalNumericEnv('AGENT_TIMEOUT_MS', 300000),

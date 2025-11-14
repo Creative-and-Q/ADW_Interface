@@ -129,6 +129,7 @@ export interface AgentInput {
   previousArtifacts?: Artifact[];
   retryReason?: string;
   metadata?: Record<string, any>;
+  workingDir?: string; // Isolated workflow repository directory
   context?: {
     previousResults?: AgentOutput[];
     reviewFeedback?: any;
@@ -375,6 +376,11 @@ export interface AppConfig {
     userName: string;
     userEmail: string;
     defaultBranch: string;
+  };
+  github: {
+    token?: string;
+    owner: string;
+    repo: string;
   };
   agents: {
     maxConcurrent: number;
