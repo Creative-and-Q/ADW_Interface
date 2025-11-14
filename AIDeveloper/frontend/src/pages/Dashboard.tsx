@@ -60,18 +60,14 @@ export default function Dashboard() {
   };
 
   const handleRebuildRestart = async () => {
-    if (!confirm('This will rebuild and restart the entire AIDeveloper application. Continue?')) {
-      return;
-    }
-
     setRestarting(true);
     try {
       await systemAPI.rebuildRestart();
       setCountdown(30);
     } catch (error) {
       console.error('Failed to trigger rebuild and restart:', error);
-      alert('Failed to trigger rebuild and restart. Check console for details.');
       setRestarting(false);
+      setCountdown(null);
     }
   };
 
