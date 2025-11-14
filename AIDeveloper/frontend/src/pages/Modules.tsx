@@ -59,6 +59,7 @@ export default function Modules() {
   const [moduleProcesses, setModuleProcesses] = useState<ModuleProcessInfo[]>([]);
   const [aiControllerAvailable, setAIControllerAvailable] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
+  const [autoLoadSettings, setAutoLoadSettings] = useState<{ [key: string]: boolean }>({});
 
   useEffect(() => {
     loadModules();
@@ -68,6 +69,19 @@ export default function Modules() {
     try {
       const { data } = await modulesAPI.list();
       setModules(data.modules);
+
+      // Load auto-load settings for each module
+      const autoLoadMap: { [key: string]: boolean } = {};
+      for (const module of data.modules) {
+        try {
+          const autoLoadRes = await modulesAPI.getAutoLoad(module.name);
+          autoLoadMap[module.name] = autoLoadRes.data.autoLoad;
+        } catch (error) {
+          // If error, assume false
+          autoLoadMap[module.name] = false;
+        }
+      }
+      setAutoLoadSettings(autoLoadMap);
 
       // Try to load module processes from AIController
       try {
@@ -314,6 +328,25 @@ export default function Modules() {
     }
   };
 
+  const handleToggleAutoLoad = async (moduleName: string) => {
+    try {
+      const currentSetting = autoLoadSettings[moduleName] || false;
+      const newSetting = !currentSetting;
+
+      await modulesAPI.setAutoLoad(moduleName, newSetting);
+
+      setAutoLoadSettings((prev) => ({
+        ...prev,
+        [moduleName]: newSetting,
+      }));
+
+      toast.success(`Auto-load ${newSetting ? 'enabled' : 'disabled'} for ${moduleName}`);
+    } catch (error: any) {
+      console.error('Failed to toggle auto-load:', error);
+      toast.error(`Failed to update auto-load: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -453,19 +486,36 @@ export default function Modules() {
                   <p className="text-sm text-gray-600 mb-3">{module.description}</p>
                 )}
 
-                <div className="flex items-center space-x-4 text-xs text-gray-500">
-                  {module.hasGit && (
-                    <div className="flex items-center space-x-1">
-                      <GitBranch className="h-3 w-3" />
-                      <span>{module.gitStatus?.branch || 'main'}</span>
-                    </div>
-                  )}
-                  {module.hasPrompts && (
-                    <div className="flex items-center space-x-1">
-                      <FileText className="h-3 w-3" />
-                      <span>{module.prompts?.length || 0} prompts</span>
-                    </div>
-                  )}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-4 text-xs text-gray-500">
+                    {module.hasGit && (
+                      <div className="flex items-center space-x-1">
+                        <GitBranch className="h-3 w-3" />
+                        <span>{module.gitStatus?.branch || 'main'}</span>
+                      </div>
+                    )}
+                    {module.hasPrompts && (
+                      <div className="flex items-center space-x-1">
+                        <FileText className="h-3 w-3" />
+                        <span>{module.prompts?.length || 0} prompts</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleAutoLoad(module.name);
+                    }}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      autoLoadSettings[module.name]
+                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                    title={`Click to ${autoLoadSettings[module.name] ? 'disable' : 'enable'} auto-load`}
+                  >
+                    {autoLoadSettings[module.name] ? '✓ Auto-load' : 'Auto-load'}
+                  </button>
                 </div>
               </div>
             ))}
