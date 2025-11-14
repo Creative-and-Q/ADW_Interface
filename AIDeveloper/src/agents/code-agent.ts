@@ -8,7 +8,6 @@ import { AgentType, AgentInput, AgentOutput, ArtifactType } from '../types.js';
 import { config } from '../config.js';
 import * as logger from '../utils/logger.js';
 import { getArtifacts } from '../workflow-state.js';
-import { writeFile } from '../utils/file-system.js';
 import {
   createBranch,
   getCurrentBranch,
@@ -79,18 +78,32 @@ export class CodeAgent extends BaseAgent {
       // Validate code result
       this.validateCodeResult(codeResult);
 
-      // Create git branch
-      await getCurrentBranch();
-      logger.info('Creating git branch', { branch: codeResult.branch });
-      await createBranch(codeResult.branch);
+      // Get workflow directory and branch name from input (not from AI response)
+      const workingDir = input.workingDir;
+      const branchName = input.branchName;
 
-      // Write files to disk
-      const filesWritten = await this.writeFiles(codeResult.files);
+      if (!workingDir) {
+        throw new Error('Working directory not provided in input');
+      }
+      if (!branchName) {
+        throw new Error('Branch name not provided in input');
+      }
 
-      // Commit changes
-      logger.info('Committing changes');
+      // Create git branch in workflow directory (not root)
+      await getCurrentBranch(workingDir);
+      logger.info('Creating git branch in workflow directory', {
+        branch: branchName,
+        workingDir
+      });
+      await createBranch(branchName, workingDir);
+
+      // Write files to workflow directory (not root)
+      const filesWritten = await this.writeFiles(codeResult.files, workingDir);
+
+      // Commit changes in workflow directory (not root)
+      logger.info('Committing changes in workflow directory');
       const commitMessage = `${codeResult.commit.message}\n\n${codeResult.commit.description}\n\nFiles changed: ${filesWritten.join(', ')}`;
-      await commitChanges(commitMessage);
+      await commitChanges(commitMessage, ['.'], workingDir);
 
       // Save code artifacts
       const artifactIds: number[] = [];
@@ -104,7 +117,7 @@ export class CodeAgent extends BaseAgent {
             filePath: file.path,
             action: file.action,
             description: file.description,
-            branch: codeResult.branch,
+            branch: branchName, // Use actual branch name, not AI's suggestion
           },
         });
         artifactIds.push(artifactId);
@@ -112,8 +125,9 @@ export class CodeAgent extends BaseAgent {
 
       logger.info('Code generation successful', {
         filesWritten: filesWritten.length,
-        branch: codeResult.branch,
+        branch: branchName, // Use actual branch name
         artifactIds: artifactIds.length,
+        workingDir,
       });
 
       return {
@@ -124,7 +138,7 @@ export class CodeAgent extends BaseAgent {
           type: ArtifactType.CODE,
           content: file.content,
         })),
-        summary: `Generated ${filesWritten.length} files on branch '${codeResult.branch}'. ${codeResult.commit.message}`,
+        summary: `Generated ${filesWritten.length} files on branch '${branchName}'. ${codeResult.commit.message}`,
       };
     } catch (error) {
       logger.error('Code agent failed', error as Error);
@@ -322,35 +336,49 @@ Respond with JSON following this format:
   }
 
   /**
-   * Write files to disk
+   * Write files to disk in the workflow directory
    */
   private async writeFiles(
     files: Array<{
       path: string;
       action: 'create' | 'modify' | 'delete';
       content: string;
-    }>
+    }>,
+    workingDir: string
   ): Promise<string[]> {
     const written: string[] = [];
 
     for (const file of files) {
-      const fullPath = path.resolve(process.cwd(), file.path);
+      // Resolve file path within the workflow directory, not the root
+      const fullPath = path.resolve(workingDir, file.path);
 
       try {
         if (file.action === 'delete') {
-          // Delete file
-          await fs.unlink(fullPath);
-          logger.info('Deleted file', { path: file.path });
-          written.push(file.path);
+          // Delete file - check if exists first
+          try {
+            await fs.access(fullPath);
+            await fs.unlink(fullPath);
+            logger.info('Deleted file', { path: file.path });
+            written.push(file.path);
+          } catch (accessError: any) {
+            if (accessError.code === 'ENOENT') {
+              logger.warn('File to delete not found, skipping', { path: file.path });
+              // Still count as "written" since the desired state (file gone) is achieved
+              written.push(file.path);
+            } else {
+              throw accessError;
+            }
+          }
         } else if (file.action === 'create' || file.action === 'modify') {
           // Ensure directory exists
           const dir = path.dirname(fullPath);
           await fs.mkdir(dir, { recursive: true });
 
-          // Write file
-          await writeFile(file.path, file.content);
+          // Write file directly to the full path in the workflow directory
+          await fs.writeFile(fullPath, file.content, 'utf-8');
           logger.info(`${file.action === 'create' ? 'Created' : 'Modified'} file`, {
             path: file.path,
+            fullPath, // Log the full path for debugging
           });
           written.push(file.path);
         }
