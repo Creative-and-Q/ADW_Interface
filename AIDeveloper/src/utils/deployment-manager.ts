@@ -2,6 +2,7 @@ import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import { createWriteStream, WriteStream } from 'fs';
 import { EventEmitter } from 'events';
 
 const execAsync = promisify(exec);
@@ -21,7 +22,9 @@ class DeploymentManager extends EventEmitter {
   private operations: Map<string, DeploymentOperation> = new Map();
   private moduleProcesses: Map<string, ChildProcess> = new Map();
   private moduleLogs: Map<string, string[]> = new Map(); // Rolling log buffer per module
-  private readonly MAX_LOG_LINES = 500; // Keep last 500 lines per module
+  private logStreams: Map<string, WriteStream> = new Map(); // File streams for persistent logging
+  private readonly MAX_LOG_LINES = 500; // Keep last 500 lines per module in memory
+  private readonly LOG_DIR = path.join(process.cwd(), 'logs', 'modules');
 
   /**
    * Install dependencies for a module
@@ -124,6 +127,46 @@ class DeploymentManager extends EventEmitter {
   }
 
   /**
+   * Kill any process using a specific port
+   */
+  private async killPortProcess(port: number): Promise<void> {
+    try {
+      // Use lsof to find the process using the port
+      const { stdout } = await execAsync(`lsof -ti:${port}`);
+      const pid = stdout.trim();
+
+      if (pid) {
+        console.log(`[DeploymentManager] Killing process ${pid} on port ${port}`);
+        await execAsync(`kill -9 ${pid}`);
+        // Wait a moment for the port to be released
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    } catch (error) {
+      // No process found on port or error - that's fine
+      console.log(`[DeploymentManager] No process found on port ${port} (this is OK)`);
+    }
+  }
+
+  /**
+   * Get the port number from a module's .env file
+   */
+  private async getModulePort(modulePath: string): Promise<number | null> {
+    try {
+      const envPath = path.join(modulePath, '.env');
+      const envContent = await fs.readFile(envPath, 'utf-8');
+
+      // Parse PORT= line from .env
+      const portMatch = envContent.match(/^PORT=(\d+)/m);
+      if (portMatch) {
+        return parseInt(portMatch[1], 10);
+      }
+    } catch (error) {
+      // .env file doesn't exist or can't be read
+    }
+    return null;
+  }
+
+  /**
    * Start a module server
    */
   async startModule(moduleName: string): Promise<string> {
@@ -146,8 +189,18 @@ class DeploymentManager extends EventEmitter {
         throw new Error('No start script found in package.json');
       }
 
+      // Get the module's port and kill any existing process on it
+      const port = await this.getModulePort(modulePath);
+      if (port) {
+        console.log(`[DeploymentManager] Module ${moduleName} uses port ${port}`);
+        await this.killPortProcess(port);
+      }
+
       // Start the process in background using spawn (better for long-running processes)
       console.log(`[DeploymentManager] Starting module ${moduleName} with spawn...`);
+
+      // Initialize log stream for persistent logging
+      await this.initLogStream(moduleName);
 
       // Create a clean environment that doesn't inherit conflicting variables
       const cleanEnv = { ...process.env };
@@ -189,6 +242,7 @@ class DeploymentManager extends EventEmitter {
         console.log(`[DeploymentManager] ${moduleName} process exited with code: ${code}`);
         hasExited = true;
         this.moduleProcesses.delete(moduleName);
+        this.closeLogStream(moduleName, code || undefined);
         if (code === 0) {
           this.updateOperationStatus(operationId, 'success');
         } else {
@@ -200,6 +254,7 @@ class DeploymentManager extends EventEmitter {
         console.error(`[DeploymentManager] ${moduleName} spawn error:`, err);
         hasExited = true;
         this.moduleProcesses.delete(moduleName);
+        this.closeLogStream(moduleName);
         this.updateOperationStatus(operationId, 'failed', err.message);
       });
 
@@ -238,6 +293,7 @@ class DeploymentManager extends EventEmitter {
 
       child.kill('SIGTERM');
       this.moduleProcesses.delete(moduleName);
+      await this.closeLogStream(moduleName);
 
       this.addOperationOutput(operationId, 'Module stopped successfully');
       this.updateOperationStatus(operationId, 'success');
@@ -286,11 +342,25 @@ class DeploymentManager extends EventEmitter {
   }
 
   /**
-   * Get recent logs for a module
+   * Get recent logs for a module (from memory if running, or from disk if stopped)
    */
-  getModuleLogs(moduleName: string, lines: number = 100): string[] {
-    const logs = this.moduleLogs.get(moduleName) || [];
-    return logs.slice(-lines); // Return last N lines
+  async getModuleLogs(moduleName: string, lines: number = 100): Promise<string[]> {
+    // If module is running, return from memory
+    if (this.moduleLogs.has(moduleName)) {
+      const logs = this.moduleLogs.get(moduleName)!;
+      return logs.slice(-lines);
+    }
+
+    // Otherwise, try to read from disk
+    try {
+      const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
+      const content = await fs.readFile(logFilePath, 'utf-8');
+      const allLines = content.split('\n').filter(line => line.trim());
+      return allLines.slice(-lines);
+    } catch (error) {
+      // Log file doesn't exist or can't be read
+      return [];
+    }
   }
 
   /**
@@ -349,7 +419,7 @@ class DeploymentManager extends EventEmitter {
     this.emit('operationOutput', { operationId, output });
   }
 
-  private addModuleLog(moduleName: string, logLine: string): void {
+  private async addModuleLog(moduleName: string, logLine: string): Promise<void> {
     if (!this.moduleLogs.has(moduleName)) {
       this.moduleLogs.set(moduleName, []);
     }
@@ -359,9 +429,64 @@ class DeploymentManager extends EventEmitter {
     const lines = logLine.split('\n').filter(line => line.trim());
     logs.push(...lines);
 
-    // Keep only last MAX_LOG_LINES
+    // Keep only last MAX_LOG_LINES in memory
     if (logs.length > this.MAX_LOG_LINES) {
       logs.splice(0, logs.length - this.MAX_LOG_LINES);
+    }
+
+    // Also write to disk for persistence
+    await this.writeLogsToDisk(moduleName, lines);
+  }
+
+  /**
+   * Initialize log stream for a module
+   */
+  private async initLogStream(moduleName: string): Promise<void> {
+    try {
+      // Ensure log directory exists
+      await fs.mkdir(this.LOG_DIR, { recursive: true });
+
+      const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
+
+      // Create write stream in append mode
+      const stream = createWriteStream(logFilePath, { flags: 'a' });
+      this.logStreams.set(moduleName, stream);
+
+      // Add timestamp separator when starting a new session
+      const timestamp = new Date().toISOString();
+      stream.write(`\n========== Module Started: ${timestamp} ==========\n`);
+    } catch (error) {
+      console.error(`Failed to initialize log stream for ${moduleName}:`, error);
+    }
+  }
+
+  /**
+   * Close log stream for a module
+   */
+  private async closeLogStream(moduleName: string, exitCode?: number): Promise<void> {
+    const stream = this.logStreams.get(moduleName);
+    if (stream) {
+      // Add exit marker
+      const timestamp = new Date().toISOString();
+      const exitMsg = exitCode !== undefined
+        ? `\n========== Module Exited (code: ${exitCode}): ${timestamp} ==========\n\n`
+        : `\n========== Module Stopped: ${timestamp} ==========\n\n`;
+
+      stream.write(exitMsg);
+      stream.end();
+      this.logStreams.delete(moduleName);
+    }
+  }
+
+  /**
+   * Write logs to disk
+   */
+  private async writeLogsToDisk(moduleName: string, lines: string[]): Promise<void> {
+    const stream = this.logStreams.get(moduleName);
+    if (stream) {
+      for (const line of lines) {
+        stream.write(line + '\n');
+      }
     }
   }
 

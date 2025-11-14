@@ -864,12 +864,10 @@ export default function Modules() {
                 )}
 
                 {/* Console Logs */}
-                {moduleStatus[selectedModule.name] && (
-                  <ModuleLogViewer
-                    moduleName={selectedModule.name}
-                    isRunning={moduleStatus[selectedModule.name]}
-                  />
-                )}
+                <ModuleLogViewer
+                  moduleName={selectedModule.name}
+                  isRunning={moduleStatus[selectedModule.name] || false}
+                />
 
                 {/* Quick Actions */}
                 <div className="card">

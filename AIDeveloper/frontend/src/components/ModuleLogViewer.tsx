@@ -15,7 +15,7 @@ export default function ModuleLogViewer({ moduleName, isRunning }: ModuleLogView
   const intervalRef = useRef<number | null>(null);
 
   const loadLogs = async () => {
-    if (isPaused || !isRunning) return;
+    if (isPaused) return;
 
     try {
       const { data } = await modulesAPI.getLogs(moduleName, 100);
@@ -26,23 +26,23 @@ export default function ModuleLogViewer({ moduleName, isRunning }: ModuleLogView
   };
 
   useEffect(() => {
+    // Always load logs initially
+    loadLogs();
+
+    // Only poll if running and not paused
     if (isRunning && !isPaused) {
-      // Load immediately
-      loadLogs();
-
-      // Then poll every 2 seconds
       intervalRef.current = window.setInterval(loadLogs, 2000);
-
-      return () => {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current);
-        }
-      };
     } else {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
       }
     }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, [moduleName, isRunning, isPaused]);
 
   useEffect(() => {
@@ -76,27 +76,23 @@ export default function ModuleLogViewer({ moduleName, isRunning }: ModuleLogView
     );
   };
 
-  if (!isRunning) {
-    return (
-      <div className="card bg-gray-50">
-        <div className="text-center py-8 text-gray-500">
-          <Terminal className="h-12 w-12 mx-auto mb-3 text-gray-400" />
-          <p>Module is not running. Console logs will appear when the module is started.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-2">
           <Terminal className="h-5 w-5 text-gray-700" />
           <h3 className="text-lg font-semibold text-gray-900">Console Logs</h3>
-          <div className="flex items-center space-x-1">
-            <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
-            <span className="text-xs text-gray-500">Live</span>
-          </div>
+          {isRunning ? (
+            <div className="flex items-center space-x-1">
+              <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
+              <span className="text-xs text-gray-500">Live</span>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-1">
+              <div className="h-2 w-2 rounded-full bg-gray-400"></div>
+              <span className="text-xs text-gray-500">Stopped</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center space-x-2">
@@ -145,7 +141,11 @@ export default function ModuleLogViewer({ moduleName, isRunning }: ModuleLogView
 
       <div className="mt-3 flex items-center justify-between text-xs text-gray-500">
         <span>{logs.length} lines</span>
-        <span>Updates every 2s {isPaused && '(Paused)'}</span>
+        {isRunning ? (
+          <span>Updates every 2s {isPaused && '(Paused)'}</span>
+        ) : (
+          <span>Module stopped - viewing persisted logs</span>
+        )}
       </div>
     </div>
   );

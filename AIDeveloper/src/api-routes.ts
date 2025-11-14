@@ -23,6 +23,66 @@ import path from 'path';
 
 const router = Router();
 
+// ============================================================================
+// AIController Proxy Routes (MUST BE FIRST)
+// ============================================================================
+
+/**
+ * Proxy all AIController requests through AIDeveloper server
+ * This avoids CORS issues and allows remote access
+ * IMPORTANT: This route must be registered before other routes to avoid conflicts
+ */
+router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const axios = (await import('axios')).default;
+    // The route is /aicontroller/*, so req.path will be /aicontroller/something
+    // We want to forward to http://localhost:3035/something
+    const aiControllerPath = req.path.replace('/aicontroller', '');
+    const aiControllerURL = `http://localhost:3035${aiControllerPath}`;
+
+    logger.info(`Proxying ${req.method} request to AIController: ${aiControllerURL}`);
+
+    const response = await axios({
+      method: req.method as any,
+      url: aiControllerURL,
+      data: req.body,
+      params: req.query,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+      validateStatus: () => true, // Don't throw on any status
+    });
+
+    // Forward the response
+    res.status(response.status).json(response.data);
+    return;
+  } catch (error: any) {
+    logger.error('AIController proxy error', error);
+
+    // Check if it's a connection error (AIController not running)
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      res.status(503).json({
+        success: false,
+        error: 'AIController is not running',
+        message: 'The AIController service is not available. Please start it from the Modules page.',
+      });
+      return;
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Proxy error',
+      message: error.message,
+    });
+    return;
+  }
+});
+
+// ============================================================================
+// Workflow Routes
+// ============================================================================
+
 /**
  * GET /api/workflows
  * List all workflows with pagination and filtering
@@ -653,13 +713,13 @@ router.get('/modules/:name/status', async (req: Request, res: Response) => {
 
 /**
  * GET /api/modules/:name/logs
- * Get recent console logs for a running module
+ * Get recent console logs for a module (running or stopped)
  */
 router.get('/modules/:name/logs', async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const lines = parseInt(req.query.lines as string) || 100;
-    const logs = deploymentManager.getModuleLogs(name, lines);
+    const logs = await deploymentManager.getModuleLogs(name, lines);
     return res.json({ moduleName: name, logs, count: logs.length });
   } catch (error) {
     logger.error('Failed to get module logs', error as Error);
@@ -766,64 +826,6 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
   } catch (error) {
     logger.error('Failed to fetch module deployments', error as Error);
     return res.status(500).json({ error: 'Failed to fetch deployments' });
-  }
-});
-
-// ============================================================================
-// System Control Routes
-// ============================================================================
-
-// ============================================================================
-// AIController Proxy Routes
-// ============================================================================
-
-/**
- * Proxy all AIController requests through AIDeveloper server
- * This avoids CORS issues and allows remote access
- */
-router.all('/aicontroller*', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const axios = (await import('axios')).default;
-    // Extract the path after /aicontroller
-    const aiControllerPath = req.path.substring('/aicontroller'.length);
-    const aiControllerURL = `http://localhost:3035${aiControllerPath}`;
-
-    logger.debug(`Proxying request to AIController: ${req.method} ${aiControllerURL}`);
-
-    const response = await axios({
-      method: req.method as any,
-      url: aiControllerURL,
-      data: req.body,
-      params: req.query,
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      timeout: 10000,
-      validateStatus: () => true, // Don't throw on any status
-    });
-
-    // Forward the response
-    res.status(response.status).json(response.data);
-    return;
-  } catch (error: any) {
-    logger.error('AIController proxy error', error);
-
-    // Check if it's a connection error (AIController not running)
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-      res.status(503).json({
-        success: false,
-        error: 'AIController is not running',
-        message: 'The AIController service is not available. Please start it from the Modules page.',
-      });
-      return;
-    }
-
-    res.status(500).json({
-      success: false,
-      error: 'Proxy error',
-      message: error.message,
-    });
-    return;
   }
 });
 
