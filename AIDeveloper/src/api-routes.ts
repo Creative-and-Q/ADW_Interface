@@ -773,6 +773,63 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
 // System Control Routes
 // ============================================================================
 
+// ============================================================================
+// AIController Proxy Routes
+// ============================================================================
+
+/**
+ * Proxy all AIController requests through AIDeveloper server
+ * This avoids CORS issues and allows remote access
+ */
+router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const axios = (await import('axios')).default;
+    const aiControllerPath = req.path.replace('/api/aicontroller', '');
+    const aiControllerURL = `http://localhost:3035${aiControllerPath}`;
+
+    logger.debug(`Proxying request to AIController: ${req.method} ${aiControllerURL}`);
+
+    const response = await axios({
+      method: req.method as any,
+      url: aiControllerURL,
+      data: req.body,
+      params: req.query,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      timeout: 10000,
+      validateStatus: () => true, // Don't throw on any status
+    });
+
+    // Forward the response
+    res.status(response.status).json(response.data);
+    return;
+  } catch (error: any) {
+    logger.error('AIController proxy error', error);
+
+    // Check if it's a connection error (AIController not running)
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      res.status(503).json({
+        success: false,
+        error: 'AIController is not running',
+        message: 'The AIController service is not available. Please start it from the Modules page.',
+      });
+      return;
+    }
+
+    res.status(500).json({
+      success: false,
+      error: 'Proxy error',
+      message: error.message,
+    });
+    return;
+  }
+});
+
+// ============================================================================
+// System Control Routes
+// ============================================================================
+
 /**
  * POST /api/system/rebuild-restart
  * Rebuild and restart the entire AIDeveloper application
