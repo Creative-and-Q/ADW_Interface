@@ -74,6 +74,9 @@ export const modulesAPI = {
   getLogs: (name: string, lines?: number) =>
     api.get(`/modules/${name}/logs`, { params: { lines } }),
   getDeployments: (name: string) => api.get(`/modules/${name}/deployments`),
+  getAutoLoad: (name: string) => api.get(`/modules/${name}/auto-load`),
+  setAutoLoad: (name: string, autoLoad: boolean) =>
+    api.put(`/modules/${name}/auto-load`, { autoLoad }),
 };
 
 export const deploymentsAPI = {
