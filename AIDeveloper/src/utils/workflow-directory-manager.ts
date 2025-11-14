@@ -5,9 +5,11 @@
 
 import fs from 'fs/promises';
 import path from 'path';
+import { execSync } from 'child_process';
 import { config } from '../config.js';
 import * as logger from './logger.js';
 import { WorkflowType, AgentType } from '../types.js';
+import { getGit } from './git-helper.js';
 
 /**
  * Get workflow directory path
@@ -16,6 +18,72 @@ export function getWorkflowDirectory(workflowId: number, branchName: string): st
   const workflowsRoot = path.join(config.workspace.root, 'workflows');
   const sanitizedBranch = branchName.replace(/[^a-zA-Z0-9-_]/g, '-');
   return path.join(workflowsRoot, `workflow-${workflowId}-${sanitizedBranch}`);
+}
+
+/**
+ * Get workflow repository path (the cloned repo within the workflow directory)
+ */
+export function getWorkflowRepoPath(workflowId: number, branchName: string): string {
+  const workflowDir = getWorkflowDirectory(workflowId, branchName);
+  return path.join(workflowDir, 'repo', 'AIDeveloper');
+}
+
+/**
+ * Clone repository into workflow directory
+ */
+async function cloneRepository(
+  workflowDir: string,
+  developBranch: string = 'develop'
+): Promise<void> {
+  try {
+    logger.info('Cloning repository into workflow directory', { workflowDir });
+
+    // Get the repository URL from the main workspace
+    const repoPath = config.workspace.root;
+    const git = getGit(repoPath);
+
+    // Get remote URL
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find(r => r.name === 'origin');
+
+    if (!origin || !origin.refs.fetch) {
+      throw new Error('No origin remote found');
+    }
+
+    const repoUrl = origin.refs.fetch;
+    const repoDir = path.join(workflowDir, 'repo');
+
+    // Clone the repository
+    logger.info('Cloning repository', { url: repoUrl, target: repoDir });
+    execSync(`git clone ${repoUrl} ${repoDir}`, {
+      stdio: 'inherit',
+      cwd: workflowDir,
+    });
+
+    // Checkout develop branch
+    logger.info('Checking out develop branch', { branch: developBranch });
+    const workflowGit = getGit(repoDir);
+    await workflowGit.checkout(developBranch);
+
+    // Install dependencies
+    logger.info('Installing dependencies');
+    execSync('npm install', {
+      stdio: 'inherit',
+      cwd: path.join(repoDir, 'AIDeveloper'),
+    });
+
+    // Build the project
+    logger.info('Building project');
+    execSync('npm run build', {
+      stdio: 'inherit',
+      cwd: path.join(repoDir, 'AIDeveloper'),
+    });
+
+    logger.info('Repository cloned and built successfully');
+  } catch (error) {
+    logger.error('Failed to clone repository', error as Error);
+    throw error;
+  }
 }
 
 /**
@@ -37,6 +105,9 @@ export async function createWorkflowDirectory(
     await fs.mkdir(path.join(workflowDir, 'artifacts'), { recursive: true });
     await fs.mkdir(path.join(workflowDir, 'stages'), { recursive: true });
 
+    // Clone repository into workflow directory
+    await cloneRepository(workflowDir);
+
     // Create README
     const readme = `# Workflow ${workflowId}: ${workflowType}
 
@@ -46,6 +117,7 @@ export async function createWorkflowDirectory(
 
 ## Directory Structure
 
+- \`repo/\` - Cloned repository (isolated workspace)
 - \`logs/\` - Agent execution logs and output
 - \`artifacts/\` - Generated code, tests, and documentation
 - \`stages/\` - Stage-by-stage documentation
