@@ -96,3 +96,120 @@ export function isGitHubCLIInstalled(): boolean {
     return false;
   }
 }
+
+/**
+ * Add a comment to a specific commit on GitHub
+ * This helps reviewers understand what each workflow stage did
+ */
+export async function addCommitComment(
+  commitSha: string,
+  comment: string,
+  workingDir: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Check if GitHub is configured
+    if (!config.github.token || !config.github.owner || !config.github.repo) {
+      logger.debug('GitHub not configured - skipping commit comment');
+      return {
+        success: false,
+        error: 'GitHub not configured',
+      };
+    }
+
+    logger.info('Adding commit comment', { commitSha: commitSha.substring(0, 7) });
+
+    // Use GitHub CLI API to create commit comment
+    const apiCommand = `gh api repos/${config.github.owner}/${config.github.repo}/commits/${commitSha}/comments -f body="${comment.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+
+    execSync(apiCommand, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        GH_TOKEN: config.github.token,
+      },
+    });
+
+    logger.info('Commit comment added successfully', { commitSha: commitSha.substring(0, 7) });
+
+    return {
+      success: true,
+    };
+  } catch (error) {
+    logger.error('Failed to add commit comment', error as Error);
+    return {
+      success: false,
+      error: (error as Error).message,
+    };
+  }
+}
+
+/**
+ * Create workflow stage comment for GitHub commit
+ * Matches format shown in workflow viewer for consistency
+ */
+export function formatWorkflowStageComment(
+  workflowId: number,
+  agentType: string,
+  status: 'completed' | 'failed',
+  summary: string,
+  duration?: number,
+  artifactsCount?: number
+): string {
+  const statusEmoji = status === 'completed' ? '✅' : '❌';
+  const durationText = duration ? `\n**Duration:** ${(duration / 1000).toFixed(2)}s` : '';
+  const artifactsText = artifactsCount ? `\n**Artifacts Created:** ${artifactsCount}` : '';
+
+  return `## ${statusEmoji} Workflow Stage: ${agentType}
+
+**Workflow ID:** #${workflowId}
+**Status:** ${status.toUpperCase()}${durationText}${artifactsText}
+
+### Summary
+
+${summary}
+
+---
+*This comment was automatically generated to help reviewers understand the workflow execution. View full details at http://localhost:3000/workflows/${workflowId}*`;
+}
+
+/**
+ * Add workflow stage comment to the latest commit
+ * Gets the latest commit SHA and adds a formatted comment
+ */
+export async function addWorkflowStageComment(
+  workflowId: number,
+  agentType: string,
+  status: 'completed' | 'failed',
+  summary: string,
+  workingDir: string,
+  duration?: number,
+  artifactsCount?: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Get latest commit SHA
+    const commitSha = execSync('git rev-parse HEAD', {
+      cwd: workingDir,
+      encoding: 'utf-8',
+    }).trim();
+
+    // Format comment
+    const comment = formatWorkflowStageComment(
+      workflowId,
+      agentType,
+      status,
+      summary,
+      duration,
+      artifactsCount
+    );
+
+    // Add comment to commit
+    return await addCommitComment(commitSha, comment, workingDir);
+  } catch (error) {
+    logger.error('Failed to add workflow stage comment', error as Error);
+    return {
+      success: false,
+      error: (error as Error).message,
+    };
+  }
+}
