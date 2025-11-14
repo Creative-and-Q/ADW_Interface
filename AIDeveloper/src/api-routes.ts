@@ -781,10 +781,11 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
  * Proxy all AIController requests through AIDeveloper server
  * This avoids CORS issues and allows remote access
  */
-router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void> => {
+router.all('/aicontroller*', async (req: Request, res: Response): Promise<void> => {
   try {
     const axios = (await import('axios')).default;
-    const aiControllerPath = req.path.replace('/api/aicontroller', '');
+    // Extract the path after /aicontroller
+    const aiControllerPath = req.path.substring('/aicontroller'.length);
     const aiControllerURL = `http://localhost:3035${aiControllerPath}`;
 
     logger.debug(`Proxying request to AIController: ${req.method} ${aiControllerURL}`);
