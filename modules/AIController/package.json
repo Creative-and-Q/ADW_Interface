@@ -5,8 +5,8 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "predev": "bash -c \"../../scripts/ensure-services.sh && echo '🧹 Cleaning up existing processes...' && (lsof -ti:3035 | xargs kill -9 2>/dev/null || true) && (lsof -ti:5174 | xargs kill -9 2>/dev/null || true) && sleep 2 && echo '✅ Ports cleared'\"",
-    "prestart": "bash -c \"../../scripts/ensure-services.sh && echo '🧹 Cleaning up port 3035...' && (lsof -ti:3035 | xargs kill -9 2>/dev/null || true) && sleep 1 && echo '✅ Port cleared'\"",
+    "predev": "bash -c \"../../AIDeveloper/scripts/ensure-services.sh && echo '🧹 Cleaning up existing processes...' && (lsof -ti:3035 | xargs kill -9 2>/dev/null || true) && (lsof -ti:5174 | xargs kill -9 2>/dev/null || true) && sleep 2 && echo '✅ Ports cleared'\"",
+    "prestart": "bash -c \"../../AIDeveloper/scripts/ensure-services.sh && echo '🧹 Cleaning up port 3035...' && (lsof -ti:3035 | xargs kill -9 2>/dev/null || true) && sleep 1 && echo '✅ Port cleared'\"",
     "dev": "run-p dev:backend dev:frontend",
     "dev:backend": "tsx watch src/server.ts",
     "dev:frontend": "cd frontend && npm run dev",
