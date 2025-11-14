@@ -19,9 +19,9 @@ const api = axios.create({
   },
 });
 
-// AIController API client (direct connection to port 3035)
+// AIController API client (proxied through AIDeveloper server)
 const aiControllerAPI = axios.create({
-  baseURL: 'http://localhost:3035',
+  baseURL: '/api/aicontroller',
   headers: {
     'Content-Type': 'application/json',
   },
