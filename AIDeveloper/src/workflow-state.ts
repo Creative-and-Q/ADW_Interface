@@ -360,9 +360,15 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
     );
 
     // Can resume if workflow is failed and there are completed agents
+    // BUT: Cannot resume if only the orchestrator completed (orchestrator failures require full restart)
+    const hasNonOrchestratorAgents = completedAgents.some(
+      a => a.agentType !== AgentType.ORCHESTRATOR
+    );
+
     const canResume =
       workflow.status === WorkflowStatus.FAILED &&
-      completedAgents.length > 0;
+      completedAgents.length > 0 &&
+      hasNonOrchestratorAgents;
 
     // Resume from the index after the last completed agent
     const resumeFromIndex = completedAgents.length;
