@@ -31,7 +31,7 @@ import {
   updateWorkflowStatus as updateWorkflowDirStatus,
   getWorkflowRepoPath,
 } from './utils/workflow-directory-manager.js';
-import { createPullRequest } from './utils/github-helper.js';
+import { createPullRequest, addWorkflowStageComment } from './utils/github-helper.js';
 
 /**
  * Workflow configuration
@@ -138,6 +138,16 @@ export class Orchestrator extends BaseAgent {
     let branchName = '';
 
     try {
+      // Get workflow to extract task description for branch naming
+      const workflow = await getWorkflow(input.workflowId);
+      if (!workflow) {
+        throw new Error(`Workflow ${input.workflowId} not found`);
+      }
+      const payload = workflow.payload as any;
+      const taskDescription = payload?.customData?.taskDescription ||
+                             payload?.taskDescription ||
+                             'New workflow task';
+
       // Analyze request and create execution plan
       const plan = await this.createExecutionPlan(input.workflowId);
 
@@ -145,8 +155,8 @@ export class Orchestrator extends BaseAgent {
         throw new Error('Failed to create execution plan');
       }
 
-      // Generate branch name
-      branchName = this.generateBranchName(input.workflowId, plan.config.type);
+      // Generate descriptive branch name from task
+      branchName = this.generateBranchName(input.workflowId, plan.config.type, taskDescription);
 
       // Create workflow directory (clones repo, installs deps, builds)
       await createWorkflowDirectory(input.workflowId, branchName, plan.config.type);
@@ -154,8 +164,30 @@ export class Orchestrator extends BaseAgent {
       // Get the workflow repository path
       const workflowRepoPath = getWorkflowRepoPath(input.workflowId, branchName);
 
-      // Create git branch in the workflow repository
+      // Create git branch in the workflow repository (from develop)
       await this.createWorkflowBranch(branchName, workflowRepoPath);
+
+      // Push branch to remote immediately
+      logger.info('Pushing new workflow branch to remote', { branch: branchName });
+      const initialPushResult = await pushChanges(branchName, workflowRepoPath);
+      if (initialPushResult.success) {
+        logger.info('Workflow branch pushed to remote', { branch: branchName });
+
+        // Add orchestrator comment explaining workflow initiation
+        const initialComment = `🚀 Workflow initiated by Orchestrator\n\n**Task:** ${taskDescription}\n\n**Workflow Type:** ${plan.config.type}\n**Execution Plan:**\n${plan.steps.map((step, idx) => `${idx + 1}. ${step}`).join('\n')}\n\n**Branch:** \`${branchName}\`\n\nThe orchestrator will now execute each agent in sequence and provide updates at each stage.`;
+        await addWorkflowStageComment(
+          input.workflowId,
+          'ORCHESTRATOR',
+          'completed',
+          initialComment,
+          workflowRepoPath
+        );
+      } else {
+        logger.warn('Failed to push workflow branch', {
+          branch: branchName,
+          error: initialPushResult.error
+        });
+      }
 
       // Update workflow status with branch name
       await updateWorkflowStatus(input.workflowId, WorkflowStatus.PLANNING, branchName);
@@ -521,14 +553,39 @@ export class Orchestrator extends BaseAgent {
   }
 
   /**
-   * Generate workflow branch name
+   * Generate workflow branch name with descriptive slug
    */
   private generateBranchName(
     workflowId: number,
-    workflowType: WorkflowType
+    workflowType: WorkflowType,
+    taskDescription: string
   ): string {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    return `workflow/${workflowType}-${workflowId}-${timestamp}`;
+    // Extract 3-word description from task
+    const slug = this.generateDescriptiveSlug(taskDescription);
+    return `workflow/${workflowType}-${workflowId}-${slug}`;
+  }
+
+  /**
+   * Generate a concise 3-word slug from task description
+   */
+  private generateDescriptiveSlug(taskDescription: string): string {
+    // Remove common words and special characters
+    const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'that', 'this', 'these', 'those', 'it', 'its']);
+
+    // Clean and tokenize
+    const words = taskDescription
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')  // Remove special chars
+      .split(/\s+/)                   // Split on whitespace
+      .filter(word => word.length > 2 && !stopWords.has(word)) // Filter short words and stop words
+      .slice(0, 3);                   // Take first 3 meaningful words
+
+    // Fallback if not enough words
+    if (words.length === 0) {
+      return 'new-feature';
+    }
+
+    return words.join('-');
   }
 
   /**
@@ -560,6 +617,9 @@ export class Orchestrator extends BaseAgent {
     const results: AgentOutput[] = [];
     const artifacts: any[] = [];
     const maxRetries = 3; // Reduced from 5 to fail faster and prevent issue accumulation
+
+    // Get workflow repository path for git operations
+    const workflowRepoPath = getWorkflowRepoPath(plan.workflowId, branchName);
 
     logger.info('Executing workflow', {
       workflowId: plan.workflowId,
@@ -672,6 +732,19 @@ export class Orchestrator extends BaseAgent {
               },
             };
 
+            // Add orchestrator comment explaining retry decision
+            const retryTrend = previousIssueCount
+              ? (currentIssueCount > previousIssueCount ? '📈 WORSENING' : '📉 IMPROVING')
+              : '🔄 FIRST_ATTEMPT';
+            const retryComment = `🔄 Orchestrator initiating retry ${retryCount + 1}/${maxRetries}\n\n**Failed Stage:** ${agentType}\n**Issue Count:** ${currentIssueCount}\n**Trend:** ${retryTrend}${previousIssueCount ? ` (was ${previousIssueCount})` : ''}\n\n${currentIssueCount > (previousIssueCount || 0) ? `⚠️ **WARNING:** Issue count increased! The orchestrator will restart from PLAN stage with enhanced feedback to address all ${currentIssueCount} issues.\n\n` : ''}**Action:** Restarting workflow from PLAN stage with detailed feedback to address identified issues.\n\n**Feedback provided to agents:**\n- ${currentIssueCount} issues to fix\n- Retry context with trend analysis\n- Enhanced security guidance`;
+            await addWorkflowStageComment(
+              plan.workflowId,
+              'ORCHESTRATOR',
+              'completed',
+              retryComment,
+              workflowRepoPath
+            );
+
             // Log retry attempt
             await logAgentStage(plan.workflowId, branchName, AgentType.PLAN, 'start', {
               input: {
@@ -717,6 +790,19 @@ export class Orchestrator extends BaseAgent {
           duration,
         });
 
+        // Add orchestrator comment explaining stage completion and next steps
+        const nextStep = i + 1 < plan.steps.length ? plan.steps[i + 1] : 'Workflow completion';
+        const stageComment = `✅ Stage ${stageNumber}/${plan.steps.length} completed: **${agentType}**\n\n**Summary:** ${result.summary}\n\n**Duration:** ${(duration / 1000).toFixed(2)}s\n\n**Next Step:** ${nextStep}\n\n${retryCount > 0 ? `_Note: This is retry attempt ${retryCount + 1}/${maxRetries}_` : ''}`;
+        await addWorkflowStageComment(
+          plan.workflowId,
+          'ORCHESTRATOR',
+          'completed',
+          stageComment,
+          workflowRepoPath,
+          duration,
+          result.artifacts?.length
+        );
+
         logger.info(`Step ${stageNumber}/${plan.steps.length} completed: ${agentType}`, {
           workflowId: plan.workflowId,
         });
@@ -741,6 +827,16 @@ export class Orchestrator extends BaseAgent {
 
     // Generate final report
     const report = this.generateReport(plan, results);
+
+    // Add final orchestrator comment
+    const finalComment = `🎉 Workflow completed successfully!\n\n**Total Stages:** ${results.length}/${plan.steps.length}\n**All Stages Passed:** ✅\n${retryCount > 0 ? `**Total Retry Attempts:** ${retryCount}\n` : ''}\n**Workflow Type:** ${plan.config.type}\n\n**Execution Summary:**\n${results.map((r, i) => `${i + 1}. **${plan.steps[i]}**: ${r.summary?.substring(0, 100)}${r.summary && r.summary.length > 100 ? '...' : ''}`).join('\n')}\n\nThe orchestrator has successfully coordinated all agents. The branch is ready for pull request review.`;
+    await addWorkflowStageComment(
+      plan.workflowId,
+      'ORCHESTRATOR',
+      'completed',
+      finalComment,
+      workflowRepoPath
+    );
 
     return {
       success: true,
