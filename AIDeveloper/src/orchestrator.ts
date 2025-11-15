@@ -554,18 +554,21 @@ export class Orchestrator extends BaseAgent {
     plan: ExecutionPlan,
     branchName: string,
     retryCount: number = 0,
-    reviewFeedback?: any
+    reviewFeedback?: any,
+    previousIssueCount?: number
   ): Promise<AgentOutput> {
     const results: AgentOutput[] = [];
     const artifacts: any[] = [];
-    const maxRetries = 5; // Allow up to 5 retries on review failure
+    const maxRetries = 3; // Reduced from 5 to fail faster and prevent issue accumulation
 
     logger.info('Executing workflow', {
       workflowId: plan.workflowId,
       type: plan.config.type,
       steps: plan.steps,
       retryCount,
+      maxRetries,
       hasReviewFeedback: !!reviewFeedback,
+      previousIssueCount,
     });
 
     // Execute each agent in sequence
@@ -624,34 +627,70 @@ export class Orchestrator extends BaseAgent {
           ) {
             const stageName = agentType === AgentType.SECURITY_LINT ? 'Security Lint' : 'Review';
 
-            logger.info(`${stageName} failed - attempting retry with feedback`, {
-              workflowId: plan.workflowId,
-              retryCount: retryCount + 1,
-              maxRetries,
-            });
-
             // Extract feedback from artifacts
             const feedbackReport = result.artifacts?.[0]?.content
               ? JSON.parse(result.artifacts[0].content)
               : null;
 
+            // Count current issues
+            const currentIssueCount = (feedbackReport?.issues?.length || 0) +
+                                     (feedbackReport?.blockers?.length || 0);
+
+            // Detect if issues are getting worse
+            if (previousIssueCount && currentIssueCount > previousIssueCount) {
+              const increase = currentIssueCount - previousIssueCount;
+              logger.warn(`⚠️  ISSUE ESCALATION DETECTED: Issues increased by ${increase} (${previousIssueCount} → ${currentIssueCount})`, {
+                workflowId: plan.workflowId,
+                retryCount: retryCount + 1,
+                previousIssueCount,
+                currentIssueCount,
+              });
+
+              // Still retry, but log the escalation for visibility
+            }
+
+            logger.info(`${stageName} failed - attempting retry ${retryCount + 1}/${maxRetries} with detailed feedback`, {
+              workflowId: plan.workflowId,
+              retryCount: retryCount + 1,
+              maxRetries,
+              issueCount: currentIssueCount,
+              issueTrend: previousIssueCount ? (currentIssueCount > previousIssueCount ? 'WORSE' : 'BETTER') : 'N/A',
+            });
+
+            // Enhance feedback with retry context
+            const enhancedFeedback = {
+              ...feedbackReport,
+              retryContext: {
+                attemptNumber: retryCount + 1,
+                maxAttempts: maxRetries,
+                previousIssueCount,
+                currentIssueCount,
+                trend: previousIssueCount ? (currentIssueCount > previousIssueCount ? 'WORSENING' : 'IMPROVING') : 'FIRST_ATTEMPT',
+                warningMessage: currentIssueCount > (previousIssueCount || 0)
+                  ? `⚠️ CRITICAL: Issues INCREASED from ${previousIssueCount} to ${currentIssueCount}. Previous fixes may have introduced new problems. Carefully review ALL issues and ensure fixes don't create new security vulnerabilities.`
+                  : undefined,
+              },
+            };
+
             // Log retry attempt
             await logAgentStage(plan.workflowId, branchName, AgentType.PLAN, 'start', {
               input: {
-                reason: `${stageName} failed - retrying from PLAN stage with feedback`,
+                reason: `${stageName} failed - retrying from PLAN stage with feedback (attempt ${retryCount + 1}/${maxRetries})`,
                 retryCount: retryCount + 1,
                 maxRetries,
-                feedback: feedbackReport,
+                feedback: enhancedFeedback,
                 failedStage: agentType,
+                issueCount: currentIssueCount,
               },
             });
 
-            // Retry workflow from PLAN stage with feedback
+            // Retry workflow from PLAN stage with enhanced feedback
             return await this.executeWorkflow(
               plan,
               branchName,
               retryCount + 1,
-              feedbackReport
+              enhancedFeedback,
+              currentIssueCount
             );
           }
 
@@ -744,7 +783,7 @@ export class Orchestrator extends BaseAgent {
       workingDir, // Pass isolated repository directory to agents
       context: {
         previousResults,
-        reviewFeedback, // Pass review feedback for retry attempts
+        reviewFeedback, // Pass enhanced review feedback with retry context
       },
     };
 
