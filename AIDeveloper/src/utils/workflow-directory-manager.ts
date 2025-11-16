@@ -355,17 +355,34 @@ export async function updateWorkflowStatus(
     const readmePath = path.join(workflowDir, 'README.md');
 
     // Read existing README
-    const readme = await fs.readFile(readmePath, 'utf-8');
+    let readme = await fs.readFile(readmePath, 'utf-8');
 
-    // Update status line
-    const updatedReadme = readme.replace(
-      /\*\*Status:\*\* In Progress/,
-      `**Status:** ${status === 'completed' ? '✅ Completed' : '❌ Failed'}
-**Completed:** ${new Date().toISOString()}`
+    // Update status line (handle both initial "In Progress" and subsequent updates)
+    readme = readme.replace(
+      /\*\*Status:\*\* (?:In Progress|✅ Completed|❌ Failed)/,
+      `**Status:** ${status === 'completed' ? '✅ Completed' : '❌ Failed'}`
     );
 
-    // Append summary
-    const finalReadme = `${updatedReadme}
+    // Update or add completed timestamp
+    if (readme.includes('**Completed:**')) {
+      // Replace existing timestamp
+      readme = readme.replace(
+        /\*\*Completed:\*\* .+/,
+        `**Completed:** ${new Date().toISOString()}`
+      );
+    } else {
+      // Add timestamp after status line
+      readme = readme.replace(
+        /(\*\*Status:\*\* [^\n]+)/,
+        `$1\n**Completed:** ${new Date().toISOString()}`
+      );
+    }
+
+    // Remove any existing Final Summary sections to avoid duplicates
+    readme = readme.replace(/\n+## Final Summary\n+[\s\S]*/g, '');
+
+    // Append new summary
+    const finalReadme = `${readme}
 
 ## Final Summary
 

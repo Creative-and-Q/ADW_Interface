@@ -16,6 +16,7 @@ import { initializeDatabase, checkDatabaseHealth, query } from './database.js';
 import { setSocketIo } from './websocket-emitter.js';
 import apiRoutes from './api-routes.js';
 import { deploymentManager } from './utils/deployment-manager.js';
+import { cleanupStuckAgents, getRunningAgentCount } from './workflow-state.js';
 
 // ES Module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +33,9 @@ const io = new SocketIOServer(httpServer, {
     methods: ['GET', 'POST'],
   },
 });
+
+// Cleanup job interval
+let cleanupInterval: NodeJS.Timeout | null = null;
 
 /**
  * Configure Express middleware
@@ -168,6 +172,59 @@ async function autoStartModules() {
 }
 
 /**
+ * Start periodic cleanup of stuck agent executions
+ * Runs every 15 minutes to clean up agents that have been running for over 60 minutes
+ */
+function startPeriodicCleanup() {
+  const cleanupIntervalMs = 15 * 60 * 1000; // 15 minutes
+  const agentTimeoutMinutes = 60; // Mark agents as stuck after 60 minutes
+
+  logger.info('Starting periodic agent cleanup job', {
+    intervalMinutes: 15,
+    agentTimeoutMinutes,
+  });
+
+  // Run initial cleanup
+  cleanupStuckAgents(agentTimeoutMinutes).catch(error => {
+    logger.error('Initial agent cleanup failed', error as Error);
+  });
+
+  // Schedule periodic cleanup
+  cleanupInterval = setInterval(async () => {
+    try {
+      const runningCount = await getRunningAgentCount();
+
+      if (runningCount > 0) {
+        logger.debug('Running periodic agent cleanup check', {
+          runningAgents: runningCount,
+        });
+
+        const cleanedUp = await cleanupStuckAgents(agentTimeoutMinutes);
+
+        if (cleanedUp > 0) {
+          logger.warn(`Periodic cleanup: marked ${cleanedUp} stuck agent(s) as failed`);
+        }
+      }
+    } catch (error) {
+      logger.error('Periodic agent cleanup failed', error as Error);
+    }
+  }, cleanupIntervalMs);
+
+  logger.info('Periodic agent cleanup job started');
+}
+
+/**
+ * Stop periodic cleanup
+ */
+function stopPeriodicCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+    logger.info('Periodic agent cleanup job stopped');
+  }
+}
+
+/**
  * Configure WebSocket handlers
  */
 function setupWebSocket() {
@@ -240,6 +297,9 @@ async function initialize() {
       console.log(`Health:       http://localhost:${config.port}/health`);
       console.log(`${'='.repeat(60)}\n`);
 
+      // Start periodic cleanup of stuck agents
+      startPeriodicCleanup();
+
       // Auto-start modules with auto_load enabled
       await autoStartModules();
     });
@@ -258,6 +318,9 @@ async function shutdown() {
   logger.info('Shutting down server...');
 
   try {
+    // Stop periodic cleanup
+    stopPeriodicCleanup();
+
     // Close HTTP server (wait for it to fully close)
     await new Promise<void>((resolve) => {
       httpServer.close(() => {
