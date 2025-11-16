@@ -32,6 +32,12 @@ import {
   getWorkflowRepoPath,
 } from './utils/workflow-directory-manager.js';
 import { createPullRequest, addWorkflowStageComment } from './utils/github-helper.js';
+import {
+  needsChunking,
+  chunkPlan,
+  isTokenLimitError,
+  type PlanChunk,
+} from './utils/plan-chunker.js';
 
 /**
  * Workflow configuration
@@ -650,14 +656,61 @@ export class Orchestrator extends BaseAgent {
           input: { workflowId: plan.workflowId, previousResults: results },
         });
 
-        // Execute agent
-        const result = await this.executeAgent(
-          plan.workflowId,
-          agentType,
-          results,
-          branchName,
-          reviewFeedback
-        );
+        let result: AgentOutput;
+
+        // Check if this is CODE agent and if plan needs chunking
+        if (agentType === AgentType.CODE) {
+          // Get the plan from previous results
+          const planResult = results.find(r => r.artifacts?.some(a => a.type === 'plan'));
+          let parsedPlan: any = null;
+
+          if (planResult) {
+            const planArtifact = planResult.artifacts?.find(a => a.type === 'plan');
+            if (planArtifact && planArtifact.content) {
+              try {
+                parsedPlan = JSON.parse(planArtifact.content);
+              } catch (e) {
+                logger.warn('Failed to parse plan artifact for chunking check', e as Error);
+              }
+            }
+          }
+
+          // Check if plan needs chunking
+          if (parsedPlan && needsChunking(parsedPlan)) {
+            logger.info('Plan requires chunking, splitting into smaller pieces', {
+              workflowId: plan.workflowId,
+              totalFiles: parsedPlan.estimatedFiles,
+            });
+
+            const chunks = chunkPlan(parsedPlan);
+            result = await this.executeChunkedCode(
+              plan.workflowId,
+              parsedPlan,
+              chunks,
+              results,
+              branchName,
+              reviewFeedback
+            );
+          } else {
+            // Execute normally
+            result = await this.executeAgent(
+              plan.workflowId,
+              agentType,
+              results,
+              branchName,
+              reviewFeedback
+            );
+          }
+        } else {
+          // Execute agent normally for non-CODE agents
+          result = await this.executeAgent(
+            plan.workflowId,
+            agentType,
+            results,
+            branchName,
+            reviewFeedback
+          );
+        }
 
         const duration = Date.now() - startTime;
 
@@ -679,6 +732,82 @@ export class Orchestrator extends BaseAgent {
             workflowId: plan.workflowId,
             summary: result.summary,
           });
+
+          // Check if this is a CODE failure due to token limits and we can retry with chunking
+          if (
+            agentType === AgentType.CODE &&
+            isTokenLimitError(new Error(result.summary))
+          ) {
+            logger.warn('Code generation failed due to token limit - retrying with chunking', {
+              workflowId: plan.workflowId,
+              summary: result.summary,
+            });
+
+            // Get the plan from previous results
+            const planResult = results.find(r => r.artifacts?.some(a => a.type === 'plan'));
+            let parsedPlan: any = null;
+
+            if (planResult) {
+              const planArtifact = planResult.artifacts?.find(a => a.type === 'plan');
+              if (planArtifact && planArtifact.content) {
+                try {
+                  parsedPlan = JSON.parse(planArtifact.content);
+                } catch (e) {
+                  logger.error('Failed to parse plan for retry chunking', e as Error);
+                }
+              }
+            }
+
+            if (parsedPlan) {
+              logger.info('Retrying code generation with automatic chunking', {
+                workflowId: plan.workflowId,
+                totalFiles: parsedPlan.estimatedFiles,
+              });
+
+              // Force chunking even if plan doesn't strictly need it
+              const chunks = chunkPlan(parsedPlan);
+
+              // Retry with chunked execution
+              const chunkResult = await this.executeChunkedCode(
+                plan.workflowId,
+                parsedPlan,
+                chunks,
+                results.slice(0, -1), // Remove the failed CODE result
+                branchName,
+                reviewFeedback
+              );
+
+              if (chunkResult.success) {
+                logger.info('Code generation succeeded after chunking retry', {
+                  workflowId: plan.workflowId,
+                  chunks: chunks.length,
+                });
+
+                // Replace the failed result with the successful chunked result
+                results[results.length - 1] = chunkResult;
+
+                // Update artifacts
+                if (chunkResult.artifacts) {
+                  artifacts.push(...chunkResult.artifacts);
+                }
+
+                // Log successful retry
+                await logAgentStage(plan.workflowId, branchName, agentType, 'complete', {
+                  output: chunkResult,
+                  duration,
+                });
+
+                // Continue to next agent
+                continue;
+              } else {
+                logger.error('Code generation failed even after chunking retry', undefined, {
+                  workflowId: plan.workflowId,
+                  summary: chunkResult.summary,
+                });
+                // Fall through to normal failure handling
+              }
+            }
+          }
 
           // Check if this is a SECURITY_LINT or REVIEW failure and we can retry
           if (
@@ -927,6 +1056,143 @@ export class Orchestrator extends BaseAgent {
     });
 
     return output;
+  }
+
+  /**
+   * Execute code generation in chunks for large plans
+   */
+  private async executeChunkedCode(
+    workflowId: number,
+    plan: any,
+    chunks: PlanChunk[],
+    previousResults: AgentOutput[],
+    branchName: string,
+    reviewFeedback?: any
+  ): Promise<AgentOutput> {
+    logger.info('Executing chunked code generation', {
+      workflowId,
+      totalChunks: chunks.length,
+      totalFiles: plan.estimatedFiles,
+    });
+
+    const allArtifacts: any[] = [];
+    const chunkResults: string[] = [];
+
+    // Execute each chunk sequentially
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const chunkNum = i + 1;
+
+      logger.info(`Executing code chunk ${chunkNum}/${chunks.length}`, {
+        workflowId,
+        chunkFiles: chunk.estimatedFiles,
+        chunkSummary: chunk.summary,
+      });
+
+      try {
+        // Log chunk start
+        await logAgentStage(workflowId, branchName, AgentType.CODE, 'start', {
+          input: {
+            workflowId,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            chunkPlan: chunk,
+          },
+        });
+
+        // Create a modified input with the chunked plan
+        const workflow = await getWorkflow(workflowId);
+        if (!workflow) {
+          throw new Error(`Workflow ${workflowId} not found`);
+        }
+
+        const workingDir = getWorkflowRepoPath(workflowId, branchName);
+
+        // Create input with the chunk as the plan
+        const chunkInput: AgentInput = {
+          workflowId,
+          branchName,
+          taskDescription: chunk.summary,
+          webhookPayload: workflow.payload,
+          workingDir,
+          context: {
+            previousResults,
+            reviewFeedback,
+            // Add chunk-specific context
+            planChunk: chunk,
+            isChunked: true,
+            chunkIndex: i,
+            totalChunks: chunks.length,
+          },
+        };
+
+        // Execute code agent for this chunk
+        const agentId = await agentManager.spawnAgent(AgentType.CODE, chunkInput);
+        const chunkResult = await agentManager.waitForAgent(
+          agentId,
+          config.agents.timeoutMs
+        );
+
+        if (!chunkResult.success) {
+          // Log chunk failure
+          await logAgentStage(workflowId, branchName, AgentType.CODE, 'failed', {
+            output: chunkResult,
+            error: chunkResult.summary,
+          });
+
+          logger.error(`Code chunk ${chunkNum}/${chunks.length} failed`, undefined, {
+            workflowId,
+            summary: chunkResult.summary,
+          });
+
+          return {
+            success: false,
+            artifacts: allArtifacts,
+            summary: `Code generation failed at chunk ${chunkNum}/${chunks.length}: ${chunkResult.summary}`,
+          };
+        }
+
+        // Log chunk completion
+        await logAgentStage(workflowId, branchName, AgentType.CODE, 'complete', {
+          output: chunkResult,
+        });
+
+        // Collect artifacts and results
+        if (chunkResult.artifacts) {
+          allArtifacts.push(...chunkResult.artifacts);
+        }
+
+        chunkResults.push(`Chunk ${chunkNum}: ${chunkResult.summary}`);
+
+        logger.info(`Code chunk ${chunkNum}/${chunks.length} completed successfully`, {
+          workflowId,
+          filesGenerated: chunkResult.artifacts?.length || 0,
+        });
+      } catch (error) {
+        logger.error(`Failed to execute code chunk ${chunkNum}/${chunks.length}`, error as Error);
+
+        return {
+          success: false,
+          artifacts: allArtifacts,
+          summary: `Code chunk ${chunkNum}/${chunks.length} failed: ${(error as Error).message}`,
+        };
+      }
+    }
+
+    // All chunks succeeded
+    const summary = `Generated code in ${chunks.length} chunks:\n${chunkResults.join('\n')}`;
+
+    logger.info('All code chunks completed successfully', {
+      workflowId,
+      totalChunks: chunks.length,
+      totalArtifacts: allArtifacts.length,
+    });
+
+    return {
+      success: true,
+      artifacts: allArtifacts,
+      summary,
+    };
   }
 
   /**

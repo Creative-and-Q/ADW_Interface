@@ -38,4 +38,25 @@ else
     echo "✓ Redis is already running"
 fi
 
+# Check and kill any process using port 3000 (only if not called from a module)
+# Skip this check if SKIP_PORT_CHECK is set (used when modules call this script)
+if [ -z "$SKIP_PORT_CHECK" ]; then
+    PORT_PID=$(lsof -ti:3000 2>/dev/null)
+    if [ ! -z "$PORT_PID" ]; then
+        echo "Found process using port 3000 (PID: $PORT_PID)"
+        echo "Killing conflicting process..."
+        kill -9 $PORT_PID 2>/dev/null
+        sleep 1
+        # Verify the port is free
+        if lsof -i:3000 > /dev/null 2>&1; then
+            echo "✗ Failed to free port 3000"
+            exit 1
+        else
+            echo "✓ Port 3000 is now available"
+        fi
+    else
+        echo "✓ Port 3000 is available"
+    fi
+fi
+
 echo "All services are ready!"
