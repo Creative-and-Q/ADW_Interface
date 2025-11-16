@@ -407,8 +407,23 @@ Respond with JSON following this format:
     const written: string[] = [];
 
     for (const file of files) {
+      // Normalize file path - strip duplicate AIDeveloper/ prefix if present
+      let normalizedPath = file.path;
+
+      // If working dir ends with /AIDeveloper and file path starts with AIDeveloper/
+      // strip the duplicate prefix to prevent AIDeveloper/AIDeveloper/ nesting
+      if (workingDir.endsWith('/AIDeveloper') || workingDir.endsWith('\\AIDeveloper')) {
+        if (normalizedPath.startsWith('AIDeveloper/') || normalizedPath.startsWith('AIDeveloper\\')) {
+          normalizedPath = normalizedPath.substring('AIDeveloper/'.length);
+          logger.info('Normalized file path to prevent nesting', {
+            original: file.path,
+            normalized: normalizedPath,
+          });
+        }
+      }
+
       // Resolve file path within the workflow directory, not the root
-      const fullPath = path.resolve(workingDir, file.path);
+      const fullPath = path.resolve(workingDir, normalizedPath);
 
       try {
         if (file.action === 'delete') {
