@@ -12,6 +12,39 @@ import { WorkflowType, AgentType } from '../types.js';
 import { getGit } from './git-helper.js';
 
 /**
+ * Load SSH environment for git operations
+ */
+function getSSHEnvironment(): NodeJS.ProcessEnv {
+  const sshEnvFile = path.join(process.env.HOME || '/root', '.ssh', 'agent-environment');
+
+  try {
+    const envContent = require('fs').readFileSync(sshEnvFile, 'utf-8');
+    const env: NodeJS.ProcessEnv = { ...process.env };
+
+    // Parse the environment file
+    const matches = envContent.matchAll(/([A-Z_]+)=([^;]+);/g);
+    for (const match of matches) {
+      const [, key, value] = match;
+      // Remove quotes if present
+      env[key] = value.replace(/^['"]|['"]$/g, '');
+    }
+
+    logger.debug('SSH environment loaded', {
+      hasAuthSock: !!env.SSH_AUTH_SOCK,
+      hasAgentPid: !!env.SSH_AGENT_PID
+    });
+
+    return env;
+  } catch (error) {
+    logger.warn('Could not load SSH environment, using default', error as Error);
+    return {
+      ...process.env,
+      GIT_SSH_COMMAND: 'ssh -i /root/.ssh/id_rsa -F /root/.ssh/config',
+    };
+  }
+}
+
+/**
  * Get workflow directory path
  */
 export function getWorkflowDirectory(workflowId: number, branchName: string): string {
@@ -58,6 +91,7 @@ async function cloneRepository(
     execSync(`git clone ${repoUrl} ${repoDir}`, {
       stdio: 'inherit',
       cwd: workflowDir,
+      env: getSSHEnvironment(),
     });
 
     // Checkout develop branch

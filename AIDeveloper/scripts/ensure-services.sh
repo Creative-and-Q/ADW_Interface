@@ -59,4 +59,29 @@ if [ -z "$SKIP_PORT_CHECK" ]; then
     fi
 fi
 
+# Ensure SSH is configured for git operations
+echo "Checking SSH configuration..."
+SSH_ENV="$HOME/.ssh/agent-environment"
+
+# Check if SSH environment file exists and is recent (less than 24 hours old)
+if [ -f "$SSH_ENV" ]; then
+    # Source SSH environment
+    source "$SSH_ENV" > /dev/null 2>&1
+
+    # Check if agent is still running
+    if ps -p $SSH_AGENT_PID > /dev/null 2>&1; then
+        echo "✓ SSH agent is running (PID: $SSH_AGENT_PID)"
+    else
+        echo "SSH agent not running, setting up..."
+        bash "$(dirname "$0")/setup-ssh.sh" > /dev/null 2>&1
+        source "$SSH_ENV" > /dev/null 2>&1
+        echo "✓ SSH configured"
+    fi
+else
+    echo "SSH not configured, running setup..."
+    bash "$(dirname "$0")/setup-ssh.sh"
+    source "$SSH_ENV" > /dev/null 2>&1
+    echo "✓ SSH configured"
+fi
+
 echo "All services are ready!"
