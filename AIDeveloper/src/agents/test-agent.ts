@@ -8,7 +8,6 @@ import { AgentType, AgentInput, AgentOutput, ArtifactType } from '../types.js';
 import { config } from '../config.js';
 import * as logger from '../utils/logger.js';
 import { getArtifacts } from '../workflow-state.js';
-import { writeFile } from '../utils/file-system.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -67,6 +66,18 @@ export class TestAgent extends BaseAgent {
     try {
       logger.info('Test agent starting', { workflowId: input.workflowId });
 
+      // Ensure workingDir is provided
+      if (!input.workingDir) {
+        throw new Error('workingDir is required for test agent');
+      }
+
+      // Verify workingDir exists
+      try {
+        await fs.access(input.workingDir);
+      } catch (error) {
+        throw new Error(`Working directory does not exist: ${input.workingDir}`);
+      }
+
       // Load code artifacts
       const codeArtifacts = await this.loadCodeArtifacts(input.workflowId);
 
@@ -102,11 +113,29 @@ export class TestAgent extends BaseAgent {
       this.validateTestResult(testResult);
 
       // Write test files
-      await this.writeTestFiles(testResult.testFiles);
+      await this.writeTestFiles(testResult.testFiles, input.workingDir);
+
+      // Run TypeScript build check first
+      logger.info('Running TypeScript build check');
+      const buildCheck = await this.runBuildCheck(input.workingDir);
+      if (!buildCheck.success) {
+        // Build failed - return failure immediately
+        logger.error('TypeScript build failed', new Error(buildCheck.errors.join('; ')));
+        return {
+          success: false,
+          artifacts: testResult.testFiles.map((file) => ({
+            workflowId: input.workflowId,
+            agentExecutionId: this.executionId!,
+            type: ArtifactType.TEST,
+            content: file.content,
+          })),
+          summary: `Build check failed: ${buildCheck.errors.join('; ')}. Tests were not executed.`,
+        };
+      }
 
       // Execute tests
       logger.info('Running tests');
-      const testExecution = await this.runTests();
+      const testExecution = await this.runTests(input.workingDir);
 
       // Update result with execution data
       testResult.execution = { ran: true, ...testExecution };
@@ -311,18 +340,26 @@ Respond with JSON in this format:
    * Write test files to disk
    */
   private async writeTestFiles(
-    testFiles: Array<{ path: string; content: string }>
+    testFiles: Array<{ path: string; content: string }>,
+    workingDir: string
   ): Promise<string[]> {
     const written: string[] = [];
 
     for (const testFile of testFiles) {
       try {
-        const fullPath = path.resolve(process.cwd(), testFile.path);
-        const dir = path.dirname(fullPath);
-        await fs.mkdir(dir, { recursive: true });
+        // Construct absolute path within workingDir
+        const absolutePath = path.isAbsolute(testFile.path)
+          ? testFile.path
+          : path.join(workingDir, testFile.path);
 
-        await writeFile(testFile.path, testFile.content);
-        logger.info('Created test file', { path: testFile.path });
+        // Ensure directory exists
+        const directory = path.dirname(absolutePath);
+        await fs.mkdir(directory, { recursive: true });
+
+        // Write file directly
+        await fs.writeFile(absolutePath, testFile.content, 'utf-8');
+
+        logger.info('Created test file', { path: testFile.path, absolutePath });
         written.push(testFile.path);
       } catch (error) {
         logger.error('Failed to write test file', error as Error, {
@@ -338,12 +375,62 @@ Respond with JSON in this format:
   }
 
   /**
+   * Run TypeScript build check
+   */
+  private async runBuildCheck(workingDir: string): Promise<{ success: boolean; errors: string[] }> {
+    const errors: string[] = [];
+
+    try {
+      // Check if this is a TypeScript project by looking for tsconfig.json
+      const tsconfigPath = path.join(workingDir, 'tsconfig.json');
+      try {
+        await fs.access(tsconfigPath);
+      } catch {
+        // Not a TypeScript project, skip build check
+        logger.info('No tsconfig.json found, skipping TypeScript build check');
+        return { success: true, errors: [] };
+      }
+
+      logger.info('Running TypeScript compilation check', { workingDir });
+
+      // Run tsc --noEmit to check for type errors without generating output
+      const { stderr } = await execAsync('npx tsc --noEmit', {
+        cwd: workingDir,
+        timeout: 120000, // 2 minute timeout
+      });
+
+      // tsc outputs errors to stderr
+      if (stderr && stderr.trim().length > 0) {
+        const errorLines = stderr.split('\n').filter(line => line.trim());
+        errors.push(...errorLines.slice(0, 10)); // Limit to first 10 errors
+      }
+
+      return { success: errors.length === 0, errors };
+    } catch (error: any) {
+      // tsc returns non-zero exit code if there are type errors
+      if (error.stderr) {
+        const errorLines = error.stderr.split('\n').filter((line: string) => line.trim());
+        errors.push(...errorLines.slice(0, 10)); // Limit to first 10 errors
+      } else {
+        errors.push((error as Error).message);
+      }
+
+      logger.warn('TypeScript build check failed', {
+        errorCount: errors.length,
+        errors: errors.slice(0, 3), // Log first 3 errors
+      });
+
+      return { success: false, errors };
+    }
+  }
+
+  /**
    * Run tests using Jest
    */
-  private async runTests(): Promise<TestResults> {
+  private async runTests(workingDir: string): Promise<TestResults> {
     try {
       const { stdout } = await execAsync('npm test -- --json', {
-        cwd: process.cwd(),
+        cwd: workingDir,
         timeout: 120000, // 2 minute timeout
       });
 
