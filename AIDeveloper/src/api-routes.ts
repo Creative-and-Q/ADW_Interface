@@ -1025,4 +1025,84 @@ router.get('/workflows/:id/auto-fix/status', async (req: Request, res: Response)
   }
 });
 
+/**
+ * GET /api/auto-fix/active
+ * Get all active auto-fix attempts
+ */
+router.get('/auto-fix/active', async (_req: Request, res: Response) => {
+  try {
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const activeAttempts = autoFixManager.getActiveAttempts();
+
+    return res.json({
+      count: activeAttempts.length,
+      attempts: activeAttempts
+    });
+  } catch (error) {
+    logger.error('Failed to get active auto-fixes', error as Error);
+    return res.status(500).json({ error: 'Failed to get active auto-fixes' });
+  }
+});
+
+/**
+ * GET /api/auto-fix/history
+ * Get auto-fix history with optional limit
+ */
+router.get('/auto-fix/history', async (req: Request, res: Response) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const attempts = autoFixManager.getAllAttempts(limit);
+
+    return res.json({
+      count: attempts.length,
+      attempts
+    });
+  } catch (error) {
+    logger.error('Failed to get auto-fix history', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-fix history' });
+  }
+});
+
+/**
+ * GET /api/auto-fix/summary
+ * Get auto-fix summary statistics
+ */
+router.get('/auto-fix/summary', async (_req: Request, res: Response) => {
+  try {
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const summary = autoFixManager.getSummary();
+
+    return res.json(summary);
+  } catch (error) {
+    logger.error('Failed to get auto-fix summary', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-fix summary' });
+  }
+});
+
+/**
+ * GET /api/auto-fix/:attemptId
+ * Get specific auto-fix attempt details
+ */
+router.get('/auto-fix/:attemptId', async (req: Request, res: Response) => {
+  try {
+    const attemptId = req.params.attemptId;
+
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const attempt = autoFixManager.getAttempt(attemptId);
+
+    if (!attempt) {
+      return res.status(404).json({ error: 'Auto-fix attempt not found' });
+    }
+
+    return res.json({
+      attempt
+    });
+  } catch (error) {
+    logger.error('Failed to get auto-fix attempt', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-fix attempt' });
+  }
+});
+
 export default router;

@@ -127,3 +127,17 @@ export function emitStatsUpdated() {
 
   logger.debug('Emitted stats:updated event');
 }
+
+/**
+ * Emit event to all connected clients
+ */
+export function emitToClients(event: string, data: any) {
+  if (!ioInstance) return;
+
+  ioInstance.emit(event, {
+    ...data,
+    timestamp: new Date().toISOString(),
+  });
+
+  logger.debug(`Emitted ${event} event`, data);
+}

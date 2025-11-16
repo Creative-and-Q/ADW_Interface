@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
 import * as logger from './logger.js';
+import { emitToClients } from '../websocket-emitter.js';
 
 interface AutoFixConfig {
   enabled: boolean;
@@ -19,16 +20,40 @@ interface AutoFixConfig {
 }
 
 interface AutoFixAttempt {
+  id: string;
   workflowId: number;
   timestamp: Date;
-  status: 'pending' | 'running' | 'success' | 'failed';
+  status: 'pending' | 'running' | 'investigating' | 'fixing' | 'testing' | 'success' | 'failed';
   error?: string;
+  pid?: number;
+  startedAt: Date;
+  completedAt?: Date;
+  duration?: number;
+  rootCause?: string;
+  fixDescription?: string;
+  commitHash?: string;
+  newWorkflowId?: number;
+  progress?: {
+    stage: string;
+    percentage: number;
+    message: string;
+  };
+}
+
+interface AutoFixSummary {
+  totalAttempts: number;
+  activeAttempts: number;
+  successfulAttempts: number;
+  failedAttempts: number;
+  recentAttempts: AutoFixAttempt[];
 }
 
 export class AutoFixManager {
   private static instance: AutoFixManager;
   private config: AutoFixConfig;
   private recentAttempts: Map<number, AutoFixAttempt[]> = new Map();
+  private allAttempts: AutoFixAttempt[] = [];
+  private activeAttempts: Map<string, AutoFixAttempt> = new Map();
 
   private constructor() {
     this.config = {
@@ -138,19 +163,32 @@ export class AutoFixManager {
   /**
    * Trigger auto-fix for a workflow
    */
-  public async triggerAutoFix(workflowId: number): Promise<void> {
+  public async triggerAutoFix(workflowId: number): Promise<string> {
     logger.info('Triggering auto-fix for workflow', { workflowId });
+
+    // Generate unique attempt ID
+    const attemptId = `autofix-${workflowId}-${Date.now()}`;
 
     // Record attempt
     const attempt: AutoFixAttempt = {
+      id: attemptId,
       workflowId,
       timestamp: new Date(),
-      status: 'running',
+      startedAt: new Date(),
+      status: 'pending',
+      progress: {
+        stage: 'Initializing',
+        percentage: 0,
+        message: 'Auto-fix process starting...'
+      }
     };
 
+    // Add to all collections
     const attempts = this.recentAttempts.get(workflowId) || [];
     attempts.push(attempt);
     this.recentAttempts.set(workflowId, attempts);
+    this.allAttempts.push(attempt);
+    this.activeAttempts.set(attemptId, attempt);
 
     try {
       // Spawn auto-fix process
@@ -160,27 +198,144 @@ export class AutoFixManager {
         'auto-fix-workflow.ts'
       );
 
-      const autoFixProcess = spawn('tsx', [scriptPath, workflowId.toString()], {
+      const autoFixProcess = spawn('tsx', [scriptPath, workflowId.toString(), attemptId], {
         detached: true,
-        stdio: 'ignore',
+        stdio: ['ignore', 'pipe', 'pipe'],
         cwd: process.cwd(),
+      });
+
+      // Store PID
+      attempt.pid = autoFixProcess.pid;
+      attempt.status = 'running';
+
+      // Monitor stdout for progress updates
+      autoFixProcess.stdout?.on('data', (data) => {
+        const output = data.toString();
+        this.parseProgressUpdate(attemptId, output);
+      });
+
+      // Monitor stderr for errors
+      autoFixProcess.stderr?.on('data', (data) => {
+        const error = data.toString();
+        logger.error('Auto-fix process error output', new Error(error), { attemptId });
+      });
+
+      // Handle process exit
+      autoFixProcess.on('exit', (code) => {
+        const attempt = this.activeAttempts.get(attemptId);
+        if (attempt) {
+          attempt.completedAt = new Date();
+          attempt.duration = attempt.completedAt.getTime() - attempt.startedAt.getTime();
+
+          if (code === 0) {
+            attempt.status = 'success';
+            logger.info('Auto-fix process completed successfully', { attemptId, workflowId });
+
+            // Emit success event
+            emitToClients('autofix:completed', {
+              attemptId,
+              workflowId,
+              status: 'success',
+              duration: attempt.duration
+            });
+          } else {
+            attempt.status = 'failed';
+            attempt.error = `Process exited with code ${code}`;
+            logger.error('Auto-fix process failed', new Error(`Process exited with code ${code}`), { attemptId, workflowId });
+
+            // Emit failure event
+            emitToClients('autofix:failed', {
+              attemptId,
+              workflowId,
+              error: attempt.error,
+              duration: attempt.duration
+            });
+          }
+
+          this.activeAttempts.delete(attemptId);
+        }
       });
 
       autoFixProcess.unref();
 
-      logger.info('Auto-fix process spawned', { workflowId, pid: autoFixProcess.pid });
+      logger.info('Auto-fix process spawned', {
+        workflowId,
+        attemptId,
+        pid: autoFixProcess.pid
+      });
 
-      // Update attempt status (optimistically)
-      attempt.status = 'pending';
+      // Emit WebSocket event
+      emitToClients('autofix:started', {
+        attemptId,
+        workflowId,
+        timestamp: attempt.startedAt
+      });
 
       if (this.config.notifyOnAutoFix) {
-        // TODO: Add notification system (webhook, email, etc.)
-        logger.info('Auto-fix triggered - notification sent', { workflowId });
+        logger.info('Auto-fix triggered - notification sent', { workflowId, attemptId });
       }
+
+      return attemptId;
     } catch (error) {
-      logger.error('Failed to trigger auto-fix', error as Error, { workflowId });
+      logger.error('Failed to trigger auto-fix', error as Error, { workflowId, attemptId });
       attempt.status = 'failed';
       attempt.error = (error as Error).message;
+      attempt.completedAt = new Date();
+      attempt.duration = attempt.completedAt.getTime() - attempt.startedAt.getTime();
+      this.activeAttempts.delete(attemptId);
+      throw error;
+    }
+  }
+
+  /**
+   * Parse progress updates from auto-fix process stdout
+   */
+  private parseProgressUpdate(attemptId: string, output: string): void {
+    const attempt = this.activeAttempts.get(attemptId);
+    if (!attempt) return;
+
+    try {
+      // Look for JSON progress updates
+      const jsonMatch = output.match(/\{[^}]+\}/);
+      if (jsonMatch) {
+        const progress = JSON.parse(jsonMatch[0]);
+        if (progress.stage) {
+          attempt.progress = progress;
+          attempt.status = progress.status || attempt.status;
+          logger.debug('Auto-fix progress update', { attemptId, progress });
+
+          // Emit progress update via WebSocket
+          emitToClients('autofix:progress', {
+            attemptId,
+            workflowId: attempt.workflowId,
+            progress: attempt.progress,
+            status: attempt.status
+          });
+        }
+      }
+    } catch (error) {
+      // Ignore parse errors
+    }
+  }
+
+  /**
+   * Update auto-fix attempt status (called by auto-fix script)
+   */
+  public updateAttemptStatus(
+    attemptId: string,
+    update: Partial<AutoFixAttempt>
+  ): void {
+    const attempt = this.activeAttempts.get(attemptId);
+    if (attempt) {
+      Object.assign(attempt, update);
+      logger.info('Auto-fix attempt updated', { attemptId, update });
+
+      // Emit update event
+      emitToClients('autofix:updated', {
+        attemptId,
+        workflowId: attempt.workflowId,
+        ...update
+      });
     }
   }
 
@@ -189,6 +344,50 @@ export class AutoFixManager {
    */
   public getAutoFixStatus(workflowId: number): AutoFixAttempt[] {
     return this.recentAttempts.get(workflowId) || [];
+  }
+
+  /**
+   * Get specific auto-fix attempt by ID
+   */
+  public getAttempt(attemptId: string): AutoFixAttempt | undefined {
+    return this.activeAttempts.get(attemptId) ||
+           this.allAttempts.find(a => a.id === attemptId);
+  }
+
+  /**
+   * Get all active auto-fix attempts
+   */
+  public getActiveAttempts(): AutoFixAttempt[] {
+    return Array.from(this.activeAttempts.values());
+  }
+
+  /**
+   * Get all auto-fix attempts (with optional limit)
+   */
+  public getAllAttempts(limit?: number): AutoFixAttempt[] {
+    const attempts = [...this.allAttempts].sort((a, b) =>
+      b.timestamp.getTime() - a.timestamp.getTime()
+    );
+    return limit ? attempts.slice(0, limit) : attempts;
+  }
+
+  /**
+   * Get auto-fix summary statistics
+   */
+  public getSummary(): AutoFixSummary {
+    const totalAttempts = this.allAttempts.length;
+    const activeAttempts = this.activeAttempts.size;
+    const successfulAttempts = this.allAttempts.filter(a => a.status === 'success').length;
+    const failedAttempts = this.allAttempts.filter(a => a.status === 'failed').length;
+    const recentAttempts = this.getAllAttempts(10);
+
+    return {
+      totalAttempts,
+      activeAttempts,
+      successfulAttempts,
+      failedAttempts,
+      recentAttempts
+    };
   }
 
   /**
