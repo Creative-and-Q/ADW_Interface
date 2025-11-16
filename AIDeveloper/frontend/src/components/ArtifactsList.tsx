@@ -1,6 +1,8 @@
-import { FileText, FileCode, File, CheckCircle } from 'lucide-react';
+import { useState } from 'react';
+import { FileText, FileCode, File, CheckCircle, Eye } from 'lucide-react';
 import { format, parseISO, formatDistanceToNow } from 'date-fns';
 import clsx from 'clsx';
+import ArtifactModal from './ArtifactModal';
 
 interface ArtifactsListProps {
   artifacts: any[];
@@ -8,6 +10,8 @@ interface ArtifactsListProps {
 }
 
 export default function ArtifactsList({ artifacts, className = '' }: ArtifactsListProps) {
+  const [selectedArtifact, setSelectedArtifact] = useState<any | null>(null);
+
   if (artifacts.length === 0) {
     return (
       <div className={`bg-white rounded-lg border border-gray-200 p-6 ${className}`}>
@@ -65,10 +69,12 @@ export default function ArtifactsList({ artifacts, className = '' }: ArtifactsLi
           const colorClass = getArtifactColor(artifact.artifact_type);
 
           return (
-            <div
+            <button
               key={artifact.id}
+              onClick={() => setSelectedArtifact(artifact)}
               className={clsx(
-                'border rounded-lg p-4 hover:shadow-md transition-all duration-200',
+                'w-full border rounded-lg p-4 hover:shadow-lg transition-all duration-200 text-left group',
+                'focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500',
                 colorClass
               )}
             >
@@ -77,9 +83,12 @@ export default function ArtifactsList({ artifacts, className = '' }: ArtifactsLi
                   <Icon className="h-6 w-6" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm capitalize mb-1">
-                    {artifact.artifact_type}
-                  </p>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="font-semibold text-sm capitalize">
+                      {artifact.artifact_type}
+                    </p>
+                    <Eye className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
                   {artifact.file_path && (
                     <p className="text-xs font-mono truncate opacity-75 mb-2">
                       {artifact.file_path}
@@ -93,10 +102,18 @@ export default function ArtifactsList({ artifacts, className = '' }: ArtifactsLi
                   </div>
                 </div>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
+
+      {/* Artifact Modal */}
+      {selectedArtifact && (
+        <ArtifactModal
+          artifact={selectedArtifact}
+          onClose={() => setSelectedArtifact(null)}
+        />
+      )}
     </div>
   );
 }
