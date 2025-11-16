@@ -1,6 +1,6 @@
 {
-  "enabled": false,
-  "autoTriggerOnFailure": false,
+  "enabled": true,
+  "autoTriggerOnFailure": true,
   "maxAutoFixes": 3,
   "cooldownMinutes": 30,
   "excludedErrorTypes": [
