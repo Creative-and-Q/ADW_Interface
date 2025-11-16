@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { workflowsAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import {
-  Play,
-  CheckCircle,
-  XCircle,
-  Clock,
-  AlertCircle,
   Plus,
   RefreshCw,
+  BarChart3,
+  LayoutGrid,
+  AlertCircle,
 } from 'lucide-react';
-import { format } from 'date-fns';
+import WorkflowMetrics from '../components/WorkflowMetrics';
+import WorkflowCharts from '../components/WorkflowCharts';
+import WorkflowCard from '../components/WorkflowCard';
+
+type ViewMode = 'overview' | 'grid';
 
 export default function Workflows() {
   const [workflows, setWorkflows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const { socket } = useWebSocket();
 
@@ -35,10 +37,8 @@ export default function Workflows() {
 
   const loadWorkflows = async () => {
     try {
-      // Handle "ongoing" filter specially - includes multiple statuses
       let params: any = {};
       if (filter === 'ongoing') {
-        // Filter on client side for ongoing workflows
         const { data } = await workflowsAPI.list({});
         const ongoingStatuses = ['planning', 'coding', 'testing', 'reviewing', 'documenting'];
         setWorkflows(data.workflows.filter((w: any) => ongoingStatuses.includes(w.status)));
@@ -54,58 +54,35 @@ export default function Workflows() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const statusConfig: any = {
-      completed: { icon: CheckCircle, class: 'badge-success', label: 'Completed' },
-      failed: { icon: XCircle, class: 'badge-error', label: 'Failed' },
-      pending: { icon: Clock, class: 'badge-gray', label: 'Pending' },
-      planning: { icon: Play, class: 'badge-info', label: 'Planning' },
-      coding: { icon: Play, class: 'badge-info', label: 'Coding' },
-      testing: { icon: Play, class: 'badge-info', label: 'Testing' },
-      reviewing: { icon: Play, class: 'badge-info', label: 'Reviewing' },
-      documenting: { icon: Play, class: 'badge-info', label: 'Documenting' },
-    };
-
-    const config = statusConfig[status] || statusConfig.pending;
-    const Icon = config.icon;
-
-    return (
-      <span className={`badge ${config.class} inline-flex items-center`}>
-        <Icon className="h-3 w-3 mr-1" />
-        {config.label}
-      </span>
-    );
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 px-4 sm:px-0">
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">Workflows</h2>
+          <h1 className="text-3xl font-bold text-gray-900">Workflows</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Monitor and manage all development workflows
+            Monitor and manage all development workflows with real-time insights
           </p>
         </div>
         <div className="flex space-x-3">
           <button
             onClick={loadWorkflows}
-            className="btn btn-secondary flex items-center"
+            className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
           >
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </button>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="btn btn-primary flex items-center"
+            className="flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
           >
             <Plus className="h-4 w-4 mr-2" />
             New Workflow
@@ -113,87 +90,85 @@ export default function Workflows() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="flex space-x-2">
-        {['all', 'ongoing', 'pending', 'completed', 'failed'].map((f) => (
+      {/* View Mode Tabs */}
+      <div className="flex items-center justify-between border-b border-gray-200">
+        <div className="flex space-x-1">
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-              filter === f
-                ? 'bg-primary-600 text-white'
-                : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
-            } ${f === 'ongoing' ? 'border-blue-500 border-2' : ''}`}
+            onClick={() => setViewMode('overview')}
+            className={`flex items-center px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              viewMode === 'overview'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
-            {f === 'ongoing' && (
-              <span className="ml-1 inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse"></span>
-            )}
+            <BarChart3 className="h-4 w-4 mr-2" />
+            Overview & Analytics
           </button>
-        ))}
+          <button
+            onClick={() => setViewMode('grid')}
+            className={`flex items-center px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              viewMode === 'grid'
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <LayoutGrid className="h-4 w-4 mr-2" />
+            All Workflows
+          </button>
+        </div>
+
+        {/* Filters (only show in grid view) */}
+        {viewMode === 'grid' && (
+          <div className="flex space-x-2">
+            {['all', 'ongoing', 'pending', 'completed', 'failed'].map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  filter === f
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-200'
+                }`}
+              >
+                {f.charAt(0).toUpperCase() + f.slice(1)}
+                {f === 'ongoing' && filter === f && (
+                  <span className="ml-1 inline-block h-2 w-2 rounded-full bg-white animate-pulse"></span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Workflows List */}
-      <div className="card p-0 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Type
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Created
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {workflows.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                    <AlertCircle className="h-12 w-12 mx-auto text-gray-400 mb-3" />
-                    <p>No workflows found</p>
-                  </td>
-                </tr>
-              ) : (
-                workflows.map((workflow) => (
-                  <tr key={workflow.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      #{workflow.id}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <span className="capitalize">{workflow.workflow_type}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {getStatusBadge(workflow.status)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {format(new Date(workflow.created_at), 'MMM d, yyyy HH:mm')}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <Link
-                        to={`/workflows/${workflow.id}`}
-                        className="text-primary-600 hover:text-primary-900"
-                      >
-                        View Details
-                      </Link>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      {/* Content based on view mode */}
+      {viewMode === 'overview' ? (
+        <div className="space-y-6">
+          {/* Metrics Cards */}
+          <WorkflowMetrics workflows={workflows} />
+
+          {/* Charts */}
+          <WorkflowCharts workflows={workflows} />
         </div>
-      </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Workflow Grid */}
+          {workflows.length === 0 ? (
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+              <AlertCircle className="h-12 w-12 mx-auto text-gray-400 mb-3" />
+              <p className="text-gray-500">No workflows found</p>
+              <p className="text-sm text-gray-400 mt-1">
+                Create a new workflow to get started
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              {workflows.map((workflow) => (
+                <WorkflowCard key={workflow.id} workflow={workflow} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Create Modal */}
       {showCreateModal && (
@@ -239,7 +214,7 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
             <select
               value={workflowType}
               onChange={(e) => setWorkflowType(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="feature">Feature</option>
               <option value="bugfix">Bugfix</option>
@@ -257,7 +232,7 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
               onChange={(e) => setTaskDescription(e.target.value)}
               rows={4}
               required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Describe what you want the AI to build..."
             />
           </div>
@@ -265,14 +240,14 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
             <button
               type="button"
               onClick={onClose}
-              className="btn btn-secondary"
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
               disabled={submitting}
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="btn btn-primary"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
               disabled={submitting}
             >
               {submitting ? 'Creating...' : 'Create'}
