@@ -31,16 +31,18 @@ import * as logger from './utils/logger.js';
  */
 export async function createWorkflow(
   type: WorkflowType,
-  payload: WebhookPayload
+  payload: WebhookPayload,
+  targetModule: string = 'AIDeveloper'
 ): Promise<number> {
   try {
     const workflowId = await insert('workflows', {
       workflow_type: type,
+      target_module: targetModule,
       status: WorkflowStatus.PENDING,
       payload: JSON.stringify(payload),
     });
 
-    logger.info(`Workflow created: ${workflowId}`, { type });
+    logger.info(`Workflow created: ${workflowId}`, { type, targetModule });
     return workflowId;
   } catch (error) {
     logger.error('Failed to create workflow', error as Error);
@@ -94,6 +96,7 @@ export async function getWorkflow(id: number): Promise<WorkflowExecution | null>
       id: row.id,
       webhookId: row.webhook_id,
       type: row.workflow_type as WorkflowType,
+      target_module: row.target_module,
       status: row.status as WorkflowStatus,
       payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
       branchName: row.branch_name,
@@ -464,8 +467,35 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
       completedAgents.length > 0 &&
       hasNonOrchestratorAgents;
 
-    // Resume from the index after the last completed agent
-    const resumeFromIndex = completedAgents.length;
+    // Calculate resume index based on unique completed agent types (not total executions)
+    // Get unique completed agent types (excluding orchestrator)
+    const uniqueCompletedTypes = new Set(
+      completedAgents
+        .filter(a => a.agentType !== AgentType.ORCHESTRATOR)
+        .map(a => a.agentType)
+    );
+
+    // Standard workflow sequence
+    const workflowSequence = [
+      AgentType.PLAN,
+      AgentType.CODE,
+      AgentType.SECURITY_LINT,
+      AgentType.TEST,
+      AgentType.REVIEW,
+      AgentType.DOCUMENT,
+    ];
+
+    // Find the last completed agent type in the workflow sequence
+    let lastCompletedIndex = -1;
+    for (let i = workflowSequence.length - 1; i >= 0; i--) {
+      if (uniqueCompletedTypes.has(workflowSequence[i])) {
+        lastCompletedIndex = i;
+        break;
+      }
+    }
+
+    // Resume from the next agent after the last completed one
+    const resumeFromIndex = lastCompletedIndex + 1;
 
     logger.debug('Workflow resume state retrieved', {
       workflowId: id,
