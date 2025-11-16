@@ -38,6 +38,7 @@ import {
   isTokenLimitError,
   type PlanChunk,
 } from './utils/plan-chunker.js';
+import { autoFixManager } from './utils/auto-fix-manager.js';
 
 /**
  * Workflow configuration
@@ -254,6 +255,18 @@ export class Orchestrator extends BaseAgent {
           result.summary
         );
         logger.error(`Workflow ${input.workflowId} failed: ${result.summary}`);
+
+        // Check if auto-fix should be triggered
+        if (autoFixManager.shouldTriggerAutoFix(input.workflowId, plan.config.type)) {
+          logger.info('Auto-fix conditions met - triggering auto-fix', {
+            workflowId: input.workflowId,
+          });
+
+          // Trigger auto-fix asynchronously
+          autoFixManager.triggerAutoFix(input.workflowId).catch((error) => {
+            logger.error('Auto-fix trigger failed', error as Error);
+          });
+        }
       }
 
       return result;
@@ -269,6 +282,23 @@ export class Orchestrator extends BaseAgent {
           'failed',
           (error as Error).message
         );
+      }
+
+      // Check if auto-fix should be triggered for critical errors
+      const workflow = await getWorkflow(input.workflowId);
+      if (workflow) {
+        const payload = workflow.payload as any;
+        const workflowType = payload?.customData?.workflowType || payload?.workflowType || WorkflowType.FEATURE;
+
+        if (autoFixManager.shouldTriggerAutoFix(input.workflowId, workflowType)) {
+          logger.info('Auto-fix conditions met after critical error - triggering auto-fix', {
+            workflowId: input.workflowId,
+          });
+
+          autoFixManager.triggerAutoFix(input.workflowId).catch((err) => {
+            logger.error('Auto-fix trigger failed', err as Error);
+          });
+        }
       }
 
       return {
