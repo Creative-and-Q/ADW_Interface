@@ -312,15 +312,109 @@ export async function completeWorkflow(id: number): Promise<void> {
 }
 
 /**
- * Fail workflow
+ * Fail workflow and clean up any running agent executions
  */
 export async function failWorkflow(id: number, reason?: string): Promise<void> {
   try {
+    // First, mark any running agents as failed to prevent orphaned executions
+    await failRunningAgents(id, reason || 'Workflow failed');
+
+    // Then update the workflow status
     await updateWorkflowStatus(id, WorkflowStatus.FAILED);
     logger.error(`Workflow failed: ${id}`, new Error(reason || 'Unknown error'));
   } catch (error) {
     logger.error('Failed to fail workflow', error as Error);
     throw error;
+  }
+}
+
+/**
+ * Mark all running agent executions as failed
+ * This prevents orphaned agents stuck in "running" state
+ */
+export async function failRunningAgents(workflowId: number, reason: string): Promise<void> {
+  try {
+    const agents = await getAgentExecutions(workflowId);
+    const runningAgents = agents.filter(a => a.status === AgentStatus.RUNNING);
+
+    if (runningAgents.length > 0) {
+      logger.info(`Marking ${runningAgents.length} running agent(s) as failed for workflow ${workflowId}`);
+
+      for (const agent of runningAgents) {
+        await updateAgentExecution(
+          agent.id,
+          AgentStatus.FAILED,
+          undefined,
+          `Agent terminated: ${reason}`
+        );
+        logger.debug(`Marked agent execution ${agent.id} (${agent.agentType}) as failed`);
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to fail running agents', error as Error);
+    // Don't throw - we still want to fail the workflow even if this cleanup fails
+  }
+}
+
+/**
+ * Clean up stuck agent executions that have been running for too long
+ * Returns the number of agents cleaned up
+ */
+export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<number> {
+  try {
+    const timeoutMs = timeoutMinutes * 60 * 1000;
+    const cutoffTime = new Date(Date.now() - timeoutMs);
+
+    // Find agents that have been running for longer than timeout
+    const stuckAgents = await query<any[]>(
+      `SELECT id, workflow_id, agent_type, started_at
+       FROM agent_executions
+       WHERE status = ?
+       AND started_at IS NOT NULL
+       AND started_at < ?`,
+      [AgentStatus.RUNNING, cutoffTime]
+    );
+
+    if (stuckAgents.length === 0) {
+      logger.debug('No stuck agents found');
+      return 0;
+    }
+
+    logger.warn(`Found ${stuckAgents.length} stuck agent(s) running longer than ${timeoutMinutes} minutes`);
+
+    for (const agent of stuckAgents) {
+      const runningTime = Math.floor((Date.now() - new Date(agent.started_at).getTime()) / 1000 / 60);
+
+      await updateAgentExecution(
+        agent.id,
+        AgentStatus.FAILED,
+        undefined,
+        `Agent execution timeout: exceeded ${timeoutMinutes} minute limit (ran for ${runningTime} minutes)`
+      );
+
+      logger.info(`Cleaned up stuck agent execution ${agent.id} (${agent.agent_type}) for workflow ${agent.workflow_id}`);
+    }
+
+    return stuckAgents.length;
+  } catch (error) {
+    logger.error('Failed to cleanup stuck agents', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Get count of running agent executions across all workflows
+ */
+export async function getRunningAgentCount(): Promise<number> {
+  try {
+    const result = await queryOne<{ count: number }>(
+      'SELECT COUNT(*) as count FROM agent_executions WHERE status = ?',
+      [AgentStatus.RUNNING]
+    );
+    return result?.count || 0;
+  } catch (error) {
+    logger.error('Failed to get running agent count', error as Error);
+    return 0;
   }
 }
 

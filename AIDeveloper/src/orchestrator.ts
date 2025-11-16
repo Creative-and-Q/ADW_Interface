@@ -19,6 +19,7 @@ import {
   updateWorkflowStatus,
   completeWorkflow,
   failWorkflow,
+  failRunningAgents,
   getWorkflowResumeState,
   resetWorkflowForResume,
 } from './workflow-state.js';
@@ -1164,16 +1165,31 @@ export class Orchestrator extends BaseAgent {
         );
 
         if (!chunkResult.success) {
-          // Log chunk failure
+          // Log chunk failure with detailed context
           await logAgentStage(workflowId, branchName, AgentType.CODE, 'failed', {
             output: chunkResult,
             error: chunkResult.summary,
           });
 
+          // Check if this is a token limit error even within a chunk
+          const isTokenError = isTokenLimitError(new Error(chunkResult.summary));
+
           logger.error(`Code chunk ${chunkNum}/${chunks.length} failed`, undefined, {
             workflowId,
+            chunkNum,
+            totalChunks: chunks.length,
             summary: chunkResult.summary,
+            isTokenLimitError: isTokenError,
+            artifactsGenerated: allArtifacts.length,
+            previousChunksSucceeded: chunkNum - 1,
           });
+
+          // Clean up any running agent executions for this workflow
+          // This prevents orphaned agents if chunk execution fails mid-stream
+          await failRunningAgents(
+            workflowId,
+            `Code chunk ${chunkNum}/${chunks.length} failed: ${chunkResult.summary}`
+          );
 
           return {
             success: false,
