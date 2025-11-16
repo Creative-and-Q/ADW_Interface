@@ -352,13 +352,65 @@ Please analyze this task and create a detailed implementation plan following the
    */
   private parsePlanResponse(response: string): Plan {
     try {
-      // Try to extract JSON from response
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('No JSON found in AI response');
+      // Strategy 1: Try to find JSON code block first
+      let jsonStr = '';
+      const codeBlockMatch = response.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1];
+      } else {
+        // Strategy 2: Extract from first { to its matching }
+        const firstBrace = response.indexOf('{');
+        if (firstBrace === -1) {
+          throw new Error('No JSON found in AI response');
+        }
+
+        let braceCount = 0;
+        let inString = false;
+        let escapeNext = false;
+        let endIndex = -1;
+
+        for (let i = firstBrace; i < response.length; i++) {
+          const char = response[i];
+
+          if (escapeNext) {
+            escapeNext = false;
+            continue;
+          }
+
+          if (char === '\\') {
+            escapeNext = true;
+            continue;
+          }
+
+          if (char === '"' && !escapeNext) {
+            inString = !inString;
+            continue;
+          }
+
+          if (!inString) {
+            if (char === '{') braceCount++;
+            if (char === '}') braceCount--;
+
+            if (braceCount === 0) {
+              endIndex = i + 1;
+              break;
+            }
+          }
+        }
+
+        if (endIndex === -1) {
+          throw new Error('Could not find matching closing brace in JSON');
+        }
+
+        jsonStr = response.substring(firstBrace, endIndex);
       }
 
-      const plan = JSON.parse(jsonMatch[0]);
+      // Clean up common JSON issues
+      jsonStr = jsonStr
+        .replace(/,\s*}/g, '}')  // Remove trailing commas before }
+        .replace(/,\s*]/g, ']'); // Remove trailing commas before ]
+
+      const plan = JSON.parse(jsonStr);
 
       // Ensure all required fields exist
       return {

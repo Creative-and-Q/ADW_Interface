@@ -13,7 +13,6 @@ import {
   getCurrentBranch,
   commitChanges,
 } from '../utils/git-helper.js';
-import { addWorkflowStageComment } from '../utils/github-helper.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -106,17 +105,7 @@ export class CodeAgent extends BaseAgent {
       const commitMessage = `${codeResult.commit.message}\n\n${codeResult.commit.description}\n\nFiles changed: ${filesWritten.join(', ')}`;
       await commitChanges(commitMessage, ['.'], workingDir);
 
-      // Add GitHub comment to explain what this commit does
-      const commentSummary = `${codeResult.commit.description}\n\nFiles modified:\n${filesWritten.map(f => `- ${f}`).join('\n')}`;
-      await addWorkflowStageComment(
-        input.workflowId,
-        AgentType.CODE,
-        'completed',
-        commentSummary,
-        workingDir,
-        undefined, // duration will be calculated by base agent
-        filesWritten.length
-      );
+      // Note: GitHub comment will be added by orchestrator after pushing commits
 
       // Save code artifacts
       const artifactIds: number[] = [];

@@ -732,6 +732,16 @@ export class Orchestrator extends BaseAgent {
               },
             };
 
+            // Push commits to remote before adding retry comment
+            logger.info('Pushing commits before retry comment', { branch: branchName });
+            const retryPushResult = await pushChanges(branchName, workflowRepoPath);
+            if (!retryPushResult.success) {
+              logger.warn('Failed to push commits before retry', {
+                branch: branchName,
+                error: retryPushResult.error
+              });
+            }
+
             // Add orchestrator comment explaining retry decision
             const retryTrend = previousIssueCount
               ? (currentIssueCount > previousIssueCount ? '📈 WORSENING' : '📉 IMPROVING')
@@ -789,6 +799,18 @@ export class Orchestrator extends BaseAgent {
           artifacts: result.artifacts?.map((a: any) => a.filePath || a.type) || [],
           duration,
         });
+
+        // Push commits to remote before adding GitHub comments
+        // This ensures the commits exist on GitHub when we try to comment on them
+        logger.info('Pushing stage commits to remote', { branch: branchName, stage: agentType });
+        const stagePushResult = await pushChanges(branchName, workflowRepoPath);
+        if (!stagePushResult.success) {
+          logger.warn('Failed to push stage commits', {
+            branch: branchName,
+            stage: agentType,
+            error: stagePushResult.error
+          });
+        }
 
         // Add orchestrator comment explaining stage completion and next steps
         const nextStep = i + 1 < plan.steps.length ? plan.steps[i + 1] : 'Workflow completion';
