@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { workflowsAPI } from '../services/api';
+import { workflowsAPI, modulesAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import {
   Plus,
@@ -180,15 +180,35 @@ export default function Workflows() {
 
 function CreateWorkflowModal({ onClose, onSuccess }: any) {
   const [workflowType, setWorkflowType] = useState('feature');
+  const [targetModule, setTargetModule] = useState('AIDeveloper');
   const [taskDescription, setTaskDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [modules, setModules] = useState<string[]>(['AIDeveloper']);
+  const [loadingModules, setLoadingModules] = useState(true);
+
+  useEffect(() => {
+    loadModules();
+  }, []);
+
+  const loadModules = async () => {
+    try {
+      const { data } = await modulesAPI.list();
+      const moduleNames = data.modules.map((m: any) => m.name);
+      setModules(['AIDeveloper', ...moduleNames]);
+    } catch (error) {
+      console.error('Failed to load modules:', error);
+      toast.error('Failed to load modules');
+    } finally {
+      setLoadingModules(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
 
     try {
-      await workflowsAPI.create({ workflowType, taskDescription });
+      await workflowsAPI.create({ workflowType, targetModule, taskDescription });
       toast.success('Workflow created successfully');
       onSuccess();
       onClose();
@@ -222,6 +242,26 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
               <option value="documentation">Documentation</option>
               <option value="review">Review</option>
             </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Target Module
+            </label>
+            <select
+              value={targetModule}
+              onChange={(e) => setTargetModule(e.target.value)}
+              disabled={loadingModules}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+            >
+              {modules.map((module) => (
+                <option key={module} value={module}>
+                  {module}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Agents will only be allowed to edit files in this module
+            </p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

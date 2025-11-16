@@ -430,7 +430,7 @@ router.get('/errors', async (req: Request, res: Response) => {
  */
 router.post('/workflows/manual', async (req: Request, res: Response) => {
   try {
-    const { workflowType, taskDescription } = req.body;
+    const { workflowType, targetModule, taskDescription } = req.body;
 
     if (!workflowType || !taskDescription) {
       return res.status(400).json({
@@ -438,11 +438,17 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       });
     }
 
+    if (!targetModule) {
+      return res.status(400).json({
+        error: 'targetModule is required',
+      });
+    }
+
     // Forward to webhook handler
     const response = await fetch('http://localhost:3000/webhooks/manual', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflowType, taskDescription }),
+      body: JSON.stringify({ workflowType, targetModule, taskDescription }),
     });
 
     const data = await response.json();

@@ -32,7 +32,7 @@ export const workflowsAPI = {
   list: (params?: { limit?: number; offset?: number; status?: string }) =>
     api.get('/workflows', { params }),
   get: (id: number) => api.get(`/workflows/${id}`),
-  create: (data: { workflowType: string; taskDescription: string }) =>
+  create: (data: { workflowType: string; targetModule: string; taskDescription: string }) =>
     api.post('/workflows/manual', data),
   cancel: (id: number) => api.delete(`/workflows/${id}`),
   getLogs: (id: number, agentExecutionId?: number) =>

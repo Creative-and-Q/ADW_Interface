@@ -214,6 +214,7 @@ function parseGitLabEvent(payload: any): {
  */
 function parseCustomEvent(payload: any): {
   workflowType: WorkflowType;
+  targetModule: string;
   taskDescription: string;
   webhookPayload: WebhookPayload;
 } {
@@ -221,10 +222,12 @@ function parseCustomEvent(payload: any): {
 
   return {
     workflowType: payload.workflowType as WorkflowType || WorkflowType.FEATURE,
+    targetModule: payload.targetModule || 'AIDeveloper',
     taskDescription: payload.taskDescription || 'Manual workflow execution',
     webhookPayload: {
       source: source as 'custom' | 'manual',
       repository: payload.repository,
+      targetModule: payload.targetModule || 'AIDeveloper',
       customData: payload,
     },
   };
@@ -242,6 +245,7 @@ export async function handleWebhook(
 
     // Parse webhook based on source
     let workflowType: WorkflowType;
+    let targetModule: string = 'AIDeveloper';
     let taskDescription: string;
     let webhookPayload: WebhookPayload;
 
@@ -258,11 +262,12 @@ export async function handleWebhook(
     } else {
       const parsed = parseCustomEvent(payload);
       workflowType = parsed.workflowType;
+      targetModule = parsed.targetModule;
       taskDescription = parsed.taskDescription;
       webhookPayload = parsed.webhookPayload;
     }
 
-    logger.info(`Workflow type determined: ${workflowType}`);
+    logger.info(`Workflow type determined: ${workflowType}, target module: ${targetModule}`);
 
     // Log webhook to database
     const webhookLogId = await logWebhook(
@@ -272,7 +277,7 @@ export async function handleWebhook(
     );
 
     // Create workflow record
-    const workflowId = await createWorkflow(workflowType, webhookPayload);
+    const workflowId = await createWorkflow(workflowType, webhookPayload, targetModule);
 
     logger.info(`Workflow created: ${workflowId}`);
 
@@ -284,6 +289,7 @@ export async function handleWebhook(
     await enqueueWorkflow(workflowId, {
       workflowId,
       workflowType,
+      targetModule,
       taskDescription,
       webhookPayload,
     });
