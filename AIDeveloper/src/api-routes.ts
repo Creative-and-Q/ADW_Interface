@@ -939,4 +939,90 @@ router.post('/system/rebuild-restart', async (_req: Request, res: Response): Pro
   }
 });
 
+// ============================================================================
+// Auto-Fix Routes
+// ============================================================================
+
+/**
+ * GET /api/auto-fix/config
+ * Get current auto-fix configuration
+ */
+router.get('/auto-fix/config', async (_req: Request, res: Response) => {
+  try {
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const config = autoFixManager.getConfig();
+    return res.json({ config });
+  } catch (error) {
+    logger.error('Failed to get auto-fix config', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-fix config' });
+  }
+});
+
+/**
+ * PUT /api/auto-fix/config
+ * Update auto-fix configuration
+ */
+router.put('/auto-fix/config', async (req: Request, res: Response) => {
+  try {
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    await autoFixManager.updateConfig(req.body);
+    const config = autoFixManager.getConfig();
+    logger.info('Auto-fix config updated', config);
+    return res.json({ config, success: true });
+  } catch (error) {
+    logger.error('Failed to update auto-fix config', error as Error);
+    return res.status(500).json({ error: 'Failed to update auto-fix config' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/auto-fix
+ * Manually trigger auto-fix for a specific workflow
+ */
+router.post('/workflows/:id/auto-fix', async (req: Request, res: Response) => {
+  try {
+    const workflowId = parseInt(req.params.id);
+
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+
+    logger.info('Manual auto-fix triggered', { workflowId });
+
+    // Trigger auto-fix asynchronously
+    autoFixManager.triggerAutoFix(workflowId).catch((error) => {
+      logger.error('Auto-fix failed', error as Error, { workflowId });
+    });
+
+    return res.json({
+      success: true,
+      message: 'Auto-fix triggered',
+      workflowId,
+    });
+  } catch (error) {
+    logger.error('Failed to trigger auto-fix', error as Error);
+    return res.status(500).json({ error: 'Failed to trigger auto-fix' });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/auto-fix/status
+ * Get auto-fix status for a workflow
+ */
+router.get('/workflows/:id/auto-fix/status', async (req: Request, res: Response) => {
+  try {
+    const workflowId = parseInt(req.params.id);
+
+    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const attempts = autoFixManager.getAutoFixStatus(workflowId);
+
+    return res.json({
+      workflowId,
+      attempts,
+      totalAttempts: attempts.length,
+    });
+  } catch (error) {
+    logger.error('Failed to get auto-fix status', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-fix status' });
+  }
+});
+
 export default router;

@@ -236,9 +236,24 @@ function getChunkDependencies(_files: PlanFile[], plan: Plan): string[] {
   // Extract unique dependencies from the original plan that might be relevant
   const deps = plan.dependencies || [];
 
+  // Handle both array and object formats for dependencies
+  let depsArray: string[] = [];
+  if (Array.isArray(deps)) {
+    depsArray = deps;
+  } else if (typeof deps === 'object') {
+    // Extract all dependency strings from object structure
+    // Handle plan structure like: { internal: [...], external: [...], order: [...] }
+    const depsObj = deps as any;
+    depsArray = [
+      ...(depsObj.internal || []),
+      ...(depsObj.external || []),
+      ...(depsObj.order || []),
+    ];
+  }
+
   // Add a note that this is a chunked implementation
   return [
-    ...deps,
+    ...depsArray,
     'Previous chunks of this implementation (if any)',
   ];
 }

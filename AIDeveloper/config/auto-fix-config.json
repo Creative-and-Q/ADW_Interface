@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "autoTriggerOnFailure": false,
+  "maxAutoFixes": 3,
+  "cooldownMinutes": 30,
+  "excludedErrorTypes": [
+    "infrastructure_error",
+    "api_error"
+  ],
+  "includedWorkflowTypes": [
+    "feature",
+    "bugfix",
+    "refactor"
+  ],
+  "notifyOnAutoFix": true
+}
