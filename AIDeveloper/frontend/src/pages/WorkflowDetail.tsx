@@ -5,14 +5,21 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft,
-  FileText,
-  Code,
-  TestTube,
-  Search,
-  FileCode,
   Play,
+  BarChart3,
+  List,
+  GitBranch,
+  Calendar,
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
+import { getStatusColor } from '../utils/workflowChartUtils';
+import WorkflowDetailMetrics from '../components/WorkflowDetailMetrics';
+import AgentExecutionChart from '../components/AgentExecutionChart';
+import AgentExecutionTimeline from '../components/AgentExecutionTimeline';
+import ArtifactsList from '../components/ArtifactsList';
+import ExecutionLogs from '../components/ExecutionLogs';
+
+type ViewMode = 'overview' | 'timeline';
 
 export default function WorkflowDetail() {
   const { id } = useParams();
@@ -22,10 +29,10 @@ export default function WorkflowDetail() {
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [selectedAgentLogs, setSelectedAgentLogs] = useState<number | null>(null);
-  const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [resumeState, setResumeState] = useState<any>(null);
   const [isResuming, setIsResuming] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const { socket, subscribe } = useWebSocket();
 
   useEffect(() => {
@@ -107,31 +114,24 @@ export default function WorkflowDetail() {
     }
   };
 
-  const getAgentIcon = (type: string) => {
-    const icons: any = {
-      plan: FileText,
-      code: Code,
-      test: TestTube,
-      review: Search,
-      document: FileCode,
-    };
-    return icons[type] || FileText;
-  };
-
-  const getStatusColor = (status: string) => {
-    const colors: any = {
-      completed: 'text-green-600 bg-green-100',
-      failed: 'text-red-600 bg-red-100',
-      running: 'text-blue-600 bg-blue-100',
-      pending: 'text-gray-600 bg-gray-100',
-    };
-    return colors[status] || colors.pending;
+  // Get task description from payload
+  const getTaskDescription = () => {
+    if (!workflow) return '';
+    try {
+      if (typeof workflow.payload === 'string') {
+        const parsed = JSON.parse(workflow.payload);
+        return parsed.customData?.taskDescription || parsed.description || workflow.task_description || '';
+      }
+      return workflow.payload?.customData?.taskDescription || workflow.payload?.description || workflow.task_description || '';
+    } catch {
+      return workflow.task_description || '';
+    }
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
@@ -140,51 +140,85 @@ export default function WorkflowDetail() {
     return <div className="text-center text-gray-500">Workflow not found</div>;
   }
 
+  const statusColor = getStatusColor(workflow.status);
+  const taskDescription = getTaskDescription();
+
   return (
-    <div className="space-y-6 px-4 sm:px-0">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => navigate('/workflows')}
-            className="btn btn-secondary flex items-center"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back
-          </button>
-          <div>
-            <h2 className="text-3xl font-bold text-gray-900">
-              Workflow #{workflow.id}
-            </h2>
-            <p className="mt-1 text-sm text-gray-500 capitalize">
-              {workflow.workflow_type} • Created{' '}
-              {format(new Date(workflow.created_at), 'MMM d, yyyy HH:mm')}
-            </p>
+      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-start space-x-4">
+            <button
+              onClick={() => navigate('/workflows')}
+              className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 transition-colors"
+            >
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Back
+            </button>
+            <div>
+              <div className="flex items-center space-x-3 mb-2">
+                <h1 className="text-3xl font-bold text-gray-900">
+                  Workflow #{workflow.id}
+                </h1>
+                <span
+                  className="px-3 py-1.5 text-sm font-semibold rounded-full"
+                  style={{
+                    backgroundColor: statusColor + '20',
+                    color: statusColor,
+                  }}
+                >
+                  {workflow.status.charAt(0).toUpperCase() + workflow.status.slice(1)}
+                </span>
+              </div>
+              <div className="flex items-center space-x-4 text-sm text-gray-600">
+                <span className="flex items-center space-x-1 capitalize">
+                  <GitBranch className="h-4 w-4" />
+                  <span>{workflow.workflow_type}</span>
+                </span>
+                <span className="text-gray-400">•</span>
+                <span className="flex items-center space-x-1">
+                  <Calendar className="h-4 w-4" />
+                  <span>Created {format(parseISO(workflow.created_at), 'MMM d, yyyy HH:mm')}</span>
+                </span>
+                {workflow.branch_name && (
+                  <>
+                    <span className="text-gray-400">•</span>
+                    <code className="text-xs bg-gray-100 px-2 py-1 rounded font-mono">
+                      {workflow.branch_name}
+                    </code>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center space-x-3">
           {resumeState?.canResume && (
             <button
               onClick={handleResume}
               disabled={isResuming}
-              className="btn btn-primary flex items-center"
+              className="flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="Resume workflow from last checkpoint"
             >
               <Play className="h-4 w-4 mr-2" />
               {isResuming ? 'Resuming...' : 'Resume Workflow'}
             </button>
           )}
-          <div className={`px-4 py-2 rounded-full font-medium ${getStatusColor(workflow.status)}`}>
-            {workflow.status}
-          </div>
         </div>
+
+        {/* Task Description */}
+        {taskDescription && (
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">Task Description</h3>
+            <p className="text-gray-900 leading-relaxed">{taskDescription}</p>
+          </div>
+        )}
       </div>
 
       {/* Resume Info Banner */}
       {resumeState?.canResume && (
-        <div className="card bg-blue-50 border-blue-200">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
           <div className="flex items-start space-x-3">
-            <Play className="h-5 w-5 text-blue-600 mt-0.5" />
+            <Play className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
             <div>
               <h3 className="text-lg font-semibold text-blue-900 mb-2">
                 Workflow Can Be Resumed
@@ -203,216 +237,103 @@ export default function WorkflowDetail() {
         </div>
       )}
 
-      {/* Task Description */}
-      {workflow.task_description && (
-        <div className="card">
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">Task Description</h3>
-          <p className="text-gray-700">{workflow.task_description}</p>
-        </div>
-      )}
+      {/* Metrics */}
+      <WorkflowDetailMetrics
+        workflow={workflow}
+        agents={agents}
+        artifacts={artifacts}
+        logs={logs}
+      />
 
-      {/* Agents Timeline */}
-      <div className="card">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Agent Executions</h3>
-        <div className="space-y-4">
-          {agents.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">No agent executions yet</p>
-          ) : (
-            agents.map((agent, index) => {
-              const Icon = getAgentIcon(agent.agent_type);
-              return (
-                <div key={agent.id} className="flex items-start space-x-4">
-                  <div className="flex flex-col items-center">
-                    <div
-                      className={`p-3 rounded-full ${
-                        agent.status === 'completed'
-                          ? 'bg-green-100'
-                          : agent.status === 'failed'
-                          ? 'bg-red-100'
-                          : agent.status === 'running'
-                          ? 'bg-blue-100'
-                          : 'bg-gray-100'
-                      }`}
-                    >
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    {index < agents.length - 1 && (
-                      <div className="w-0.5 h-12 bg-gray-200 my-2"></div>
-                    )}
-                  </div>
-                  <div className="flex-1 bg-gray-50 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="font-semibold text-gray-900 capitalize">
-                          {agent.agent_type} Agent
-                        </h4>
-                        <p className="text-sm text-gray-500">
-                          {agent.started_at
-                            ? `Started ${format(new Date(agent.started_at), 'HH:mm:ss')}`
-                            : 'Not yet started'
-                          }
-                        </p>
-                      </div>
-                      <span className={`badge ${getStatusColor(agent.status)}`}>
-                        {agent.status}
-                      </span>
-                    </div>
-                    {agent.summary && (
-                      <p className="mt-2 text-sm text-gray-700">{agent.summary}</p>
-                    )}
-                    {agent.error && (
-                      <p className="mt-2 text-sm text-red-600">Error: {agent.error}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+      {/* View Mode Tabs */}
+      <div className="flex items-center border-b border-gray-200 bg-white rounded-t-lg">
+        <button
+          onClick={() => setViewMode('overview')}
+          className={`flex items-center px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            viewMode === 'overview'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          <BarChart3 className="h-4 w-4 mr-2" />
+          Overview & Analytics
+        </button>
+        <button
+          onClick={() => setViewMode('timeline')}
+          className={`flex items-center px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            viewMode === 'timeline'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          <List className="h-4 w-4 mr-2" />
+          Detailed Timeline
+        </button>
       </div>
 
-      {/* Artifacts */}
-      {artifacts.length > 0 && (
-        <div className="card">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            Generated Artifacts ({artifacts.length})
-          </h3>
-          <div className="space-y-2">
-            {artifacts.map((artifact) => (
-              <div
-                key={artifact.id}
-                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                <div className="flex items-center space-x-3">
-                  <FileText className="h-5 w-5 text-gray-400" />
-                  <div>
-                    <p className="font-medium text-gray-900 capitalize">
-                      {artifact.artifact_type}
-                    </p>
-                    {artifact.file_path && (
-                      <p className="text-sm text-gray-500">{artifact.file_path}</p>
-                    )}
-                  </div>
+      {/* Content based on view mode */}
+      {viewMode === 'overview' ? (
+        <div className="space-y-6">
+          {/* Agent Execution Chart */}
+          <AgentExecutionChart agents={agents} />
+
+          {/* Artifacts and Logs in grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <ArtifactsList artifacts={artifacts} />
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <span className="text-sm font-medium text-gray-700">Total Agents</span>
+                  <span className="text-lg font-bold text-gray-900">{agents.length}</span>
                 </div>
-                <span className="text-sm text-gray-500">
-                  {format(new Date(artifact.created_at), 'HH:mm:ss')}
-                </span>
+                <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                  <span className="text-sm font-medium text-green-700">Completed</span>
+                  <span className="text-lg font-bold text-green-900">
+                    {agents.filter(a => a.status === 'completed').length}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
+                  <span className="text-sm font-medium text-red-700">Failed</span>
+                  <span className="text-lg font-bold text-red-900">
+                    {agents.filter(a => a.status === 'failed').length}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                  <span className="text-sm font-medium text-blue-700">Running</span>
+                  <span className="text-lg font-bold text-blue-900">
+                    {agents.filter(a => a.status === 'running').length}
+                  </span>
+                </div>
               </div>
-            ))}
+            </div>
           </div>
+
+          {/* Execution Logs */}
+          <ExecutionLogs
+            logs={logs}
+            agents={agents}
+            selectedAgentLogs={selectedAgentLogs}
+            onLoadLogs={loadLogs}
+          />
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Detailed Timeline */}
+          <AgentExecutionTimeline agents={agents} />
+
+          {/* Artifacts */}
+          <ArtifactsList artifacts={artifacts} />
+
+          {/* Execution Logs */}
+          <ExecutionLogs
+            logs={logs}
+            agents={agents}
+            selectedAgentLogs={selectedAgentLogs}
+            onLoadLogs={loadLogs}
+          />
         </div>
       )}
-
-      {/* Execution Logs */}
-      <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">
-            Execution Logs ({logs.length})
-          </h3>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => loadLogs()}
-              className={`px-3 py-1 text-sm rounded-md ${
-                selectedAgentLogs === null
-                  ? 'bg-primary-600 text-white'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-              }`}
-            >
-              All Logs
-            </button>
-            {agents.map((agent) => (
-              <button
-                key={agent.id}
-                onClick={() => loadLogs(agent.id)}
-                className={`px-3 py-1 text-sm rounded-md capitalize ${
-                  selectedAgentLogs === agent.id
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                {agent.agent_type}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {logs.length === 0 ? (
-          <p className="text-gray-500 text-center py-8">No logs available yet</p>
-        ) : (
-          <div className="space-y-2 max-h-[600px] overflow-y-auto">
-            {logs.map((log) => {
-              const isExpanded = expandedLogs.has(log.id);
-              const levelColors = {
-                debug: 'bg-gray-100 text-gray-700 border-gray-300',
-                info: 'bg-blue-50 text-blue-700 border-blue-200',
-                warn: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-                error: 'bg-red-50 text-red-700 border-red-200',
-              };
-
-              return (
-                <div
-                  key={log.id}
-                  className={`border-l-4 p-3 rounded-r-lg ${
-                    levelColors[log.level as keyof typeof levelColors]
-                  }`}
-                >
-                  <div
-                    className="flex items-start justify-between cursor-pointer"
-                    onClick={() => {
-                      const newExpanded = new Set(expandedLogs);
-                      if (isExpanded) {
-                        newExpanded.delete(log.id);
-                      } else {
-                        newExpanded.add(log.id);
-                      }
-                      setExpandedLogs(newExpanded);
-                    }}
-                  >
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2 mb-1">
-                        <span className="text-xs font-semibold uppercase">
-                          {log.level}
-                        </span>
-                        <span className="text-xs text-gray-500">•</span>
-                        <span className="text-xs text-gray-600">
-                          {log.eventType}
-                        </span>
-                        <span className="text-xs text-gray-500">•</span>
-                        <span className="text-xs text-gray-500">
-                          {format(new Date(log.timestamp), 'HH:mm:ss.SSS')}
-                        </span>
-                      </div>
-                      <p className="text-sm font-medium">{log.message}</p>
-                    </div>
-                    <button className="text-gray-400 hover:text-gray-600">
-                      {isExpanded ? '▼' : '▶'}
-                    </button>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="mt-3 space-y-2">
-                      {log.data && (
-                        <div className="bg-white bg-opacity-50 p-2 rounded text-xs font-mono overflow-x-auto">
-                          <pre className="whitespace-pre-wrap">
-                            {JSON.stringify(log.data, null, 2)}
-                          </pre>
-                        </div>
-                      )}
-                      {log.stackTrace && (
-                        <div className="bg-red-100 p-2 rounded text-xs font-mono overflow-x-auto">
-                          <pre className="whitespace-pre-wrap text-red-800">
-                            {log.stackTrace}
-                          </pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
