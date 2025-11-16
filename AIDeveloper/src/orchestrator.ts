@@ -1056,6 +1056,7 @@ export class Orchestrator extends BaseAgent {
     const input: AgentInput = {
       workflowId,
       branchName,
+      targetModule: workflow.target_module || workflow.payload?.targetModule || 'AIDeveloper',
       taskDescription,
       webhookPayload: workflow.payload,
       workingDir, // Pass isolated repository directory to agents
@@ -1143,6 +1144,7 @@ export class Orchestrator extends BaseAgent {
         const chunkInput: AgentInput = {
           workflowId,
           branchName,
+          targetModule: workflow.target_module || workflow.payload?.targetModule || 'AIDeveloper',
           taskDescription: chunk.summary,
           webhookPayload: workflow.payload,
           workingDir,

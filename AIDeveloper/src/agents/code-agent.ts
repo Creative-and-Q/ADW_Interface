@@ -107,7 +107,7 @@ export class CodeAgent extends BaseAgent {
       await createBranch(branchName, workingDir);
 
       // Write files to workflow directory (not root)
-      const filesWritten = await this.writeFiles(codeResult.files, workingDir);
+      const filesWritten = await this.writeFiles(codeResult.files, workingDir, input.targetModule);
 
       // Commit changes in workflow directory (not root)
       logger.info('Committing changes in workflow directory');
@@ -208,7 +208,15 @@ export class CodeAgent extends BaseAgent {
       });
     }
 
+    const targetModule = input.targetModule || 'AIDeveloper';
+    const modulePathPrefix = targetModule === 'AIDeveloper'
+      ? 'AIDeveloper/'
+      : `modules/${targetModule}/`;
+
     let prompt = `
+**TARGET MODULE: ${targetModule}**
+**CRITICAL**: You can ONLY edit files within: ${modulePathPrefix}
+
 Task: ${taskDescription}
 
 Implementation Plan:
@@ -402,13 +410,28 @@ Respond with JSON following this format:
       action: 'create' | 'modify' | 'delete';
       content: string;
     }>,
-    workingDir: string
+    workingDir: string,
+    targetModule?: string
   ): Promise<string[]> {
     const written: string[] = [];
 
     for (const file of files) {
       // Normalize file path - strip duplicate AIDeveloper/ prefix if present
       let normalizedPath = file.path;
+
+      // Validate module restriction
+      if (targetModule) {
+        const allowedPath = targetModule === 'AIDeveloper'
+          ? 'AIDeveloper/'
+          : `modules/${targetModule}/`;
+
+        // Check if file path is within allowed module
+        if (!normalizedPath.startsWith(allowedPath)) {
+          const error = `Module restriction violation: Attempted to write file '${normalizedPath}' outside allowed module '${targetModule}'. Only files in '${allowedPath}' are permitted.`;
+          logger.error(error);
+          throw new Error(error);
+        }
+      }
 
       // If working dir ends with /AIDeveloper and file path starts with AIDeveloper/
       // strip the duplicate prefix to prevent AIDeveloper/AIDeveloper/ nesting
