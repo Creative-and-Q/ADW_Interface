@@ -198,10 +198,13 @@ export class AutoFixManager {
         'auto-fix-workflow.ts'
       );
 
+      // Auto-fix script needs to run from project root (parent of AIDeveloper)
+      const projectRoot = path.join(process.cwd(), '..');
+
       const autoFixProcess = spawn('tsx', [scriptPath, workflowId.toString(), attemptId], {
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        cwd: process.cwd(),
+        cwd: projectRoot,
       });
 
       // Store PID
