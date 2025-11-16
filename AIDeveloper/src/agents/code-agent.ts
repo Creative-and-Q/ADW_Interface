@@ -45,10 +45,19 @@ export class CodeAgent extends BaseAgent {
    */
   async execute(input: AgentInput): Promise<AgentOutput> {
     try {
-      logger.info('Code agent starting', { workflowId: input.workflowId });
+      const isChunked = input.context?.isChunked || false;
+      const chunkInfo = isChunked
+        ? `chunk ${(input.context?.chunkIndex || 0) + 1}/${input.context?.totalChunks || 1}`
+        : '';
 
-      // Load plan from artifacts
-      const plan = await this.loadPlanArtifact(input.workflowId);
+      logger.info('Code agent starting', {
+        workflowId: input.workflowId,
+        isChunked,
+        chunkInfo,
+      });
+
+      // Load plan from artifacts or use chunk from context
+      const plan = input.context?.planChunk || await this.loadPlanArtifact(input.workflowId);
 
       // Load system prompt
       const systemPrompt = await this.loadSystemPrompt('code-agent-prompt.md');
@@ -186,6 +195,19 @@ export class CodeAgent extends BaseAgent {
 
     const reviewFeedback = input.context?.reviewFeedback;
 
+    // Check if the plan might be too large for one response
+    const totalFiles = (plan.files?.create?.length || 0) +
+                      (plan.files?.modify?.length || 0) +
+                      (plan.files?.delete?.length || 0);
+
+    if (totalFiles > 6) {
+      logger.warn('Large file set detected - may hit token limits', {
+        totalFiles,
+        createCount: plan.files?.create?.length || 0,
+        modifyCount: plan.files?.modify?.length || 0,
+      });
+    }
+
     let prompt = `
 Task: ${taskDescription}
 
@@ -243,7 +265,20 @@ Please generate the code to implement this plan. Follow these guidelines:
 4. Include proper error handling
 5. Add JSDoc comments for public APIs
 6. Ensure security best practices (no SQL injection, XSS, etc.)
-7. CRITICAL: Follow ALL security requirements from your system prompt
+7. CRITICAL: Follow ALL security requirements from your system prompt`;
+
+    // Add special instructions for large file sets
+    if (totalFiles > 6) {
+      prompt += `
+
+IMPORTANT: This is a large implementation (${totalFiles} files). To avoid hitting token limits:
+- Be concise but complete in your implementations
+- Focus on correctness over extensive comments
+- Ensure all files are included in your response
+- If approaching token limits, prioritize core functionality`;
+    }
+
+    prompt += `
 
 Respond with JSON following this format:
 {
@@ -276,10 +311,24 @@ Respond with JSON following this format:
       // Try to extract JSON from response
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
+        logger.error('No JSON found in AI response', undefined, {
+          responseLength: response.length,
+          responsePreview: response.substring(0, 500),
+        });
         throw new Error('No JSON found in AI response');
       }
 
-      const result = JSON.parse(jsonMatch[0]);
+      const jsonString = jsonMatch[0];
+
+      // Check if response might be truncated
+      if (response.length >= 47000) { // Near the typical truncation point
+        logger.warn('Response is very long and may be truncated', {
+          responseLength: response.length,
+          jsonLength: jsonString.length,
+        });
+      }
+
+      const result = JSON.parse(jsonString);
 
       // Ensure all required fields exist
       return {
@@ -294,19 +343,26 @@ Respond with JSON following this format:
         notes: result.notes || [],
       };
     } catch (error) {
-      logger.error('Failed to parse code response', error as Error);
+      const errorMessage = (error as Error).message;
+      const isJSONError = errorMessage.includes('JSON') || errorMessage.includes('parse');
 
-      // Return a basic fallback
-      return {
-        success: false,
-        branch: 'feature/fallback',
-        files: [],
-        commit: {
-          message: 'feat: fallback implementation',
-          description: 'AI response parsing failed, using fallback',
-        },
-        notes: ['Failed to parse AI response'],
-      };
+      logger.error('Failed to parse code response', error as Error, {
+        responseLength: response.length,
+        errorType: isJSONError ? 'JSON_PARSE_ERROR' : 'UNKNOWN',
+        responseEnd: response.substring(Math.max(0, response.length - 200)),
+      });
+
+      // For JSON parse errors (likely truncation), provide more context
+      if (isJSONError) {
+        throw new Error(
+          `Failed to parse AI response as JSON (response length: ${response.length} chars). ` +
+          `This usually means the response was truncated due to token limits. ` +
+          `Error: ${errorMessage}`
+        );
+      }
+
+      // For other errors, re-throw
+      throw error;
     }
   }
 
