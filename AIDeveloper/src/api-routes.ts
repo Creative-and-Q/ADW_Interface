@@ -895,6 +895,63 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
 // ============================================================================
 
 /**
+ * GET /api/system/branches
+ * List all available git branches
+ */
+router.get('/system/branches', async (_req: Request, res: Response) => {
+  try {
+    const { listBranches, getCurrentBranch } = await import('./utils/branch-switcher.js');
+    const branches = await listBranches();
+    const currentBranch = await getCurrentBranch();
+
+    return res.json({
+      success: true,
+      branches,
+      currentBranch,
+    });
+  } catch (error) {
+    logger.error('Failed to list branches', error as Error);
+    return res.status(500).json({ error: 'Failed to list branches' });
+  }
+});
+
+/**
+ * POST /api/system/switch-branch
+ * Switch git branch with automatic rebuild and failsafe rollback
+ */
+router.post('/system/switch-branch', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { branch } = req.body;
+
+    if (!branch || typeof branch !== 'string') {
+      res.status(400).json({ error: 'Branch name is required' });
+      return;
+    }
+
+    logger.info('Branch switch requested', { branch });
+
+    const { switchBranchWithRebuild } = await import('./utils/branch-switcher.js');
+    const result = await switchBranchWithRebuild(branch);
+
+    if (result.success) {
+      res.json(result);
+      return;
+    } else {
+      res.status(400).json(result);
+      return;
+    }
+  } catch (error) {
+    logger.error('Failed to switch branch', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to switch branch',
+      message: (error as Error).message,
+    });
+    return;
+  }
+});
+
+/**
  * POST /api/system/rebuild-restart
  * Rebuild and restart the entire AIDeveloper application
  */

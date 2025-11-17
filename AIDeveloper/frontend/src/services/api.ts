@@ -89,6 +89,15 @@ export const deploymentsAPI = {
 
 export const systemAPI = {
   rebuildRestart: () => api.post('/system/rebuild-restart'),
+  listBranches: () => api.get<{ success: boolean; branches: string[]; currentBranch: string }>('/system/branches'),
+  switchBranch: (branch: string) => api.post<{
+    success: boolean;
+    message: string;
+    previousBranch?: string;
+    newBranch?: string;
+    buildLogs?: string;
+    error?: string;
+  }>('/system/switch-branch', { branch }),
 };
 
 // ============================================================================

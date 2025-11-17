@@ -15,6 +15,7 @@ import ChainBuilder from './pages/ChainBuilder';
 import ExecutionsList from './pages/ExecutionsList';
 import ExecutionDetail from './pages/ExecutionDetail';
 import AIAgent from './pages/AIAgent';
+import BranchSwitcher from './components/BranchSwitcher';
 
 function Navigation() {
   const location = useLocation();
@@ -60,7 +61,8 @@ function Navigation() {
               })}
             </div>
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center space-x-4">
+            <BranchSwitcher />
             <div className="flex items-center space-x-2 text-primary-100 text-sm">
               <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
               <span>Live</span>
