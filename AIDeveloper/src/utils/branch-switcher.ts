@@ -19,24 +19,77 @@ export interface BranchSwitchResult {
   error?: string;
 }
 
+export interface BranchInfo {
+  name: string;
+  isLocal: boolean;
+  isRemote: boolean;
+  isCurrent: boolean;
+}
+
 /**
- * Get list of all git branches
+ * Get list of all git branches (local and remote)
  */
-export async function listBranches(): Promise<string[]> {
+export async function listBranches(): Promise<BranchInfo[]> {
   try {
+    // Fetch latest from remote
+    await execAsync('git fetch --all', {
+      cwd: process.cwd(),
+    });
+
+    // Get all branches (local and remote)
     const { stdout } = await execAsync('git branch -a', {
       cwd: process.cwd(),
     });
 
-    // Parse branch list, remove current branch marker and remote info
-    const branches = stdout
-      .split('\n')
-      .map(b => b.trim())
-      .filter(b => b && !b.startsWith('remotes/'))
-      .map(b => b.replace(/^\*\s+/, ''))
-      .filter(b => b && !b.includes('->'));
+    const branchMap = new Map<string, BranchInfo>();
 
-    return branches;
+    // Parse branch list
+    stdout.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.includes('->')) return;
+
+      const isCurrent = trimmed.startsWith('*');
+      const branchLine = trimmed.replace(/^\*\s+/, '');
+
+      if (branchLine.startsWith('remotes/origin/')) {
+        // Remote branch
+        const name = branchLine.replace('remotes/origin/', '');
+        const existing = branchMap.get(name);
+        if (existing) {
+          existing.isRemote = true;
+        } else {
+          branchMap.set(name, {
+            name,
+            isLocal: false,
+            isRemote: true,
+            isCurrent: false,
+          });
+        }
+      } else {
+        // Local branch
+        const existing = branchMap.get(branchLine);
+        if (existing) {
+          existing.isLocal = true;
+          if (isCurrent) existing.isCurrent = true;
+        } else {
+          branchMap.set(branchLine, {
+            name: branchLine,
+            isLocal: true,
+            isRemote: false,
+            isCurrent,
+          });
+        }
+      }
+    });
+
+    return Array.from(branchMap.values()).sort((a, b) => {
+      // Sort: current first, then local, then remote-only, alphabetically within each group
+      if (a.isCurrent) return -1;
+      if (b.isCurrent) return 1;
+      if (a.isLocal && !b.isLocal) return -1;
+      if (!a.isLocal && b.isLocal) return 1;
+      return a.name.localeCompare(b.name);
+    });
   } catch (error) {
     logger.error('Failed to list branches', error as Error);
     return [];
@@ -117,15 +170,25 @@ async function buildFrontend(): Promise<{ success: boolean; logs: string }> {
 }
 
 /**
- * Switch git branch
+ * Switch git branch (handles both local and remote branches)
  */
-async function checkoutBranch(branch: string): Promise<void> {
+async function checkoutBranch(branch: string, isRemoteOnly: boolean = false): Promise<void> {
   try {
-    logger.info(`Checking out branch: ${branch}`);
-    await execAsync(`git checkout ${branch}`, {
-      cwd: process.cwd(),
-    });
-    logger.info(`Successfully checked out branch: ${branch}`);
+    logger.info(`Checking out branch: ${branch}`, { isRemoteOnly });
+
+    if (isRemoteOnly) {
+      // Create local branch tracking remote
+      await execAsync(`git checkout -b ${branch} origin/${branch}`, {
+        cwd: process.cwd(),
+      });
+      logger.info(`Successfully created and checked out branch tracking origin/${branch}`);
+    } else {
+      // Checkout existing local branch
+      await execAsync(`git checkout ${branch}`, {
+        cwd: process.cwd(),
+      });
+      logger.info(`Successfully checked out local branch: ${branch}`);
+    }
   } catch (error) {
     logger.error(`Failed to checkout branch: ${branch}`, error as Error);
     throw error;
@@ -180,18 +243,23 @@ export async function switchBranchWithRebuild(
       };
     }
 
-    // Step 3: Switch to target branch
+    // Step 3: Determine if branch is remote-only
+    const branches = await listBranches();
+    const branchInfo = branches.find(b => b.name === targetBranch);
+    const isRemoteOnly = branchInfo && !branchInfo.isLocal && branchInfo.isRemote;
+
+    // Step 4: Switch to target branch
     try {
-      await checkoutBranch(targetBranch);
+      await checkoutBranch(targetBranch, isRemoteOnly);
     } catch (error) {
       return {
         success: false,
-        message: `Failed to checkout branch '${targetBranch}'. Branch may not exist.`,
+        message: `Failed to checkout branch '${targetBranch}'. ${isRemoteOnly ? 'Remote branch may not exist.' : 'Branch may not exist.'}`,
         error: (error as Error).message,
       };
     }
 
-    // Step 4: Build backend
+    // Step 5: Build backend
     const backendBuild = await buildBackend();
     buildLogs += `\n=== Backend Build ===\n${backendBuild.logs}\n`;
 
@@ -217,7 +285,7 @@ export async function switchBranchWithRebuild(
       };
     }
 
-    // Step 5: Build frontend
+    // Step 6: Build frontend
     const frontendBuild = await buildFrontend();
     buildLogs += `\n=== Frontend Build ===\n${frontendBuild.logs}\n`;
 

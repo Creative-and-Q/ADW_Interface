@@ -896,7 +896,7 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
 
 /**
  * GET /api/system/branches
- * List all available git branches
+ * List all available git branches (local and remote)
  */
 router.get('/system/branches', async (_req: Request, res: Response) => {
   try {
@@ -906,7 +906,7 @@ router.get('/system/branches', async (_req: Request, res: Response) => {
 
     return res.json({
       success: true,
-      branches,
+      branches, // Now returns BranchInfo[] with isLocal, isRemote, isCurrent flags
       currentBranch,
     });
   } catch (error) {

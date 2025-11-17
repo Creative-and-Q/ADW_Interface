@@ -87,9 +87,16 @@ export const deploymentsAPI = {
   get: (operationId: string) => api.get(`/deployments/${operationId}`),
 };
 
+export interface BranchInfo {
+  name: string;
+  isLocal: boolean;
+  isRemote: boolean;
+  isCurrent: boolean;
+}
+
 export const systemAPI = {
   rebuildRestart: () => api.post('/system/rebuild-restart'),
-  listBranches: () => api.get<{ success: boolean; branches: string[]; currentBranch: string }>('/system/branches'),
+  listBranches: () => api.get<{ success: boolean; branches: BranchInfo[]; currentBranch: string }>('/system/branches'),
   switchBranch: (branch: string) => api.post<{
     success: boolean;
     message: string;

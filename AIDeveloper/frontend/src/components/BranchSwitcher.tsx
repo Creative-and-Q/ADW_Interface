@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { systemAPI } from '../services/api';
+import { systemAPI, BranchInfo } from '../services/api';
 import toast from 'react-hot-toast';
-import { GitBranch, RefreshCw, AlertTriangle, CheckCircle } from 'lucide-react';
+import { GitBranch, RefreshCw, AlertTriangle, CheckCircle, Cloud } from 'lucide-react';
 
 export default function BranchSwitcher() {
-  const [branches, setBranches] = useState<string[]>([]);
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [currentBranch, setCurrentBranch] = useState<string>('');
   const [selectedBranch, setSelectedBranch] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -152,14 +152,49 @@ export default function BranchSwitcher() {
                 value={selectedBranch}
                 onChange={(e) => setSelectedBranch(e.target.value)}
                 disabled={switching}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 font-mono text-sm"
               >
                 {branches.map((branch) => (
-                  <option key={branch} value={branch}>
-                    {branch} {branch === currentBranch ? '(current)' : ''}
+                  <option key={branch.name} value={branch.name}>
+                    {branch.name}
+                    {branch.isCurrent ? ' ★ current' : ''}
+                    {branch.isLocal && branch.isRemote ? ' (local + remote)' : branch.isRemote ? ' (remote only)' : ' (local only)'}
                   </option>
                 ))}
               </select>
+
+              {/* Selected branch info */}
+              {selectedBranch && (
+                <div className="mt-2 flex items-center space-x-2 text-xs text-gray-600">
+                  {(() => {
+                    const info = branches.find(b => b.name === selectedBranch);
+                    if (!info) return null;
+
+                    return (
+                      <>
+                        {!info.isLocal && info.isRemote && (
+                          <div className="flex items-center text-blue-600">
+                            <Cloud className="h-3 w-3 mr-1" />
+                            <span>Remote branch - will be checked out locally</span>
+                          </div>
+                        )}
+                        {info.isLocal && !info.isRemote && (
+                          <div className="flex items-center text-amber-600">
+                            <AlertTriangle className="h-3 w-3 mr-1" />
+                            <span>Local only - not pushed to remote</span>
+                          </div>
+                        )}
+                        {info.isLocal && info.isRemote && (
+                          <div className="flex items-center text-green-600">
+                            <CheckCircle className="h-3 w-3 mr-1" />
+                            <span>Synchronized with remote</span>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end space-x-3">
