@@ -1,0 +1,66 @@
+{
+  "name": "CharacterController",
+  "version": "2.0.0",
+  "description": "AI-powered character sheet management system with MySQL storage, user management, and name conflict detection",
+  "category": "Controllers",
+  "project": "Ex Nihilo",
+  "tags": ["character-sheet", "ai", "openrouter", "rpg", "dnd"],
+  "env": [
+    {
+      "key": "PORT",
+      "description": "Port number for the CharacterController server",
+      "required": false,
+      "defaultValue": "3031",
+      "type": "number"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key for AI-powered character generation",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "OPENROUTER_MODEL",
+      "description": "OpenRouter model to use for character generation",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_HOST",
+      "description": "MySQL database host",
+      "required": false,
+      "defaultValue": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PORT",
+      "description": "MySQL database port",
+      "required": false,
+      "defaultValue": "3306",
+      "type": "number"
+    },
+    {
+      "key": "MYSQL_USER",
+      "description": "MySQL database user",
+      "required": false,
+      "defaultValue": "root",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PASSWORD",
+      "description": "MySQL database password",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "MYSQL_DATABASE",
+      "description": "MySQL database name",
+      "required": false,
+      "defaultValue": "character_controller",
+      "type": "string"
+    }
+  ]
+}

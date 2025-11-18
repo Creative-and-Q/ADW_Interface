@@ -1,0 +1,52 @@
+{
+  "name": "ItemController",
+  "version": "1.0.0",
+  "description": "Item and inventory management system with template-based items and world position tracking",
+  "category": "Controllers",
+  "project": "Ex Nihilo",
+  "tags": ["items", "inventory", "loot", "equipment", "rpg", "game-items"],
+  "env": [
+    {
+      "key": "PORT",
+      "description": "Port number for the ItemController server",
+      "required": false,
+      "defaultValue": "3034",
+      "type": "number"
+    },
+    {
+      "key": "MYSQL_HOST",
+      "description": "MySQL database host",
+      "required": false,
+      "defaultValue": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PORT",
+      "description": "MySQL database port",
+      "required": false,
+      "defaultValue": "3306",
+      "type": "number"
+    },
+    {
+      "key": "MYSQL_USER",
+      "description": "MySQL database user",
+      "required": false,
+      "defaultValue": "root",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PASSWORD",
+      "description": "MySQL database password",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "MYSQL_DATABASE",
+      "description": "MySQL database name",
+      "required": false,
+      "defaultValue": "item_controller",
+      "type": "string"
+    }
+  ]
+}

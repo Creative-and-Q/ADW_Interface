@@ -1,0 +1,31 @@
+{
+  "name": "IntentInterpreter",
+  "version": "1.0.0",
+  "description": "AI-powered chat message intent classifier using OpenRouter Grok 4 Fast",
+  "category": "AI Services",
+  "project": "Ex Nihilo",
+  "tags": ["intent-classification", "ai", "openrouter", "grok", "nlp"],
+  "env": [
+    {
+      "key": "PORT",
+      "description": "Port number for the IntentInterpreter server",
+      "required": false,
+      "defaultValue": "3032",
+      "type": "number"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key for AI-powered intent classification",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "OPENROUTER_MODEL",
+      "description": "OpenRouter model to use for intent classification",
+      "required": false,
+      "defaultValue": "x-ai/grok-2-1212",
+      "type": "string"
+    }
+  ]
+}

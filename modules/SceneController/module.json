@@ -1,0 +1,66 @@
+{
+  "name": "SceneController",
+  "version": "1.0.0",
+  "description": "AI-powered scene and location management system with coordinate grid and position tracking",
+  "category": "Controllers",
+  "project": "Ex Nihilo",
+  "tags": ["scene", "location", "coordinates", "poi", "position-tracking", "ai", "openrouter", "rpg"],
+  "env": [
+    {
+      "key": "PORT",
+      "description": "Port number for the SceneController server",
+      "required": false,
+      "defaultValue": "3033",
+      "type": "number"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key for AI-powered scene generation",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "OPENROUTER_MODEL",
+      "description": "OpenRouter model to use for scene generation",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_HOST",
+      "description": "MySQL database host",
+      "required": false,
+      "defaultValue": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PORT",
+      "description": "MySQL database port",
+      "required": false,
+      "defaultValue": "3306",
+      "type": "number"
+    },
+    {
+      "key": "MYSQL_USER",
+      "description": "MySQL database user",
+      "required": false,
+      "defaultValue": "root",
+      "type": "string"
+    },
+    {
+      "key": "MYSQL_PASSWORD",
+      "description": "MySQL database password",
+      "required": true,
+      "type": "string",
+      "secret": true
+    },
+    {
+      "key": "MYSQL_DATABASE",
+      "description": "MySQL database name",
+      "required": false,
+      "defaultValue": "scene_controller",
+      "type": "string"
+    }
+  ]
+}
