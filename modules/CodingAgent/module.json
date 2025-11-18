@@ -1,0 +1,24 @@
+{
+  "name": "CodingAgent",
+  "version": "1.0.0",
+  "description": "Code implementation agent with read and write access",
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "CODING"
+    },
+    {
+      "key": "OPENROUTER_MODEL_CODING",
+      "description": "OpenRouter model for coding",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string",
+      "modulePrefix": "CODING"
+    }
+  ]
+}
+

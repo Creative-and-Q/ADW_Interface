@@ -1,0 +1,87 @@
+{
+  "name": "AIController",
+  "version": "1.0.0",
+  "description": "Meta-controller for chaining requests across Ex Nihilo modules",
+  "pages": [
+    {
+      "path": "/chains",
+      "component": "Chains",
+      "label": "AI Chains",
+      "icon": "Link2",
+      "navOrder": 3
+    },
+    {
+      "path": "/chains/list",
+      "component": "ChainsList",
+      "label": "Chain List",
+      "navOrder": 0
+    },
+    {
+      "path": "/chains/builder/:id?",
+      "component": "ChainBuilder",
+      "label": "Chain Builder",
+      "navOrder": 0
+    },
+    {
+      "path": "/chains/executions",
+      "component": "ExecutionsList",
+      "label": "Executions",
+      "navOrder": 0
+    },
+    {
+      "path": "/chains/executions/:id",
+      "component": "ExecutionDetail",
+      "label": "Execution Detail",
+      "navOrder": 0
+    },
+    {
+      "path": "/chains/ai-agent",
+      "component": "AIAgent",
+      "label": "AI Agent",
+      "navOrder": 0
+    }
+  ],
+  "dashboardWidgets": [
+    {
+      "id": "aicontroller-stats",
+      "component": "AIControllerStatsWidget",
+      "position": "middle",
+      "width": "half",
+      "order": 1,
+      "title": "AI Chains Statistics"
+    }
+  ],
+  "envVars": [
+    {
+      "key": "PORT",
+      "description": "Port number for AIController server",
+      "required": false,
+      "defaultValue": "3035",
+      "type": "number",
+      "modulePrefix": "AICONTROLLER"
+    },
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key for AI agent",
+      "required": false,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "AICONTROLLER"
+    },
+    {
+      "key": "AI_AGENT_MODEL",
+      "description": "AI model to use for AI agent",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string",
+      "modulePrefix": "AICONTROLLER"
+    }
+  ],
+  "apiRoutes": [
+    {
+      "prefix": "/aicontroller",
+      "port": 3035
+    }
+  ]
+}
+

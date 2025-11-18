@@ -1,0 +1,33 @@
+{
+  "name": "WorkflowOrchestrator",
+  "version": "1.0.0",
+  "description": "Orchestrates workflow execution and manages agent sequence",
+  "pages": [
+    {
+      "path": "/workflows",
+      "component": "Workflows",
+      "label": "Workflows",
+      "icon": "Activity",
+      "navOrder": 2
+    }
+  ],
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "WORKFLOW"
+    },
+    {
+      "key": "OPENROUTER_MODEL_ORCHESTRATOR",
+      "description": "OpenRouter model for orchestration",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string",
+      "modulePrefix": "WORKFLOW"
+    }
+  ]
+}
+

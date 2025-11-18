@@ -1,0 +1,24 @@
+{
+  "name": "CodePlannerAgent",
+  "version": "1.0.0",
+  "description": "Code planning agent with read-only access to analyze codebase and create implementation plans",
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "CODEPLANNER"
+    },
+    {
+      "key": "OPENROUTER_MODEL_PLANNING",
+      "description": "OpenRouter model for planning",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string",
+      "modulePrefix": "CODEPLANNER"
+    }
+  ]
+}
+

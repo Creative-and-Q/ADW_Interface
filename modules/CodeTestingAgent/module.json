@@ -1,0 +1,24 @@
+{
+  "name": "CodeTestingAgent",
+  "version": "1.0.0",
+  "description": "Code testing agent with read, write, and execute access to create and run tests",
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "CODETESTING"
+    },
+    {
+      "key": "OPENROUTER_MODEL_TESTING",
+      "description": "OpenRouter model for testing",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-haiku",
+      "type": "string",
+      "modulePrefix": "CODETESTING"
+    }
+  ]
+}
+

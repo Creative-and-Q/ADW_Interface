@@ -1,0 +1,24 @@
+{
+  "name": "CodeDocumentationAgent",
+  "version": "1.0.0",
+  "description": "Code documentation agent with read and write access to generate documentation",
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "CODEDOCS"
+    },
+    {
+      "key": "OPENROUTER_MODEL_DOCS",
+      "description": "OpenRouter model for documentation",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-haiku",
+      "type": "string",
+      "modulePrefix": "CODEDOCS"
+    }
+  ]
+}
+

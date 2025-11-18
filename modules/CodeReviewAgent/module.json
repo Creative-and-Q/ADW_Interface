@@ -1,0 +1,24 @@
+{
+  "name": "CodeReviewAgent",
+  "version": "1.0.0",
+  "description": "Code review agent with read-only access to analyze code and generate review reports",
+  "envVars": [
+    {
+      "key": "OPENROUTER_API_KEY",
+      "description": "OpenRouter API key",
+      "required": true,
+      "type": "string",
+      "secret": true,
+      "modulePrefix": "CODEREVIEW"
+    },
+    {
+      "key": "OPENROUTER_MODEL_REVIEW",
+      "description": "OpenRouter model for code review",
+      "required": false,
+      "defaultValue": "anthropic/claude-3.5-sonnet",
+      "type": "string",
+      "modulePrefix": "CODEREVIEW"
+    }
+  ]
+}
+
