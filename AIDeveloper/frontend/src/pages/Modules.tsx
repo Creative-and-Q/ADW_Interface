@@ -27,6 +27,9 @@ interface Module {
   path: string;
   description?: string;
   version?: string;
+  category?: string;
+  project?: string;
+  tags?: string[];
   hasGit: boolean;
   gitStatus?: {
     branch: string;
@@ -47,6 +50,8 @@ interface Module {
   prompts?: string[];
 }
 
+type GroupByMode = 'none' | 'category' | 'project';
+
 export default function Modules() {
   const navigate = useNavigate();
   const [modules, setModules] = useState<Module[]>([]);
@@ -60,6 +65,8 @@ export default function Modules() {
   const [aiControllerAvailable, setAIControllerAvailable] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
   const [autoLoadSettings, setAutoLoadSettings] = useState<{ [key: string]: boolean }>({});
+  const [groupBy, setGroupBy] = useState<GroupByMode>('category');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadModules();
@@ -347,6 +354,60 @@ export default function Modules() {
     }
   };
 
+  const toggleGroupCollapse = (groupName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  };
+
+  const groupModules = (): Record<string, Module[]> => {
+    if (groupBy === 'none') {
+      return { 'All Modules': modules };
+    }
+
+    const grouped: Record<string, Module[]> = {};
+
+    modules.forEach((module) => {
+      let groupKey: string;
+
+      if (groupBy === 'category') {
+        groupKey = module.category || 'Uncategorized';
+      } else if (groupBy === 'project') {
+        groupKey = module.project || 'No Project';
+      } else {
+        groupKey = 'All Modules';
+      }
+
+      if (!grouped[groupKey]) {
+        grouped[groupKey] = [];
+      }
+      grouped[groupKey].push(module);
+    });
+
+    // Sort groups alphabetically, but keep "Uncategorized"/"No Project" at the end
+    const sortedGroups: Record<string, Module[]> = {};
+    const regularGroups = Object.keys(grouped)
+      .filter((key) => key !== 'Uncategorized' && key !== 'No Project')
+      .sort();
+    const specialGroups = Object.keys(grouped)
+      .filter((key) => key === 'Uncategorized' || key === 'No Project')
+      .sort();
+
+    [...regularGroups, ...specialGroups].forEach((key) => {
+      sortedGroups[key] = grouped[key];
+    });
+
+    return sortedGroups;
+  };
+
+  const groupedModules = groupModules();
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -366,6 +427,19 @@ export default function Modules() {
           </p>
         </div>
         <div className="flex items-center space-x-4">
+          {/* Group By Selector */}
+          <div className="flex items-center space-x-2">
+            <span className="text-sm text-gray-600">Group by:</span>
+            <select
+              value={groupBy}
+              onChange={(e) => setGroupBy(e.target.value as GroupByMode)}
+              className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              <option value="none">None</option>
+              <option value="category">Category</option>
+              <option value="project">Project</option>
+            </select>
+          </div>
           <div className="bg-primary-100 text-primary-700 px-4 py-2 rounded-full text-sm font-medium">
             {modules.length} Module{modules.length !== 1 ? 's' : ''}
           </div>
@@ -451,74 +525,101 @@ export default function Modules() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Modules List */}
           <div className="lg:col-span-1 space-y-4">
-            {modules.map((module) => (
-              <div
-                key={module.name}
-                className={`card cursor-pointer transition-all ${
-                  selectedModule?.name === module.name
-                    ? 'ring-2 ring-primary-500 shadow-lg'
-                    : 'hover:shadow-md'
-                }`}
-                onClick={() => loadModuleDetails(module)}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-primary-100 rounded-lg">
-                      <Package className="h-6 w-6 text-primary-600" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">
-                        {module.name}
-                      </h3>
-                      {module.version && (
-                        <p className="text-xs text-gray-500">v{module.version}</p>
-                      )}
-                    </div>
-                  </div>
-                  {module.gitStatus?.isDirty && (
-                    <span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full text-xs font-medium">
-                      Modified
-                    </span>
+            {Object.entries(groupedModules).map(([groupName, groupModules]) => {
+              const isCollapsed = collapsedGroups.has(groupName);
+              const showGroupHeader = groupBy !== 'none';
+
+              return (
+                <div key={groupName} className="space-y-2">
+                  {/* Group Header */}
+                  {showGroupHeader && (
+                    <button
+                      onClick={() => toggleGroupCollapse(groupName)}
+                      className="w-full flex items-center justify-between px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <Package className="h-4 w-4 text-gray-600" />
+                        <span className="font-semibold text-gray-900">{groupName}</span>
+                        <span className="text-sm text-gray-500">({groupModules.length})</span>
+                      </div>
+                      <div className="text-gray-600">
+                        {isCollapsed ? '▶' : '▼'}
+                      </div>
+                    </button>
                   )}
-                </div>
 
-                {module.description && (
-                  <p className="text-sm text-gray-600 mb-3">{module.description}</p>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4 text-xs text-gray-500">
-                    {module.hasGit && (
-                      <div className="flex items-center space-x-1">
-                        <GitBranch className="h-3 w-3" />
-                        <span>{module.gitStatus?.branch || 'main'}</span>
+                  {/* Group Modules */}
+                  {!isCollapsed && groupModules.map((module) => (
+                    <div
+                      key={module.name}
+                      className={`card cursor-pointer transition-all ${
+                        selectedModule?.name === module.name
+                          ? 'ring-2 ring-primary-500 shadow-lg'
+                          : 'hover:shadow-md'
+                      } ${showGroupHeader ? 'ml-2' : ''}`}
+                      onClick={() => loadModuleDetails(module)}
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className="p-2 bg-primary-100 rounded-lg">
+                            <Package className="h-6 w-6 text-primary-600" />
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-gray-900">
+                              {module.name}
+                            </h3>
+                            {module.version && (
+                              <p className="text-xs text-gray-500">v{module.version}</p>
+                            )}
+                          </div>
+                        </div>
+                        {module.gitStatus?.isDirty && (
+                          <span className="bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full text-xs font-medium">
+                            Modified
+                          </span>
+                        )}
                       </div>
-                    )}
-                    {module.hasPrompts && (
-                      <div className="flex items-center space-x-1">
-                        <FileText className="h-3 w-3" />
-                        <span>{module.prompts?.length || 0} prompts</span>
-                      </div>
-                    )}
-                  </div>
 
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleAutoLoad(module.name);
-                    }}
-                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                      autoLoadSettings[module.name]
-                        ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                    title={`Click to ${autoLoadSettings[module.name] ? 'disable' : 'enable'} auto-load`}
-                  >
-                    {autoLoadSettings[module.name] ? '✓ Auto-load' : 'Auto-load'}
-                  </button>
+                      {module.description && (
+                        <p className="text-sm text-gray-600 mb-3">{module.description}</p>
+                      )}
+
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4 text-xs text-gray-500">
+                          {module.hasGit && (
+                            <div className="flex items-center space-x-1">
+                              <GitBranch className="h-3 w-3" />
+                              <span>{module.gitStatus?.branch || 'main'}</span>
+                            </div>
+                          )}
+                          {module.hasPrompts && (
+                            <div className="flex items-center space-x-1">
+                              <FileText className="h-3 w-3" />
+                              <span>{module.prompts?.length || 0} prompts</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleAutoLoad(module.name);
+                          }}
+                          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                            autoLoadSettings[module.name]
+                              ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                          title={`Click to ${autoLoadSettings[module.name] ? 'disable' : 'enable'} auto-load`}
+                        >
+                          {autoLoadSettings[module.name] ? '✓ Auto-load' : 'Auto-load'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Module Details */}

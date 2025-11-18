@@ -10,16 +10,21 @@ export interface ModuleManifest {
   name: string;
   version: string;
   description: string;
-  
+
+  // Module organization
+  category?: string;     // e.g., "AI Agents", "Game Systems", "Controllers"
+  project?: string;      // e.g., "Ex Nihilo", "AIDeveloper"
+  tags?: string[];       // Additional searchable tags
+
   // Frontend pages this module provides
   pages?: ModulePage[];
-  
+
   // Dashboard widgets
   dashboardWidgets?: DashboardWidget[];
-  
+
   // Environment variables this module uses
   envVars?: EnvVarDefinition[];
-  
+
   // API proxy routes (like current /aicontroller/*)
   apiRoutes?: ApiRoute[];
 }
