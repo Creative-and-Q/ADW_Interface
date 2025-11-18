@@ -51,7 +51,7 @@ workflowQueue.process(async (job: Job<AgentInput>) => {
     const orchestrator = new Orchestrator();
 
     // Execute workflow
-    const result = await orchestrator.run(job.data);
+    const result = await orchestrator.execute(job.data);
 
     logger.info(`Workflow ${workflowId} completed successfully`, {
       workflowId,

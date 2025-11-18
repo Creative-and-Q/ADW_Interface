@@ -10,14 +10,12 @@ import {
   readModuleManifest,
   getAllModulePages,
   getAllDashboardWidgets,
-  getAllModuleEnvVars,
   getAllApiRoutes,
   getModulePluginMetadata,
 } from '../utils/module-manager.js';
 import {
   getAllModuleEnvVarValues,
   getModuleEnvVars,
-  updateEnvVar,
   updateEnvVars,
   validateRequiredEnvVars,
 } from '../utils/module-env-manager.js';
@@ -28,7 +26,7 @@ const router = Router();
  * GET /api/modules/manifests
  * Get all module manifests
  */
-router.get('/manifests', async (req: Request, res: Response): Promise<void> => {
+router.get('/manifests', async (_req: Request, res: Response): Promise<void> => {
   try {
     const manifests = await getAllModuleManifests();
     const result: Record<string, any> = {};
@@ -87,7 +85,7 @@ router.get('/:name/manifest', async (req: Request, res: Response): Promise<void>
  * GET /api/modules/pages
  * Get all module-provided pages
  */
-router.get('/pages', async (req: Request, res: Response): Promise<void> => {
+router.get('/pages', async (_req: Request, res: Response): Promise<void> => {
   try {
     const pages = await getAllModulePages();
     res.json({
@@ -108,7 +106,7 @@ router.get('/pages', async (req: Request, res: Response): Promise<void> => {
  * GET /api/modules/dashboard-widgets
  * Get all dashboard widgets
  */
-router.get('/dashboard-widgets', async (req: Request, res: Response): Promise<void> => {
+router.get('/dashboard-widgets', async (_req: Request, res: Response): Promise<void> => {
   try {
     const widgets = await getAllDashboardWidgets();
     res.json({
@@ -129,7 +127,7 @@ router.get('/dashboard-widgets', async (req: Request, res: Response): Promise<vo
  * GET /api/modules/env
  * Get all module environment variables with current values
  */
-router.get('/env', async (req: Request, res: Response): Promise<void> => {
+router.get('/env', async (_req: Request, res: Response): Promise<void> => {
   try {
     const envVars = await getAllModuleEnvVarValues();
     res.json({
@@ -205,7 +203,7 @@ router.put('/env', async (req: Request, res: Response): Promise<void> => {
  * GET /api/modules/env/validate
  * Validate required environment variables
  */
-router.get('/env/validate', async (req: Request, res: Response): Promise<void> => {
+router.get('/env/validate', async (_req: Request, res: Response): Promise<void> => {
   try {
     const issues = await validateRequiredEnvVars();
     res.json({
@@ -227,7 +225,7 @@ router.get('/env/validate', async (req: Request, res: Response): Promise<void> =
  * GET /api/modules/api-routes
  * Get all API routes from modules
  */
-router.get('/api-routes', async (req: Request, res: Response): Promise<void> => {
+router.get('/api-routes', async (_req: Request, res: Response): Promise<void> => {
   try {
     const routes = await getAllApiRoutes();
     res.json({

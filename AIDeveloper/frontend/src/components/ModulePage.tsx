@@ -72,3 +72,4 @@ export default function ModulePage({ module, componentName, componentPath }: Mod
     </Suspense>
   );
 }
+

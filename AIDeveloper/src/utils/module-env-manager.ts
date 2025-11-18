@@ -8,7 +8,6 @@ import path from 'path';
 import { config } from '../config.js';
 import * as logger from './logger.js';
 import { getAllModuleEnvVars, readModuleManifest } from './module-manager.js';
-import dotenv from 'dotenv';
 
 /**
  * Environment variable value with metadata
@@ -225,4 +224,5 @@ export async function validateRequiredEnvVars(): Promise<Array<{
   
   return issues;
 }
+
 

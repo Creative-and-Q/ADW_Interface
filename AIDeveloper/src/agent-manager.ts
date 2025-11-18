@@ -198,7 +198,7 @@ export class AgentManager extends EventEmitter {
     handle: AgentHandle
   ): Promise<AgentOutput> {
     // Instantiate the appropriate agent based on type
-    let agent: { execute: (input: AgentInput) => Promise<AgentOutput> };
+    let agent: { execute: (input: any) => Promise<any> };
 
     switch (handle.type) {
       case AgentType.PLAN:
@@ -236,7 +236,16 @@ export class AgentManager extends EventEmitter {
 
     const output = await agent.execute(handle.input);
 
-    return output;
+    // Adapt the output to include workflowId in artifacts
+    const adaptedOutput: AgentOutput = {
+      ...output,
+      artifacts: output.artifacts.map((artifact: any) => ({
+        ...artifact,
+        workflowId: handle.workflowId,
+      })),
+    };
+
+    return adaptedOutput;
   }
 
   /**

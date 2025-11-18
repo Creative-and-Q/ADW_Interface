@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { modulesAPI, moduleProcessesAPI, chainsAPI } from '../services/api';
+import { modulesAPI, moduleProcessesAPI, chainsAPI, modulePluginsAPI } from '../services/api';
 import type { ModuleProcessInfo } from '../types/aicontroller';
 import ModuleLogViewer from '../components/ModuleLogViewer';
 import ImportModuleModal from '../components/ImportModuleModal';
@@ -21,6 +21,9 @@ import {
   Loader2,
   RefreshCw,
   Plus,
+  Eye,
+  EyeOff,
+  Save,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -70,6 +73,10 @@ export default function Modules() {
   const [groupBy, setGroupBy] = useState<GroupByMode>('category');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showImportModal, setShowImportModal] = useState(false);
+  const [moduleEnvVars, setModuleEnvVars] = useState<any[]>([]);
+  const [envVarChanges, setEnvVarChanges] = useState<Record<string, string>>({});
+  const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set());
+  const [savingEnvVars, setSavingEnvVars] = useState(false);
 
   useEffect(() => {
     loadModules();
@@ -134,6 +141,9 @@ export default function Modules() {
         ...prev,
         [module.name]: statusRes.data.isRunning,
       }));
+
+      // Load environment variables for the module
+      await loadModuleEnvVars(module.name);
     } catch (error) {
       console.error('Failed to load module details:', error);
     }
@@ -355,6 +365,65 @@ export default function Modules() {
       console.error('Failed to toggle auto-load:', error);
       toast.error(`Failed to update auto-load: ${error.response?.data?.error || error.message}`);
     }
+  };
+
+  const loadModuleEnvVars = async (moduleName: string) => {
+    try {
+      const response = await modulePluginsAPI.getModuleEnvVars(moduleName);
+      if (response.data.success) {
+        setModuleEnvVars(response.data.data);
+        setEnvVarChanges({});
+        setVisibleSecrets(new Set());
+      }
+    } catch (error: any) {
+      console.error('Failed to load env vars:', error);
+      setModuleEnvVars([]);
+    }
+  };
+
+  const handleEnvVarChange = (key: string, value: string) => {
+    setEnvVarChanges((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleSecretVisibility = (key: string) => {
+    setVisibleSecrets((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const handleSaveEnvVars = async () => {
+    if (Object.keys(envVarChanges).length === 0) {
+      toast.error('No changes to save');
+      return;
+    }
+
+    setSavingEnvVars(true);
+    try {
+      await modulePluginsAPI.updateEnvVars(envVarChanges);
+      toast.success('Environment variables updated successfully');
+      setEnvVarChanges({});
+      if (selectedModule) {
+        await loadModuleEnvVars(selectedModule.name);
+      }
+    } catch (error: any) {
+      console.error('Failed to save env vars:', error);
+      toast.error(error.response?.data?.message || 'Failed to save environment variables');
+    } finally {
+      setSavingEnvVars(false);
+    }
+  };
+
+  const getEnvVarValue = (envVar: any): string => {
+    if (envVar.key in envVarChanges) {
+      return envVarChanges[envVar.key];
+    }
+    return envVar.value || envVar.definition.defaultValue || '';
   };
 
   const toggleGroupCollapse = (groupName: string) => {
@@ -986,6 +1055,95 @@ export default function Modules() {
                   moduleName={selectedModule.name}
                   isRunning={moduleStatus[selectedModule.name] || false}
                 />
+
+                {/* Environment Variables */}
+                {moduleEnvVars.length > 0 && (
+                  <div className="card">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        Environment Variables
+                      </h3>
+                      {Object.keys(envVarChanges).length > 0 && (
+                        <button
+                          onClick={handleSaveEnvVars}
+                          disabled={savingEnvVars}
+                          className="btn btn-primary flex items-center space-x-2"
+                        >
+                          {savingEnvVars ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Save className="h-4 w-4" />
+                          )}
+                          <span>{savingEnvVars ? 'Saving...' : 'Save Changes'}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-4">
+                      {moduleEnvVars.map((envVar) => {
+                        const value = getEnvVarValue(envVar);
+                        const isSecret = envVar.definition.secret;
+                        const isVisible = !isSecret || visibleSecrets.has(envVar.key);
+                        const isRequired = envVar.definition.required;
+                        const hasChanged = envVar.key in envVarChanges;
+
+                        return (
+                          <div key={envVar.key} className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <label
+                                htmlFor={envVar.key}
+                                className="block text-sm font-medium text-gray-700"
+                              >
+                                {envVar.key}
+                                {isRequired && (
+                                  <span className="text-red-500 ml-1" title="Required">
+                                    *
+                                  </span>
+                                )}
+                                {hasChanged && (
+                                  <span className="text-blue-500 ml-2 text-xs">
+                                    (modified)
+                                  </span>
+                                )}
+                              </label>
+                              {isSecret && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSecretVisibility(envVar.key)}
+                                  className="text-gray-500 hover:text-gray-700"
+                                >
+                                  {isVisible ? (
+                                    <EyeOff className="h-4 w-4" />
+                                  ) : (
+                                    <Eye className="h-4 w-4" />
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              id={envVar.key}
+                              type={isSecret && !isVisible ? 'password' : 'text'}
+                              value={value}
+                              onChange={(e) => handleEnvVarChange(envVar.key, e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:border-primary-500 focus:ring-primary-500"
+                              placeholder={envVar.definition.defaultValue || 'Enter value...'}
+                            />
+                            {envVar.definition.description && (
+                              <p className="text-xs text-gray-500">
+                                {envVar.definition.description}
+                              </p>
+                            )}
+                            {envVar.definition.defaultValue && !value && (
+                              <p className="text-xs text-gray-400">
+                                Default: <code>{envVar.definition.defaultValue}</code>
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Quick Actions */}
                 <div className="card">

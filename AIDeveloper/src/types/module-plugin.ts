@@ -87,3 +87,4 @@ export interface ModulePluginMetadata {
   frontendPath?: string;
 }
 
+

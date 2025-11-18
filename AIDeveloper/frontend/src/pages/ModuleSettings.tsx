@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { modulePluginsAPI } from '../services/api';
-import { Eye, EyeOff, Save, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Eye, EyeOff, Save, AlertCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
 interface EnvVarValue {
@@ -252,4 +252,5 @@ export default function ModuleSettings() {
     </div>
   );
 }
+
 

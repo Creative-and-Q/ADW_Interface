@@ -292,6 +292,7 @@ export async function handleWebhook(
       targetModule,
       taskDescription,
       webhookPayload,
+      workingDir: '', // Will be set by orchestrator when workflow is executed
     });
 
     logger.info(`Workflow ${workflowId} enqueued for processing`);

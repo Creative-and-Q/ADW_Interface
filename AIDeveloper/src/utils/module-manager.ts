@@ -708,7 +708,7 @@ export async function importModule(options: ImportModuleOptions): Promise<{
         await fs.access(packagePath);
 
         logger.info(`Installing dependencies for ${moduleName}...`);
-        const { stdout, stderr } = await execAsync('npm install', {
+        const { stderr } = await execAsync('npm install', {
           cwd: modulePath,
         });
 
