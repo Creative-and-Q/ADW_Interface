@@ -132,7 +132,7 @@ export interface AgentInput {
   previousArtifacts?: Artifact[];
   retryReason?: string;
   metadata?: Record<string, any>;
-  workingDir?: string; // Isolated workflow repository directory
+  workingDir: string; // Required - Isolated workflow repository directory
   context?: {
     previousResults?: AgentOutput[];
     reviewFeedback?: any;

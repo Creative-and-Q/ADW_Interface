@@ -12,13 +12,14 @@ import {
   createAgentExecution,
   updateAgentExecution,
 } from './workflow-state.js';
-import { PlanAgent } from './agents/plan-agent.js';
-import { CodeAgent } from './agents/code-agent.js';
+// Import new standalone agent modules
+import CodePlannerAgent from '../../modules/CodePlannerAgent/index.js';
+import CodingAgent from '../../modules/CodingAgent/index.js';
+import CodeReviewAgent from '../../modules/CodeReviewAgent/index.js';
+import CodeTestingAgent from '../../modules/CodeTestingAgent/index.js';
+import CodeDocumentationAgent from '../../modules/CodeDocumentationAgent/index.js';
+// Keep SecurityLintAgent for now (not replaced yet)
 import { SecurityLintAgent } from './agents/security-lint-agent.js';
-import { TestAgent } from './agents/test-agent.js';
-import { ReviewAgent } from './agents/review-agent.js';
-import { DocumentAgent } from './agents/document-agent.js';
-import { BaseAgent } from './agents/base-agent.js';
 
 /**
  * Agent handle for tracking running agents
@@ -191,32 +192,32 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Execute real agent implementation (Phase 4)
+   * Execute real agent implementation
    */
   private async executeRealAgent(
     handle: AgentHandle
   ): Promise<AgentOutput> {
     // Instantiate the appropriate agent based on type
-    let agent: BaseAgent;
+    let agent: { execute: (input: AgentInput) => Promise<AgentOutput> };
 
     switch (handle.type) {
       case AgentType.PLAN:
-        agent = new PlanAgent();
+        agent = new CodePlannerAgent();
         break;
       case AgentType.CODE:
-        agent = new CodeAgent();
+        agent = new CodingAgent();
         break;
       case AgentType.SECURITY_LINT:
         agent = new SecurityLintAgent();
         break;
       case AgentType.TEST:
-        agent = new TestAgent();
+        agent = new CodeTestingAgent();
         break;
       case AgentType.REVIEW:
-        agent = new ReviewAgent();
+        agent = new CodeReviewAgent();
         break;
       case AgentType.DOCUMENT:
-        agent = new DocumentAgent();
+        agent = new CodeDocumentationAgent();
         break;
       default:
         throw new Error(`Unknown agent type: ${handle.type}`);
@@ -228,21 +229,10 @@ export class AgentManager extends EventEmitter {
       workflowId: handle.workflowId,
     });
 
-    // Set execution context on the agent (needed for saveArtifact, logging, etc.)
-    // @ts-ignore - accessing protected properties
-    agent.executionId = handle.executionId;
-    // @ts-ignore
-    agent.workflowId = handle.workflowId;
-    // @ts-ignore
-    agent.startTime = handle.startedAt.getTime();
-    // @ts-ignore - Create execution logger
-    const { createExecutionLogger } = await import('./utils/execution-logger.js');
-    // @ts-ignore
-    agent.executionLogger = createExecutionLogger(
-      handle.workflowId,
-      handle.executionId,
-      handle.type
-    );
+    // Ensure workingDir is provided (required by new agents)
+    if (!handle.input.workingDir) {
+      throw new Error(`workingDir is required for agent type ${handle.type}`);
+    }
 
     const output = await agent.execute(handle.input);
 

@@ -108,6 +108,45 @@ export const systemAPI = {
 };
 
 // ============================================================================
+// Module Plugin API
+// ============================================================================
+
+export interface ModulePage {
+  module: string;
+  page: {
+    path: string;
+    component: string;
+    label: string;
+    icon?: string;
+    navOrder?: number;
+  };
+}
+
+export interface DashboardWidget {
+  module: string;
+  widget: {
+    id: string;
+    component: string;
+    position: 'top' | 'middle' | 'bottom';
+    width: 'full' | 'half' | 'third';
+    order?: number;
+    title?: string;
+  };
+}
+
+export const modulePluginsAPI = {
+  getManifests: () => api.get<{ success: boolean; data: Record<string, any> }>('/modules/manifests'),
+  getManifest: (name: string) => api.get<{ success: boolean; data: any }>(`/modules/${name}/manifest`),
+  getPages: () => api.get<{ success: boolean; data: ModulePage[] }>('/modules/pages'),
+  getDashboardWidgets: () => api.get<{ success: boolean; data: DashboardWidget[] }>('/modules/dashboard-widgets'),
+  getEnvVars: () => api.get<{ success: boolean; data: Array<{ key: string; value: string | null; module: string; definition: any }> }>('/modules/env'),
+  getModuleEnvVars: (name: string) => api.get<{ success: boolean; data: Array<any> }>(`/modules/${name}/env`),
+  updateEnvVars: (updates: Record<string, string | null>) => api.put<{ success: boolean; message: string }>('/modules/env', updates),
+  validateEnvVars: () => api.get<{ success: boolean; data: Array<{ module: string; key: string; missing: boolean }>; valid: boolean }>('/modules/env/validate'),
+  getApiRoutes: () => api.get<{ success: boolean; data: Array<{ module: string; route: any }> }>('/modules/api-routes'),
+};
+
+// ============================================================================
 // AIController Chain Management API
 // ============================================================================
 

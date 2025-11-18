@@ -1,9 +1,15 @@
 /**
  * Orchestrator Agent
  * Main AI agent that coordinates workflow execution
+ * 
+ * NOTE: A new standalone WorkflowOrchestrator module is available at:
+ * modules/WorkflowOrchestrator/index.js
+ * This can eventually replace this class.
  */
 
 import { BaseAgent } from './agents/base-agent.js';
+// Import new standalone WorkflowOrchestrator (available for future use)
+// import WorkflowOrchestrator from '../../modules/WorkflowOrchestrator/index.js';
 import {
   AgentType,
   AgentInput,

@@ -9,6 +9,7 @@ import { config } from '../config.js';
 import * as logger from './logger.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import type { ModuleManifest, ModulePluginMetadata } from '../types/module-plugin.js';
 
 const execAsync = promisify(exec);
 
@@ -379,4 +380,179 @@ export async function getModuleStats(moduleName: string): Promise<{
       filesByType: {},
     };
   }
+}
+
+/**
+ * Read module manifest from module.json or aideveloper.json
+ */
+export async function readModuleManifest(moduleName: string): Promise<ModuleManifest | null> {
+  try {
+    const modulePath = path.join(getModulesPath(), moduleName);
+    
+    // Try module.json first, then aideveloper.json
+    const manifestPaths = [
+      path.join(modulePath, 'module.json'),
+      path.join(modulePath, 'aideveloper.json'),
+    ];
+
+    for (const manifestPath of manifestPaths) {
+      try {
+        const content = await fs.readFile(manifestPath, 'utf-8');
+        const manifest = JSON.parse(content) as ModuleManifest;
+        
+        // Validate required fields
+        if (!manifest.name || !manifest.version || !manifest.description) {
+          logger.warn(`Invalid manifest for ${moduleName}: missing required fields`);
+          return null;
+        }
+
+        return manifest;
+      } catch {
+        // File doesn't exist, try next
+        continue;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    logger.error(`Failed to read manifest for ${moduleName}`, error as Error);
+    return null;
+  }
+}
+
+/**
+ * Get module plugin metadata (includes manifest)
+ */
+export async function getModulePluginMetadata(moduleName: string): Promise<ModulePluginMetadata | null> {
+  try {
+    const module = await getModuleInfo(moduleName);
+    if (!module) {
+      return null;
+    }
+
+    const manifest = await readModuleManifest(moduleName);
+    
+    // Check for frontend directory
+    const frontendPath = path.join(module.path, 'frontend');
+    let hasFrontend = false;
+    try {
+      const stat = await fs.stat(frontendPath);
+      hasFrontend = stat.isDirectory();
+    } catch {
+      hasFrontend = false;
+    }
+
+    return {
+      name: module.name,
+      path: module.path,
+      manifest: manifest || undefined,
+      hasManifest: !!manifest,
+      hasFrontend,
+      frontendPath: hasFrontend ? frontendPath : undefined,
+    };
+  } catch (error) {
+    logger.error(`Failed to get plugin metadata for ${moduleName}`, error as Error);
+    return null;
+  }
+}
+
+/**
+ * Get all module manifests
+ */
+export async function getAllModuleManifests(): Promise<Map<string, ModuleManifest>> {
+  const modules = await discoverModules();
+  const manifests = new Map<string, ModuleManifest>();
+
+  for (const module of modules) {
+    const manifest = await readModuleManifest(module.name);
+    if (manifest) {
+      manifests.set(module.name, manifest);
+    }
+  }
+
+  return manifests;
+}
+
+/**
+ * Get all module pages from manifests
+ */
+export async function getAllModulePages(): Promise<Array<{
+  module: string;
+  page: import('../types/module-plugin.js').ModulePage;
+}>> {
+  const manifests = await getAllModuleManifests();
+  const pages: Array<{ module: string; page: import('../types/module-plugin.js').ModulePage }> = [];
+
+  for (const [moduleName, manifest] of manifests) {
+    if (manifest.pages) {
+      for (const page of manifest.pages) {
+        pages.push({ module: moduleName, page });
+      }
+    }
+  }
+
+  return pages;
+}
+
+/**
+ * Get all dashboard widgets from manifests
+ */
+export async function getAllDashboardWidgets(): Promise<Array<{
+  module: string;
+  widget: import('../types/module-plugin.js').DashboardWidget;
+}>> {
+  const manifests = await getAllModuleManifests();
+  const widgets: Array<{ module: string; widget: import('../types/module-plugin.js').DashboardWidget }> = [];
+
+  for (const [moduleName, manifest] of manifests) {
+    if (manifest.dashboardWidgets) {
+      for (const widget of manifest.dashboardWidgets) {
+        widgets.push({ module: moduleName, widget });
+      }
+    }
+  }
+
+  return widgets;
+}
+
+/**
+ * Get all environment variables from manifests
+ */
+export async function getAllModuleEnvVars(): Promise<Array<{
+  module: string;
+  envVar: import('../types/module-plugin.js').EnvVarDefinition;
+}>> {
+  const manifests = await getAllModuleManifests();
+  const envVars: Array<{ module: string; envVar: import('../types/module-plugin.js').EnvVarDefinition }> = [];
+
+  for (const [moduleName, manifest] of manifests) {
+    if (manifest.envVars) {
+      for (const envVar of manifest.envVars) {
+        envVars.push({ module: moduleName, envVar });
+      }
+    }
+  }
+
+  return envVars;
+}
+
+/**
+ * Get all API routes from manifests
+ */
+export async function getAllApiRoutes(): Promise<Array<{
+  module: string;
+  route: import('../types/module-plugin.js').ApiRoute;
+}>> {
+  const manifests = await getAllModuleManifests();
+  const routes: Array<{ module: string; route: import('../types/module-plugin.js').ApiRoute }> = [];
+
+  for (const [moduleName, manifest] of manifests) {
+    if (manifest.apiRoutes) {
+      for (const route of manifest.apiRoutes) {
+        routes.push({ module: moduleName, route });
+      }
+    }
+  }
+
+  return routes;
 }
