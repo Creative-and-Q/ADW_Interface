@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { modulesAPI, moduleProcessesAPI, chainsAPI } from '../services/api';
 import type { ModuleProcessInfo } from '../types/aicontroller';
 import ModuleLogViewer from '../components/ModuleLogViewer';
+import ImportModuleModal from '../components/ImportModuleModal';
 import {
   Package,
   GitBranch,
@@ -19,6 +20,7 @@ import {
   Square,
   Loader2,
   RefreshCw,
+  Plus,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -67,6 +69,7 @@ export default function Modules() {
   const [autoLoadSettings, setAutoLoadSettings] = useState<{ [key: string]: boolean }>({});
   const [groupBy, setGroupBy] = useState<GroupByMode>('category');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [showImportModal, setShowImportModal] = useState(false);
 
   useEffect(() => {
     loadModules();
@@ -440,11 +443,25 @@ export default function Modules() {
               <option value="project">Project</option>
             </select>
           </div>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="btn btn-primary flex items-center space-x-2"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Import Module</span>
+          </button>
           <div className="bg-primary-100 text-primary-700 px-4 py-2 rounded-full text-sm font-medium">
             {modules.length} Module{modules.length !== 1 ? 's' : ''}
           </div>
         </div>
       </div>
+
+      {/* Import Module Modal */}
+      <ImportModuleModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={() => loadModules()}
+      />
 
       {/* Bulk Actions */}
       {modules.filter(m => m.hasPackageJson).length > 0 && (

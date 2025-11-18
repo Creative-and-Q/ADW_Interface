@@ -16,6 +16,7 @@ import {
   getModulePromptContent,
   updateModulePrompt,
   getModuleStats,
+  importModule,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
@@ -563,6 +564,47 @@ router.get('/modules', async (_req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to list modules', error as Error);
     return res.status(500).json({ error: 'Failed to list modules' });
+  }
+});
+
+/**
+ * POST /api/modules/import
+ * Import a module from a Git repository
+ */
+router.post('/modules/import', async (req: Request, res: Response) => {
+  try {
+    const { url, category, project, tags, autoInstall } = req.body;
+
+    if (!url) {
+      return res.status(400).json({ error: 'Git URL is required' });
+    }
+
+    const result = await importModule({
+      url,
+      category,
+      project,
+      tags,
+      autoInstall: autoInstall === true,
+    });
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        moduleName: result.moduleName,
+        message: result.message,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.message,
+      });
+    }
+  } catch (error: any) {
+    logger.error('Failed to import module', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to import module',
+    });
   }
 });
 

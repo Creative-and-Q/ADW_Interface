@@ -18,6 +18,9 @@ export interface Module {
   path: string;
   description?: string;
   version?: string;
+  category?: string;
+  project?: string;
+  tags?: string[];
   hasGit: boolean;
   gitStatus?: {
     branch: string;
@@ -137,6 +140,25 @@ export async function getModuleInfo(moduleName: string): Promise<Module | null> 
       module.prompts = promptFiles.filter(f => f.endsWith('.md'));
     } catch {
       // No prompts directory
+    }
+
+    // Load module manifest for category, project, and tags
+    try {
+      const manifest = await readModuleManifest(moduleName);
+      if (manifest) {
+        module.category = manifest.category;
+        module.project = manifest.project;
+        module.tags = manifest.tags;
+        // Override with manifest description/version if available
+        if (manifest.description && !module.description) {
+          module.description = manifest.description;
+        }
+        if (manifest.version && !module.version) {
+          module.version = manifest.version;
+        }
+      }
+    } catch {
+      // No manifest or error reading it
     }
 
     return module;
@@ -555,4 +577,161 @@ export async function getAllApiRoutes(): Promise<Array<{
   }
 
   return routes;
+}
+
+/**
+ * Import module options
+ */
+export interface ImportModuleOptions {
+  url: string;
+  category?: string;
+  project?: string;
+  tags?: string[];
+  autoInstall?: boolean;
+}
+
+/**
+ * Import a module from a Git repository
+ */
+export async function importModule(options: ImportModuleOptions): Promise<{
+  success: boolean;
+  moduleName?: string;
+  message: string;
+}> {
+  try {
+    const { url, category, project, tags, autoInstall = false } = options;
+
+    // Validate URL
+    if (!url || typeof url !== 'string') {
+      return { success: false, message: 'Invalid Git URL provided' };
+    }
+
+    // Extract module name from URL
+    // Supports: git@github.com:user/repo.git, https://github.com/user/repo.git
+    const urlMatch = url.match(/\/([^/]+?)(\.git)?$/);
+    if (!urlMatch) {
+      return { success: false, message: 'Could not extract module name from URL' };
+    }
+
+    const moduleName = urlMatch[1].replace('.git', '');
+    const modulesPath = getModulesPath();
+    const modulePath = path.join(modulesPath, moduleName);
+
+    // Check if module already exists
+    try {
+      await fs.access(modulePath);
+      return {
+        success: false,
+        message: `Module '${moduleName}' already exists. Please remove it first or use a different name.`,
+      };
+    } catch {
+      // Module doesn't exist, continue
+    }
+
+    logger.info(`Importing module from ${url} to ${modulePath}`);
+
+    // Clone the repository
+    try {
+      const { stdout, stderr } = await execAsync(`git clone "${url}" "${modulePath}"`, {
+        cwd: modulesPath,
+      });
+
+      if (stderr && !stderr.includes('Cloning into')) {
+        logger.warn(`Git clone warnings: ${stderr}`);
+      }
+
+      logger.info(`Git clone output: ${stdout}`);
+    } catch (error: any) {
+      logger.error('Git clone failed', error);
+      return {
+        success: false,
+        message: `Failed to clone repository: ${error.message}`,
+      };
+    }
+
+    // Read existing module.json or package.json for defaults
+    let existingManifest: Partial<ModuleManifest> = {};
+    let manifestPath = path.join(modulePath, 'module.json');
+
+    try {
+      const content = await fs.readFile(manifestPath, 'utf-8');
+      existingManifest = JSON.parse(content);
+    } catch {
+      // No existing module.json, try to create from package.json
+      try {
+        const packagePath = path.join(modulePath, 'package.json');
+        const packageContent = await fs.readFile(packagePath, 'utf-8');
+        const packageJson = JSON.parse(packageContent);
+
+        existingManifest = {
+          name: packageJson.name || moduleName,
+          version: packageJson.version || '1.0.0',
+          description: packageJson.description || 'Imported module',
+        };
+      } catch {
+        // No package.json either, use defaults
+        existingManifest = {
+          name: moduleName,
+          version: '1.0.0',
+          description: 'Imported module',
+        };
+      }
+    }
+
+    // Merge with provided metadata
+    const updatedManifest: ModuleManifest = {
+      name: existingManifest.name || moduleName,
+      version: existingManifest.version || '1.0.0',
+      description: existingManifest.description || 'Imported module',
+      category: category || existingManifest.category,
+      project: project || existingManifest.project,
+      tags: tags || existingManifest.tags,
+      pages: existingManifest.pages,
+      dashboardWidgets: existingManifest.dashboardWidgets,
+      envVars: existingManifest.envVars,
+      apiRoutes: existingManifest.apiRoutes,
+    };
+
+    // Write module.json
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify(updatedManifest, null, 2) + '\n',
+      'utf-8'
+    );
+
+    logger.info(`Created/updated module.json for ${moduleName}`);
+
+    // Optionally install dependencies
+    if (autoInstall) {
+      try {
+        const packagePath = path.join(modulePath, 'package.json');
+        await fs.access(packagePath);
+
+        logger.info(`Installing dependencies for ${moduleName}...`);
+        const { stdout, stderr } = await execAsync('npm install', {
+          cwd: modulePath,
+        });
+
+        if (stderr) {
+          logger.warn(`npm install warnings: ${stderr}`);
+        }
+
+        logger.info(`npm install completed for ${moduleName}`);
+      } catch (error: any) {
+        logger.warn(`Could not install dependencies for ${moduleName}: ${error.message}`);
+      }
+    }
+
+    return {
+      success: true,
+      moduleName,
+      message: `Successfully imported module '${moduleName}'${autoInstall ? ' and installed dependencies' : ''}`,
+    };
+  } catch (error: any) {
+    logger.error('Failed to import module', error);
+    return {
+      success: false,
+      message: `Import failed: ${error.message}`,
+    };
+  }
 }

@@ -59,6 +59,13 @@ export const errorsAPI = {
 
 export const modulesAPI = {
   list: () => api.get('/modules'),
+  import: (options: {
+    url: string;
+    category?: string;
+    project?: string;
+    tags?: string[];
+    autoInstall?: boolean;
+  }) => api.post('/modules/import', options),
   get: (name: string) => api.get(`/modules/${name}`),
   getStats: (name: string) => api.get(`/modules/${name}/stats`),
   getCommits: (name: string, limit?: number) =>
