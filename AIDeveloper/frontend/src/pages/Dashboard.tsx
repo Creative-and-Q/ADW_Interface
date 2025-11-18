@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { statsAPI, systemAPI } from '../services/api';
+import { statsAPI, systemAPI, modulePluginsAPI, type DashboardWidget } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
+import DashboardWidgetComponent from '../components/DashboardWidget';
 import {
   BarChart,
   Bar,
@@ -31,11 +32,31 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [restarting, setRestarting] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [dashboardWidgets, setDashboardWidgets] = useState<DashboardWidget[]>([]);
   const { socket, connected } = useWebSocket();
 
   useEffect(() => {
     loadStats();
+    loadDashboardWidgets();
   }, []);
+
+  const loadDashboardWidgets = async () => {
+    try {
+      const response = await modulePluginsAPI.getDashboardWidgets();
+      if (response.data.success) {
+        // Sort widgets by position and order
+        const sorted = response.data.data.sort((a: DashboardWidget, b: DashboardWidget) => {
+          const positionOrder = { top: 0, middle: 1, bottom: 2 };
+          const posDiff = positionOrder[a.widget.position] - positionOrder[b.widget.position];
+          if (posDiff !== 0) return posDiff;
+          return (a.widget.order ?? 999) - (b.widget.order ?? 999);
+        });
+        setDashboardWidgets(sorted);
+      }
+    } catch (error) {
+      console.error('Failed to load dashboard widgets:', error);
+    }
+  };
 
   useEffect(() => {
     if (socket) {
@@ -169,6 +190,20 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* Top Position Widgets */}
+      {dashboardWidgets
+        .filter((dw) => dw.widget.position === 'top')
+        .map((dw) => (
+          <DashboardWidgetComponent
+            key={`${dw.module}-${dw.widget.id}`}
+            module={dw.module}
+            widgetId={dw.widget.id}
+            componentName={dw.widget.component}
+            title={dw.widget.title}
+            width={dw.widget.width}
+          />
+        ))}
+
       {/* Charts Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Activity Chart */}
@@ -275,6 +310,22 @@ export default function Dashboard() {
         </ResponsiveContainer>
       </div>
 
+      {/* Middle Position Widgets */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {dashboardWidgets
+          .filter((dw) => dw.widget.position === 'middle')
+          .map((dw) => (
+            <DashboardWidgetComponent
+              key={`${dw.module}-${dw.widget.id}`}
+              module={dw.module}
+              widgetId={dw.widget.id}
+              componentName={dw.widget.component}
+              title={dw.widget.title}
+              width={dw.widget.width}
+            />
+          ))}
+      </div>
+
       {/* Agent Stats */}
       <div className="card">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
@@ -309,6 +360,22 @@ export default function Dashboard() {
             <Clock className="h-8 w-8 text-yellow-400" />
           </div>
         </div>
+      </div>
+
+      {/* Bottom Position Widgets */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {dashboardWidgets
+          .filter((dw) => dw.widget.position === 'bottom')
+          .map((dw) => (
+            <DashboardWidgetComponent
+              key={`${dw.module}-${dw.widget.id}`}
+              module={dw.module}
+              widgetId={dw.widget.id}
+              componentName={dw.widget.component}
+              title={dw.widget.title}
+              width={dw.widget.width}
+            />
+          ))}
       </div>
 
       {/* Restart Countdown Modal */}

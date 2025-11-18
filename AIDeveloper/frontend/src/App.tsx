@@ -1,14 +1,16 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { Activity, Code2, AlertCircle, FileText, LayoutDashboard, Package, Link2 } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
+import { useEffect, useState } from 'react';
 import Dashboard from './pages/Dashboard';
-import Workflows from './pages/Workflows';
+// Workflows page is now provided by WorkflowOrchestrator module
 import WorkflowDetail from './pages/WorkflowDetail';
 import Prompts from './pages/Prompts';
 import Errors from './pages/Errors';
 import Modules from './pages/Modules';
 import ModulePrompts from './pages/ModulePrompts';
 import ModuleHistory from './pages/ModuleHistory';
+import ModuleSettings from './pages/ModuleSettings';
 import Chains from './pages/Chains';
 import ChainsList from './pages/ChainsList';
 import ChainBuilder from './pages/ChainBuilder';
@@ -16,14 +18,53 @@ import ExecutionsList from './pages/ExecutionsList';
 import ExecutionDetail from './pages/ExecutionDetail';
 import AIAgent from './pages/AIAgent';
 import BranchSwitcher from './components/BranchSwitcher';
+import ModulePage from './components/ModulePage';
+import { modulePluginsAPI, type ModulePage as ModulePageType } from './services/api';
+import * as Icons from 'lucide-react';
 
 function Navigation() {
   const location = useLocation();
+  const [modulePages, setModulePages] = useState<ModulePageType[]>([]);
+
+  useEffect(() => {
+    // Load module pages for navigation
+    modulePluginsAPI.getPages()
+      .then((response) => {
+        if (response.data.success) {
+          // Filter to only top-level pages (not nested routes) and sort by navOrder
+          const topLevelPages = response.data.data
+            .filter((mp: ModulePageType) => {
+              const pathParts = mp.page.path.split('/').filter(Boolean);
+              return pathParts.length === 1; // Only top-level paths
+            })
+            .sort((a: ModulePageType, b: ModulePageType) => {
+              const orderA = a.page.navOrder ?? 999;
+              const orderB = b.page.navOrder ?? 999;
+              return orderA - orderB;
+            });
+          setModulePages(topLevelPages);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load module pages:', error);
+      });
+  }, []);
+
+  // Get icon component from string name
+  const getIcon = (iconName?: string) => {
+    if (!iconName) return Package;
+    const IconComponent = (Icons as any)[iconName];
+    return IconComponent || Package;
+  };
 
   const links = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/workflows', icon: Activity, label: 'Workflows' },
-    { to: '/chains', icon: Link2, label: 'AI Chains' },
+    ...modulePages.map((mp) => ({
+      to: mp.page.path,
+      icon: getIcon(mp.page.icon),
+      label: mp.page.label,
+    })),
     { to: '/modules', icon: Package, label: 'Modules' },
     { to: '/prompts', icon: Code2, label: 'Prompts' },
     { to: '/errors', icon: AlertCircle, label: 'Errors' },
@@ -75,6 +116,21 @@ function Navigation() {
 }
 
 function App() {
+  const [moduleRoutes, setModuleRoutes] = useState<ModulePageType[]>([]);
+
+  useEffect(() => {
+    // Load all module pages for routing
+    modulePluginsAPI.getPages()
+      .then((response) => {
+        if (response.data.success) {
+          setModuleRoutes(response.data.data);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load module routes:', error);
+      });
+  }, []);
+
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
@@ -105,20 +161,40 @@ function App() {
         <Navigation />
         <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
           <Routes>
+            {/* Built-in routes */}
             <Route path="/" element={<Dashboard />} />
-            <Route path="/workflows" element={<Workflows />} />
+            {/* Workflows route is now provided by WorkflowOrchestrator module */}
+            {/* Keep WorkflowDetail route as it's still in AIDeveloper */}
             <Route path="/workflows/:id" element={<WorkflowDetail />} />
+            <Route path="/modules" element={<Modules />} />
+            <Route path="/modules/settings" element={<ModuleSettings />} />
+            <Route path="/modules/:moduleName/prompts" element={<ModulePrompts />} />
+            <Route path="/modules/:moduleName/commits" element={<ModuleHistory />} />
+            <Route path="/prompts" element={<Prompts />} />
+            <Route path="/errors" element={<Errors />} />
+            
+            {/* Legacy AIController routes (for backward compatibility) */}
             <Route path="/chains" element={<Chains />} />
             <Route path="/chains/list" element={<ChainsList />} />
             <Route path="/chains/builder/:id?" element={<ChainBuilder />} />
             <Route path="/chains/executions/:id" element={<ExecutionDetail />} />
             <Route path="/chains/executions" element={<ExecutionsList />} />
             <Route path="/chains/ai-agent" element={<AIAgent />} />
-            <Route path="/modules" element={<Modules />} />
-            <Route path="/modules/:moduleName/prompts" element={<ModulePrompts />} />
-            <Route path="/modules/:moduleName/commits" element={<ModuleHistory />} />
-            <Route path="/prompts" element={<Prompts />} />
-            <Route path="/errors" element={<Errors />} />
+            
+            {/* Dynamic module routes */}
+            {moduleRoutes.map((mp) => (
+              <Route
+                key={`${mp.module}-${mp.page.path}`}
+                path={mp.page.path}
+                element={
+                  <ModulePage
+                    module={mp.module}
+                    componentName={mp.page.component}
+                    componentPath={mp.page.component}
+                  />
+                }
+              />
+            ))}
           </Routes>
         </main>
       </div>

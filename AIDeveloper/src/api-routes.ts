@@ -18,10 +18,17 @@ import {
   getModuleStats,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
+import modulePluginsRouter from './api/module-plugins.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
+
+// ============================================================================
+// Module Plugin Routes (MUST BE BEFORE PROXY ROUTES)
+// ============================================================================
+
+router.use('/modules', modulePluginsRouter);
 
 // ============================================================================
 // AIController Proxy Routes (MUST BE FIRST)
