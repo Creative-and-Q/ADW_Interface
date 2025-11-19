@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { modulesAPI, moduleProcessesAPI, chainsAPI, modulePluginsAPI } from '../services/api';
 import type { ModuleProcessInfo } from '../types/aicontroller';
 import ModuleLogViewer from '../components/ModuleLogViewer';
 import ImportModuleModal from '../components/ImportModuleModal';
+import DeploymentActionModal from '../components/DeploymentActionModal';
 import {
   Package,
   GitBranch,
@@ -77,6 +78,17 @@ export default function Modules() {
   const [envVarChanges, setEnvVarChanges] = useState<Record<string, string>>({});
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set());
   const [savingEnvVars, setSavingEnvVars] = useState(false);
+  const [moduleManifest, setModuleManifest] = useState<any>(null);
+
+  // Deployment action modal state
+  const [deploymentModalOpen, setDeploymentModalOpen] = useState(false);
+  const [deploymentAction, setDeploymentAction] = useState<string>('');
+  const [deploymentModuleName, setDeploymentModuleName] = useState<string>('');
+  const [deploymentLogs, setDeploymentLogs] = useState<string[]>([]);
+  const [deploymentRunning, setDeploymentRunning] = useState(false);
+  const [deploymentError, setDeploymentError] = useState<string | undefined>(undefined);
+  const [deploymentSuccess, setDeploymentSuccess] = useState(false);
+  const deploymentPollInterval = useRef<number | null>(null);
 
   useEffect(() => {
     loadModules();
@@ -130,10 +142,11 @@ export default function Modules() {
   const loadModuleDetails = async (module: Module) => {
     setSelectedModule(module);
     try {
-      const [statsRes, commitsRes, statusRes] = await Promise.all([
+      const [statsRes, commitsRes, statusRes, manifestRes] = await Promise.all([
         modulesAPI.getStats(module.name),
         modulesAPI.getCommits(module.name, 10),
         modulesAPI.getStatus(module.name),
+        modulePluginsAPI.getManifest(module.name),
       ]);
       setModuleStats(statsRes.data.stats);
       setModuleCommits(commitsRes.data.commits);
@@ -142,10 +155,18 @@ export default function Modules() {
         [module.name]: statusRes.data.isRunning,
       }));
 
+      // Load module manifest for scripts
+      if (manifestRes.data.success) {
+        setModuleManifest(manifestRes.data.data);
+      } else {
+        setModuleManifest(null);
+      }
+
       // Load environment variables for the module
       await loadModuleEnvVars(module.name);
     } catch (error) {
       console.error('Failed to load module details:', error);
+      setModuleManifest(null);
     }
   };
 
@@ -254,6 +275,54 @@ export default function Modules() {
     }
   };
 
+  const pollDeploymentLogs = async (moduleName: string) => {
+    try {
+      const { data } = await modulesAPI.getLogs(moduleName, 200);
+      setDeploymentLogs(data.logs || []);
+    } catch (error) {
+      console.error('Failed to poll deployment logs:', error);
+    }
+  };
+
+  const startDeploymentModal = (action: string, moduleName: string) => {
+    setDeploymentAction(action);
+    setDeploymentModuleName(moduleName);
+    setDeploymentLogs([]);
+    setDeploymentRunning(true);
+    setDeploymentError(undefined);
+    setDeploymentSuccess(false);
+    setDeploymentModalOpen(true);
+
+    // Start polling for logs
+    pollDeploymentLogs(moduleName);
+    deploymentPollInterval.current = window.setInterval(() => {
+      pollDeploymentLogs(moduleName);
+    }, 1000);
+  };
+
+  const stopDeploymentModal = (success: boolean, error?: string) => {
+    setDeploymentRunning(false);
+    setDeploymentSuccess(success);
+    setDeploymentError(error);
+
+    // Stop polling
+    if (deploymentPollInterval.current) {
+      clearInterval(deploymentPollInterval.current);
+      deploymentPollInterval.current = null;
+    }
+
+    // Final log fetch
+    pollDeploymentLogs(deploymentModuleName);
+  };
+
+  const closeDeploymentModal = () => {
+    setDeploymentModalOpen(false);
+    if (deploymentPollInterval.current) {
+      clearInterval(deploymentPollInterval.current);
+      deploymentPollInterval.current = null;
+    }
+  };
+
   const handleDeploymentAction = async (
     action: 'install' | 'build' | 'test' | 'start' | 'stop' | 'restart',
     moduleName: string
@@ -262,6 +331,12 @@ export default function Modules() {
       setDeploymentLoading(action);
 
       let result;
+      let shouldShowModal = !['start', 'stop', 'restart'].includes(action);
+
+      // Show modal for operations that produce logs
+      if (shouldShowModal) {
+        startDeploymentModal(action, moduleName);
+      }
 
       // Handle restart action
       if (action === 'restart') {
@@ -330,7 +405,13 @@ export default function Modules() {
           break;
       }
 
-      toast.success(`${action} operation started: ${result.data.message}`);
+      if (shouldShowModal) {
+        // Wait a bit for the operation to complete and logs to be available
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        stopDeploymentModal(true);
+      } else {
+        toast.success(`${action} operation started: ${result.data.message}`);
+      }
 
       // Update module status after start/stop
       if (action === 'start' || action === 'stop') {
@@ -342,7 +423,13 @@ export default function Modules() {
       }
     } catch (error: any) {
       console.error(`Failed to ${action} module:`, error);
-      toast.error(`Error: ${error.response?.data?.error || error.message}`);
+      const errorMessage = error.response?.data?.error || error.message;
+
+      if (['install', 'build', 'test', 'typecheck'].includes(action)) {
+        stopDeploymentModal(false, errorMessage);
+      } else {
+        toast.error(`Error: ${errorMessage}`);
+      }
     } finally {
       setDeploymentLoading(null);
     }
@@ -530,6 +617,18 @@ export default function Modules() {
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
         onSuccess={() => loadModules()}
+      />
+
+      {/* Deployment Action Modal */}
+      <DeploymentActionModal
+        isOpen={deploymentModalOpen}
+        onClose={closeDeploymentModal}
+        moduleName={deploymentModuleName}
+        action={deploymentAction}
+        logs={deploymentLogs}
+        isRunning={deploymentRunning}
+        error={deploymentError}
+        success={deploymentSuccess}
       />
 
       {/* Bulk Actions */}
@@ -830,97 +929,138 @@ export default function Modules() {
                     )}
 
                     <div className="grid grid-cols-2 gap-3">
-                      <button
-                        onClick={() =>
-                          handleDeploymentAction('install', selectedModule.name)
-                        }
-                        disabled={deploymentLoading !== null}
-                        className="btn btn-secondary flex items-center justify-center"
-                      >
-                        {deploymentLoading === 'install' ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4 mr-2" />
-                        )}
-                        Install Dependencies
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          handleDeploymentAction('build', selectedModule.name)
-                        }
-                        disabled={deploymentLoading !== null}
-                        className="btn btn-secondary flex items-center justify-center"
-                      >
-                        {deploymentLoading === 'build' ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Hammer className="h-4 w-4 mr-2" />
-                        )}
-                        Build Module
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          handleDeploymentAction('test', selectedModule.name)
-                        }
-                        disabled={deploymentLoading !== null}
-                        className="btn btn-secondary flex items-center justify-center"
-                      >
-                        {deploymentLoading === 'test' ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <TestTube className="h-4 w-4 mr-2" />
-                        )}
-                        Run Tests
-                      </button>
-
-                      {moduleStatus[selectedModule.name] ? (
+                      {/* Dynamic script buttons */}
+                      {moduleManifest?.scripts ? (
                         <>
-                          <button
-                            onClick={() =>
-                              handleDeploymentAction('restart', selectedModule.name)
-                            }
-                            disabled={deploymentLoading !== null}
-                            className="btn bg-orange-500 text-white hover:bg-orange-600 flex items-center justify-center"
-                          >
-                            {deploymentLoading === 'restart' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          {/* Regular scripts */}
+                          {Object.entries(moduleManifest.scripts)
+                            .filter(([scriptName]) => !['start', 'stop', 'dev'].includes(scriptName))
+                            .map(([scriptName]) => {
+                              const scriptConfig = {
+                                install: { icon: Download, label: 'Install Dependencies', className: 'btn btn-secondary' },
+                                build: { icon: Hammer, label: 'Build Module', className: 'btn btn-secondary' },
+                                test: { icon: TestTube, label: 'Run Tests', className: 'btn btn-secondary' },
+                                typecheck: { icon: CheckCircle, label: 'Type Check', className: 'btn btn-secondary' },
+                              }[scriptName] || { icon: Play, label: scriptName, className: 'btn btn-secondary' };
+
+                              const Icon = scriptConfig.icon;
+                              return (
+                                <button
+                                  key={scriptName}
+                                  onClick={() => handleDeploymentAction(scriptName as any, selectedModule.name)}
+                                  disabled={deploymentLoading !== null}
+                                  className={`${scriptConfig.className} flex items-center justify-center`}
+                                >
+                                  {deploymentLoading === scriptName ? (
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  ) : (
+                                    <Icon className="h-4 w-4 mr-2" />
+                                  )}
+                                  {scriptConfig.label}
+                                </button>
+                              );
+                            })}
+
+                          {/* Start/Stop/Restart buttons */}
+                          {moduleManifest.scripts.start && (
+                            moduleStatus[selectedModule.name] ? (
+                              <>
+                                <button
+                                  onClick={() => handleDeploymentAction('restart', selectedModule.name)}
+                                  disabled={deploymentLoading !== null}
+                                  className="btn bg-orange-500 text-white hover:bg-orange-600 flex items-center justify-center"
+                                >
+                                  {deploymentLoading === 'restart' ? (
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  ) : (
+                                    <RefreshCw className="h-4 w-4 mr-2" />
+                                  )}
+                                  Restart Server
+                                </button>
+                                <button
+                                  onClick={() => handleDeploymentAction('stop', selectedModule.name)}
+                                  disabled={deploymentLoading !== null}
+                                  className="btn bg-red-500 text-white hover:bg-red-600 flex items-center justify-center col-span-2"
+                                >
+                                  {deploymentLoading === 'stop' ? (
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  ) : (
+                                    <Square className="h-4 w-4 mr-2" />
+                                  )}
+                                  Stop Server
+                                </button>
+                              </>
                             ) : (
-                              <RefreshCw className="h-4 w-4 mr-2" />
-                            )}
-                            Restart Server
-                          </button>
-                          <button
-                            onClick={() =>
-                              handleDeploymentAction('stop', selectedModule.name)
-                            }
-                            disabled={deploymentLoading !== null}
-                            className="btn bg-red-500 text-white hover:bg-red-600 flex items-center justify-center col-span-2"
-                          >
-                            {deploymentLoading === 'stop' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <Square className="h-4 w-4 mr-2" />
-                            )}
-                            Stop Server
-                          </button>
+                              <button
+                                onClick={() => handleDeploymentAction('start', selectedModule.name)}
+                                disabled={deploymentLoading !== null}
+                                className="btn btn-primary flex items-center justify-center col-span-2"
+                              >
+                                {deploymentLoading === 'start' ? (
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                ) : (
+                                  <Play className="h-4 w-4 mr-2" />
+                                )}
+                                Start Server
+                              </button>
+                            )
+                          )}
                         </>
                       ) : (
-                        <button
-                          onClick={() =>
-                            handleDeploymentAction('start', selectedModule.name)
-                          }
-                          disabled={deploymentLoading !== null}
-                          className="btn btn-primary flex items-center justify-center col-span-2"
-                        >
-                          {deploymentLoading === 'start' ? (
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          ) : (
-                            <Play className="h-4 w-4 mr-2" />
-                          )}
-                          Start Server
-                        </button>
+                        /* Fallback for modules without manifest */
+                        <>
+                          <button
+                            onClick={() => handleDeploymentAction('install', selectedModule.name)}
+                            disabled={deploymentLoading !== null}
+                            className="btn btn-secondary flex items-center justify-center"
+                          >
+                            {deploymentLoading === 'install' ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Download className="h-4 w-4 mr-2" />
+                            )}
+                            Install Dependencies
+                          </button>
+
+                          <button
+                            onClick={() => handleDeploymentAction('build', selectedModule.name)}
+                            disabled={deploymentLoading !== null}
+                            className="btn btn-secondary flex items-center justify-center"
+                          >
+                            {deploymentLoading === 'build' ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Hammer className="h-4 w-4 mr-2" />
+                            )}
+                            Build Module
+                          </button>
+
+                          <button
+                            onClick={() => handleDeploymentAction('test', selectedModule.name)}
+                            disabled={deploymentLoading !== null}
+                            className="btn btn-secondary flex items-center justify-center"
+                          >
+                            {deploymentLoading === 'test' ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <TestTube className="h-4 w-4 mr-2" />
+                            )}
+                            Run Tests
+                          </button>
+
+                          <button
+                            onClick={() => handleDeploymentAction('start', selectedModule.name)}
+                            disabled={deploymentLoading !== null}
+                            className="btn btn-primary flex items-center justify-center"
+                          >
+                            {deploymentLoading === 'start' ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Play className="h-4 w-4 mr-2" />
+                            )}
+                            Start Server
+                          </button>
+                        </>
                       )}
                     </div>
 
