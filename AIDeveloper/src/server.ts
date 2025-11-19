@@ -111,7 +111,8 @@ function setupRoutes() {
   });
 
   // Serve static files from frontend/dist
-  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
+  // Note: Compiled code is in dist/AIDeveloper/src/, so we need to go up 3 levels to project root
+  const frontendDistPath = path.join(__dirname, '..', '..', '..', 'frontend', 'dist');
   app.use(express.static(frontendDistPath));
 
   // SPA fallback - serve index.html for all other routes

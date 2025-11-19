@@ -775,6 +775,22 @@ router.post('/modules/:name/test', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/modules/:name/typecheck
+ * Run type checking for a module
+ */
+router.post('/modules/:name/typecheck', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const operationId = await deploymentManager.typecheckModule(name);
+    logger.info('Module type check started', { module: name, operationId });
+    return res.json({ operationId, message: 'Type check started' });
+  } catch (error) {
+    logger.error('Failed to start module type check', error as Error);
+    return res.status(500).json({ error: 'Failed to start type check' });
+  }
+});
+
+/**
  * POST /api/modules/:name/start
  * Start a module server
  */
@@ -803,6 +819,51 @@ router.post('/modules/:name/stop', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to stop module server', error as Error);
     return res.status(500).json({ error: 'Failed to stop server' });
+  }
+});
+
+/**
+ * POST /api/modules/:name/run-script
+ * Run a generic script command from module.json
+ */
+router.post('/modules/:name/run-script', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { scriptName } = req.body;
+
+    if (!scriptName) {
+      return res.status(400).json({ error: 'scriptName is required in request body' });
+    }
+
+    const operationId = await deploymentManager.runScript(name, scriptName);
+    logger.info('Module script started', { module: name, scriptName, operationId });
+    return res.json({ operationId, message: `Script "${scriptName}" started` });
+  } catch (error) {
+    logger.error('Failed to run module script', error as Error);
+    return res.status(500).json({ error: 'Failed to run script' });
+  }
+});
+
+/**
+ * GET /api/modules/:name/scripts
+ * Get the available scripts from a module's module.json
+ */
+router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const modulePath = path.join(process.cwd(), '..', 'modules', name);
+    const moduleJsonPath = path.join(modulePath, 'module.json');
+
+    // Read module.json
+    const moduleJsonContent = await fs.readFile(moduleJsonPath, 'utf-8');
+    const moduleJson = JSON.parse(moduleJsonContent);
+
+    // Return the scripts section
+    const scripts = moduleJson.scripts || {};
+    return res.json({ scripts });
+  } catch (error) {
+    logger.error('Failed to get module scripts', error as Error);
+    return res.status(500).json({ error: 'Failed to get scripts' });
   }
 });
 

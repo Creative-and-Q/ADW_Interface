@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "bash scripts/ensure-services.sh && NODE_ENV=development tsx watch src/server.ts",
-    "start": "bash scripts/ensure-services.sh && concurrently --kill-others --names \"SERVER,WATCHER\" -c \"blue,cyan\" \"NODE_ENV=production node dist/server.js\" \"node scripts/watch-branch.js\"",
-    "start:server-only": "bash scripts/ensure-services.sh && NODE_ENV=production node dist/server.js",
+    "start": "bash scripts/ensure-services.sh && concurrently --kill-others --names \"SERVER,WATCHER\" -c \"blue,cyan\" \"NODE_ENV=production node dist/AIDeveloper/src/server.js\" \"node scripts/watch-branch.js\"",
+    "start:server-only": "bash scripts/ensure-services.sh && NODE_ENV=production node dist/AIDeveloper/src/server.js",
     "build": "tsc",
     "build:frontend": "cd frontend && npm run build",
     "build:all": "npm run build && npm run build:frontend",

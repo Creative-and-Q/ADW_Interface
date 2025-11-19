@@ -14,9 +14,6 @@ import {
   Clock,
   CheckCircle,
   AlertCircle,
-  Download,
-  Hammer,
-  TestTube,
   Play,
   Square,
   Loader2,
@@ -324,7 +321,7 @@ export default function Modules() {
   };
 
   const handleDeploymentAction = async (
-    action: 'install' | 'build' | 'test' | 'start' | 'stop' | 'restart',
+    action: string, // Any script name from module.json
     moduleName: string
   ) => {
     try {
@@ -386,23 +383,14 @@ export default function Modules() {
         }
       }
 
-      // Fall back to old API for other operations
-      switch (action) {
-        case 'install':
-          result = await modulesAPI.install(moduleName);
-          break;
-        case 'build':
-          result = await modulesAPI.build(moduleName);
-          break;
-        case 'test':
-          result = await modulesAPI.test(moduleName);
-          break;
-        case 'start':
-          result = await modulesAPI.start(moduleName);
-          break;
-        case 'stop':
-          result = await modulesAPI.stop(moduleName);
-          break;
+      // Use generic runScript API for all script operations
+      if (action === 'start') {
+        result = await modulesAPI.start(moduleName);
+      } else if (action === 'stop') {
+        result = await modulesAPI.stop(moduleName);
+      } else {
+        // For all other scripts, use the generic runScript endpoint
+        result = await modulesAPI.runScript(moduleName, action);
       }
 
       if (shouldShowModal) {
@@ -936,27 +924,22 @@ export default function Modules() {
                           {Object.entries(moduleManifest.scripts)
                             .filter(([scriptName]) => !['start', 'stop', 'dev'].includes(scriptName))
                             .map(([scriptName]) => {
-                              const scriptConfig = {
-                                install: { icon: Download, label: 'Install Dependencies', className: 'btn btn-secondary' },
-                                build: { icon: Hammer, label: 'Build Module', className: 'btn btn-secondary' },
-                                test: { icon: TestTube, label: 'Run Tests', className: 'btn btn-secondary' },
-                                typecheck: { icon: CheckCircle, label: 'Type Check', className: 'btn btn-secondary' },
-                              }[scriptName] || { icon: Play, label: scriptName, className: 'btn btn-secondary' };
+                              // Capitalize first letter of script name
+                              const label = scriptName.charAt(0).toUpperCase() + scriptName.slice(1);
 
-                              const Icon = scriptConfig.icon;
                               return (
                                 <button
                                   key={scriptName}
-                                  onClick={() => handleDeploymentAction(scriptName as any, selectedModule.name)}
+                                  onClick={() => handleDeploymentAction(scriptName, selectedModule.name)}
                                   disabled={deploymentLoading !== null}
-                                  className={`${scriptConfig.className} flex items-center justify-center`}
+                                  className="btn btn-secondary flex items-center justify-center"
                                 >
                                   {deploymentLoading === scriptName ? (
                                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                   ) : (
-                                    <Icon className="h-4 w-4 mr-2" />
+                                    <Play className="h-4 w-4 mr-2" />
                                   )}
-                                  {scriptConfig.label}
+                                  {label}
                                 </button>
                               );
                             })}
@@ -1007,60 +990,19 @@ export default function Modules() {
                           )}
                         </>
                       ) : (
-                        /* Fallback for modules without manifest */
-                        <>
-                          <button
-                            onClick={() => handleDeploymentAction('install', selectedModule.name)}
-                            disabled={deploymentLoading !== null}
-                            className="btn btn-secondary flex items-center justify-center"
-                          >
-                            {deploymentLoading === 'install' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <Download className="h-4 w-4 mr-2" />
-                            )}
-                            Install Dependencies
-                          </button>
-
-                          <button
-                            onClick={() => handleDeploymentAction('build', selectedModule.name)}
-                            disabled={deploymentLoading !== null}
-                            className="btn btn-secondary flex items-center justify-center"
-                          >
-                            {deploymentLoading === 'build' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <Hammer className="h-4 w-4 mr-2" />
-                            )}
-                            Build Module
-                          </button>
-
-                          <button
-                            onClick={() => handleDeploymentAction('test', selectedModule.name)}
-                            disabled={deploymentLoading !== null}
-                            className="btn btn-secondary flex items-center justify-center"
-                          >
-                            {deploymentLoading === 'test' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <TestTube className="h-4 w-4 mr-2" />
-                            )}
-                            Run Tests
-                          </button>
-
-                          <button
-                            onClick={() => handleDeploymentAction('start', selectedModule.name)}
-                            disabled={deploymentLoading !== null}
-                            className="btn btn-primary flex items-center justify-center"
-                          >
-                            {deploymentLoading === 'start' ? (
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <Play className="h-4 w-4 mr-2" />
-                            )}
-                            Start Server
-                          </button>
-                        </>
+                        /* Error message for modules without module.json */
+                        <div className="col-span-2 p-4 bg-red-50 border border-red-200 rounded-lg">
+                          <div className="flex items-start">
+                            <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 mr-3 flex-shrink-0" />
+                            <div>
+                              <h4 className="text-sm font-semibold text-red-800 mb-1">Missing module.json</h4>
+                              <p className="text-sm text-red-700">
+                                This module is missing its <code className="px-1 py-0.5 bg-red-100 rounded">module.json</code> file.
+                                Deployment actions cannot be performed without a valid module configuration.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
 
