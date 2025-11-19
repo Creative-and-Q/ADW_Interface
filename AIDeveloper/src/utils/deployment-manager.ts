@@ -10,7 +10,7 @@ const execAsync = promisify(exec);
 export interface DeploymentOperation {
   id: string;
   moduleName: string;
-  operation: 'install' | 'build' | 'test' | 'start' | 'stop';
+  operation: string; // Any script name from module.json
   status: 'pending' | 'running' | 'success' | 'failed';
   startedAt?: Date;
   completedAt?: Date;
@@ -42,14 +42,17 @@ class DeploymentManager extends EventEmitter {
       });
 
       this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
       if (stderr) {
         this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
       }
 
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
       this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, `Error: ${error.message}`);
       throw error;
     }
   }
@@ -69,7 +72,11 @@ class DeploymentManager extends EventEmitter {
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
 
       if (!packageJson.scripts?.build) {
-        throw new Error('No build script found in package.json');
+        const message = 'No build script found in package.json - skipping';
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        this.updateOperationStatus(operationId, 'success');
+        return operationId;
       }
 
       const { stdout, stderr } = await execAsync('npm run build', {
@@ -78,14 +85,17 @@ class DeploymentManager extends EventEmitter {
       });
 
       this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
       if (stderr) {
         this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
       }
 
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
       this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, `Error: ${error.message}`);
       throw error;
     }
   }
@@ -105,7 +115,11 @@ class DeploymentManager extends EventEmitter {
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
 
       if (!packageJson.scripts?.test) {
-        throw new Error('No test script found in package.json');
+        const message = 'No test script found in package.json - skipping';
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        this.updateOperationStatus(operationId, 'success');
+        return operationId;
       }
 
       const { stdout, stderr } = await execAsync('npm test', {
@@ -114,13 +128,131 @@ class DeploymentManager extends EventEmitter {
       });
 
       this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
       if (stderr) {
         this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
       }
 
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
+      this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, `Error: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Run type checking for a module
+   */
+  async typecheckModule(moduleName: string): Promise<string> {
+    const operationId = this.createOperation(moduleName, 'typecheck');
+    const modulePath = this.getModulePath(moduleName);
+
+    try {
+      this.updateOperationStatus(operationId, 'running');
+
+      // Check if package.json has a typecheck script
+      const packageJsonPath = path.join(modulePath, 'package.json');
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+
+      if (!packageJson.scripts?.typecheck) {
+        const message = 'No typecheck script found in package.json - skipping';
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        this.updateOperationStatus(operationId, 'success');
+        return operationId;
+      }
+
+      const { stdout, stderr } = await execAsync('npm run typecheck', {
+        cwd: modulePath,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
+      if (stderr) {
+        this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
+      }
+
+      this.updateOperationStatus(operationId, 'success');
+      return operationId;
+    } catch (error: any) {
+      // Capture stdout and stderr from the failed command
+      if (error.stdout) {
+        this.addOperationOutput(operationId, error.stdout);
+        await this.addModuleLog(moduleName, error.stdout);
+      }
+      if (error.stderr) {
+        this.addOperationOutput(operationId, error.stderr);
+        await this.addModuleLog(moduleName, error.stderr);
+      }
+      const errorMsg = `Error: ${error.message}`;
+      this.addOperationOutput(operationId, errorMsg);
+      await this.addModuleLog(moduleName, errorMsg);
+      this.updateOperationStatus(operationId, 'failed', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Run a generic script command from module.json
+   */
+  async runScript(moduleName: string, scriptName: string): Promise<string> {
+    const operationId = this.createOperation(moduleName, scriptName);
+    const modulePath = this.getModulePath(moduleName);
+
+    try {
+      this.updateOperationStatus(operationId, 'running');
+
+      // Load module.json to get the script command
+      const moduleJsonPath = path.join(modulePath, 'module.json');
+      const moduleJson = JSON.parse(await fs.readFile(moduleJsonPath, 'utf-8'));
+
+      // Check if script exists in module.json
+      if (!moduleJson.scripts || !moduleJson.scripts[scriptName]) {
+        const message = `Script "${scriptName}" not found in module.json`;
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        this.updateOperationStatus(operationId, 'failed', message);
+        throw new Error(message);
+      }
+
+      const command = moduleJson.scripts[scriptName];
+      const logMessage = `Running script "${scriptName}": ${command}`;
+      this.addOperationOutput(operationId, logMessage);
+      await this.addModuleLog(moduleName, logMessage);
+
+      // Execute the command
+      const { stdout, stderr } = await execAsync(command, {
+        cwd: modulePath,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
+      if (stderr) {
+        this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
+      }
+
+      this.updateOperationStatus(operationId, 'success');
+      return operationId;
+    } catch (error: any) {
+      // Capture stdout and stderr from the failed command
+      if (error.stdout) {
+        this.addOperationOutput(operationId, error.stdout);
+        await this.addModuleLog(moduleName, error.stdout);
+      }
+      if (error.stderr) {
+        this.addOperationOutput(operationId, error.stderr);
+        await this.addModuleLog(moduleName, error.stderr);
+      }
+      const errorMsg = `Error: ${error.message}`;
+      this.addOperationOutput(operationId, errorMsg);
+      await this.addModuleLog(moduleName, errorMsg);
       this.updateOperationStatus(operationId, 'failed', error.message);
       throw error;
     }
@@ -186,7 +318,11 @@ class DeploymentManager extends EventEmitter {
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
 
       if (!packageJson.scripts?.start) {
-        throw new Error('No start script found in package.json');
+        const message = 'No start script found in package.json - skipping auto-start';
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        this.updateOperationStatus(operationId, 'success');
+        return operationId;
       }
 
       // Get the module's port and kill any existing process on it
@@ -491,6 +627,8 @@ class DeploymentManager extends EventEmitter {
   }
 
   private getModulePath(moduleName: string): string {
+    // Modules are located at the project parent level (/home/kevin/Home/ex_nihilo/modules/)
+    // process.cwd() is /home/kevin/Home/ex_nihilo/AIDeveloper when running
     return path.join(process.cwd(), '..', 'modules', moduleName);
   }
 }

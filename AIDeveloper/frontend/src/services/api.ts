@@ -78,6 +78,7 @@ export const modulesAPI = {
   install: (name: string) => api.post(`/modules/${name}/install`),
   build: (name: string) => api.post(`/modules/${name}/build`),
   test: (name: string) => api.post(`/modules/${name}/test`),
+  typecheck: (name: string) => api.post(`/modules/${name}/typecheck`),
   start: (name: string) => api.post(`/modules/${name}/start`),
   stop: (name: string) => api.post(`/modules/${name}/stop`),
   getStatus: (name: string) => api.get(`/modules/${name}/status`),
@@ -87,6 +88,9 @@ export const modulesAPI = {
   getAutoLoad: (name: string) => api.get(`/modules/${name}/auto-load`),
   setAutoLoad: (name: string, autoLoad: boolean) =>
     api.put(`/modules/${name}/auto-load`, { autoLoad }),
+  getScripts: (name: string) => api.get(`/modules/${name}/scripts`),
+  runScript: (name: string, scriptName: string) =>
+    api.post(`/modules/${name}/run-script`, { scriptName }),
 };
 
 export const deploymentsAPI = {
