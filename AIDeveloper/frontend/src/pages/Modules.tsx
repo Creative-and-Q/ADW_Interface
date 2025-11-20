@@ -68,7 +68,7 @@ export default function Modules() {
   const [aiControllerAvailable, setAIControllerAvailable] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
   const [autoLoadSettings, setAutoLoadSettings] = useState<{ [key: string]: boolean }>({});
-  const [groupBy, setGroupBy] = useState<GroupByMode>('category');
+  const [groupBy, setGroupBy] = useState<GroupByMode>('project');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showImportModal, setShowImportModal] = useState(false);
   const [moduleEnvVars, setModuleEnvVars] = useState<any[]>([]);
@@ -350,8 +350,12 @@ export default function Modules() {
       // For AIController, always use the old backend API
       const isAIController = moduleName === 'AIController';
 
-      // Use AIController's process management API for start/stop of OTHER modules
-      if ((action === 'start' || action === 'stop') && aiControllerAvailable && !isAIController) {
+      // Find the module to check its project
+      const module = modules.find(m => m.name === moduleName);
+      const isExNihiloModule = module?.project === 'Ex Nihilo';
+
+      // Use AIController's process management API for start/stop of Ex Nihilo modules only
+      if ((action === 'start' || action === 'stop') && aiControllerAvailable && !isAIController && isExNihiloModule) {
         try {
           if (action === 'start') {
             result = await moduleProcessesAPI.start(moduleName);
@@ -1008,11 +1012,11 @@ export default function Modules() {
 
                     <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                       <p className="text-xs text-blue-700 mb-2">
-                        {aiControllerAvailable
+                        {aiControllerAvailable && selectedModule.project === 'Ex Nihilo'
                           ? 'Start/stop operations are managed by AIController for centralized process management.'
                           : 'Deployment actions execute npm scripts in the module directory. Ports are automatically cleaned up before starting.'}
                       </p>
-                      {aiControllerAvailable && moduleProcesses.find((p) => p.name === selectedModule.name) && (
+                      {aiControllerAvailable && selectedModule.project === 'Ex Nihilo' && moduleProcesses.find((p) => p.name === selectedModule.name) && (
                         <div className="mt-2 pt-2 border-t border-blue-200 text-xs text-blue-700">
                           <p className="font-medium mb-1">Process Info:</p>
                           <div className="space-y-1">

@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
@@ -12,5 +13,23 @@ export default defineConfig({
         ws: true,
       },
     },
+    fs: {
+      // Allow serving files from the modules directory
+      allow: [
+        '..',
+        '../../modules',
+      ],
+    },
+  },
+  resolve: {
+    alias: {
+      '@modules': path.resolve(__dirname, '../../modules'),
+    },
+    // Ensure shared dependencies are resolved from frontend's node_modules
+    dedupe: ['react', 'react-dom', 'react-router-dom', 'lucide-react', 'date-fns', 'react-hot-toast'],
+  },
+  optimizeDeps: {
+    // Include module dependencies in optimization
+    include: ['react', 'react-dom', 'react-router-dom', 'lucide-react', 'date-fns', 'react-hot-toast'],
   },
 });

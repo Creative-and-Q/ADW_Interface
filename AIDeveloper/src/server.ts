@@ -97,17 +97,13 @@ function setupRoutes() {
   // API routes
   app.use('/api', apiRoutes);
 
-  // Webhook routes (lazy loaded to avoid circular dependencies)
-  app.post('/webhooks/:source', async (req: Request, res: Response) => {
-    try {
-      const { handleWebhook } = await import('./webhook-handler.js');
-      const source = req.params.source as 'github' | 'gitlab' | 'custom' | 'manual';
-      const result = await handleWebhook(req.body, source);
-      res.json(result);
-    } catch (error) {
-      logger.error('Webhook handler error', error as Error);
-      res.status(500).json({ error: 'Failed to process webhook' });
-    }
+  // DEPRECATED: Webhook routes (workflow functionality moved to WorkflowOrchestrator module)
+  app.post('/webhooks/:source', async (_req: Request, res: Response) => {
+    res.status(501).json({
+      success: false,
+      error: 'Webhook functionality has been moved to the WorkflowOrchestrator module',
+      message: 'Please use the WorkflowOrchestrator module for workflow management',
+    });
   });
 
   // Serve static files from frontend/dist

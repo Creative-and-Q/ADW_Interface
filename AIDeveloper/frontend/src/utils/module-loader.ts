@@ -36,41 +36,17 @@ export function registerBundledComponent(name: string, component: React.Componen
  */
 export async function loadModuleComponent(
   module: string,
-  componentName: string,
-  componentPath?: string
+  componentName: string
 ): Promise<React.ComponentType<any> | null> {
   // First, try bundled components (for built-in modules)
   if (bundledComponents.has(componentName)) {
     return bundledComponents.get(componentName)!;
   }
 
-  // Try to load from module's frontend directory
-  try {
-    // Construct path to module's frontend pages directory
-    // Module name should match directory name (e.g., WorkflowOrchestrator -> modules/WorkflowOrchestrator)
-    const modulePath = `../../modules/${module}/frontend/pages/${componentName}.tsx`;
-    const component = await import(modulePath);
-    return component.default || component[componentName];
-  } catch (error) {
-    // If module path fails, try componentPath if provided
-    if (componentPath) {
-      try {
-        const component = await import(`../pages/${componentName}.tsx`);
-        return component.default || component[componentName];
-      } catch (err) {
-        console.warn(`Failed to load component ${componentName} from ${componentPath}:`, err);
-      }
-    }
-    
-    // Fallback: try to import from pages directory (for backward compatibility)
-    try {
-      const component = await import(`../pages/${componentName}.tsx`);
-      return component.default || component[componentName];
-    } catch (err) {
-      console.error(`Failed to load component ${componentName} from module ${module}:`, error);
-      return null;
-    }
-  }
+  // If not found in bundled components, component not available
+  console.error(`Component ${componentName} not found in module ${module}.`);
+  console.error('Available bundled components:', Array.from(bundledComponents.keys()).join(', '));
+  return null;
 }
 
 /**
@@ -78,11 +54,10 @@ export async function loadModuleComponent(
  */
 export function lazyLoadModuleComponent(
   module: string,
-  componentName: string,
-  componentPath?: string
+  componentName: string
 ): React.LazyExoticComponent<React.ComponentType<any>> {
   return React.lazy(() =>
-    loadModuleComponent(module, componentName, componentPath).then((component) => {
+    loadModuleComponent(module, componentName).then((component) => {
       if (!component) {
         throw new Error(`Component ${componentName} not found`);
       }

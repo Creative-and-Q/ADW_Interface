@@ -36,6 +36,13 @@ class DeploymentManager extends EventEmitter {
     try {
       this.updateOperationStatus(operationId, 'running');
 
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== Install Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
       const { stdout, stderr } = await execAsync('npm install', {
         cwd: modulePath,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
@@ -48,11 +55,17 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, stderr);
       }
 
+      // Add operation end marker
+      const endMarker = `========== Install Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
       this.updateOperationStatus(operationId, 'failed', error.message);
+      const errorMarker = `========== Install Failed: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, `Error: ${error.message}`);
+      await this.addModuleLog(moduleName, errorMarker + '\n');
       throw error;
     }
   }
@@ -67,6 +80,13 @@ class DeploymentManager extends EventEmitter {
     try {
       this.updateOperationStatus(operationId, 'running');
 
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== Build Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
       // Check if package.json has a build script
       const packageJsonPath = path.join(modulePath, 'package.json');
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
@@ -75,6 +95,8 @@ class DeploymentManager extends EventEmitter {
         const message = 'No build script found in package.json - skipping';
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
+        const endMarker = `========== Build Completed (Skipped): ${new Date().toISOString()} ==========\n`;
+        await this.addModuleLog(moduleName, endMarker);
         this.updateOperationStatus(operationId, 'success');
         return operationId;
       }
@@ -91,11 +113,17 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, stderr);
       }
 
+      // Add operation end marker
+      const endMarker = `========== Build Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
       this.updateOperationStatus(operationId, 'failed', error.message);
+      const errorMarker = `========== Build Failed: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, `Error: ${error.message}`);
+      await this.addModuleLog(moduleName, errorMarker + '\n');
       throw error;
     }
   }
@@ -110,6 +138,13 @@ class DeploymentManager extends EventEmitter {
     try {
       this.updateOperationStatus(operationId, 'running');
 
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== Test Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
       // Check if package.json has a test script
       const packageJsonPath = path.join(modulePath, 'package.json');
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
@@ -118,6 +153,8 @@ class DeploymentManager extends EventEmitter {
         const message = 'No test script found in package.json - skipping';
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
+        const endMarker = `========== Test Completed (Skipped): ${new Date().toISOString()} ==========\n`;
+        await this.addModuleLog(moduleName, endMarker);
         this.updateOperationStatus(operationId, 'success');
         return operationId;
       }
@@ -134,11 +171,17 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, stderr);
       }
 
+      // Add operation end marker
+      const endMarker = `========== Test Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
       this.updateOperationStatus(operationId, 'failed', error.message);
+      const errorMarker = `========== Test Failed: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, `Error: ${error.message}`);
+      await this.addModuleLog(moduleName, errorMarker + '\n');
       throw error;
     }
   }
@@ -153,6 +196,13 @@ class DeploymentManager extends EventEmitter {
     try {
       this.updateOperationStatus(operationId, 'running');
 
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== Typecheck Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
       // Check if package.json has a typecheck script
       const packageJsonPath = path.join(modulePath, 'package.json');
       const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
@@ -161,6 +211,8 @@ class DeploymentManager extends EventEmitter {
         const message = 'No typecheck script found in package.json - skipping';
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
+        const endMarker = `========== Typecheck Completed (Skipped): ${new Date().toISOString()} ==========\n`;
+        await this.addModuleLog(moduleName, endMarker);
         this.updateOperationStatus(operationId, 'success');
         return operationId;
       }
@@ -177,6 +229,10 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, stderr);
       }
 
+      // Add operation end marker
+      const endMarker = `========== Typecheck Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
@@ -192,6 +248,8 @@ class DeploymentManager extends EventEmitter {
       const errorMsg = `Error: ${error.message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
+      const errorMarker = `========== Typecheck Failed: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, errorMarker + '\n');
       this.updateOperationStatus(operationId, 'failed', error.message);
       throw error;
     }
@@ -207,6 +265,13 @@ class DeploymentManager extends EventEmitter {
     try {
       this.updateOperationStatus(operationId, 'running');
 
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== Script "${scriptName}" Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
       // Load module.json to get the script command
       const moduleJsonPath = path.join(modulePath, 'module.json');
       const moduleJson = JSON.parse(await fs.readFile(moduleJsonPath, 'utf-8'));
@@ -216,12 +281,14 @@ class DeploymentManager extends EventEmitter {
         const message = `Script "${scriptName}" not found in module.json`;
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
+        const errorMarker = `========== Script "${scriptName}" Failed: ${new Date().toISOString()} ==========\n`;
+        await this.addModuleLog(moduleName, errorMarker);
         this.updateOperationStatus(operationId, 'failed', message);
         throw new Error(message);
       }
 
       const command = moduleJson.scripts[scriptName];
-      const logMessage = `Running script "${scriptName}": ${command}`;
+      const logMessage = `Running command: ${command}`;
       this.addOperationOutput(operationId, logMessage);
       await this.addModuleLog(moduleName, logMessage);
 
@@ -238,6 +305,10 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, stderr);
       }
 
+      // Add operation end marker
+      const endMarker = `========== Script "${scriptName}" Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
       this.updateOperationStatus(operationId, 'success');
       return operationId;
     } catch (error: any) {
@@ -253,6 +324,8 @@ class DeploymentManager extends EventEmitter {
       const errorMsg = `Error: ${error.message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
+      const errorMarker = `========== Script "${scriptName}" Failed: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, errorMarker + '\n');
       this.updateOperationStatus(operationId, 'failed', error.message);
       throw error;
     }
@@ -620,8 +693,19 @@ class DeploymentManager extends EventEmitter {
   private async writeLogsToDisk(moduleName: string, lines: string[]): Promise<void> {
     const stream = this.logStreams.get(moduleName);
     if (stream) {
+      // If we have an active stream, use it
       for (const line of lines) {
         stream.write(line + '\n');
+      }
+    } else {
+      // If no stream, append directly to log file (for one-off operations like install/build)
+      try {
+        await fs.mkdir(this.LOG_DIR, { recursive: true });
+        const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
+        const logContent = lines.join('\n') + '\n';
+        await fs.appendFile(logFilePath, logContent, 'utf-8');
+      } catch (error) {
+        console.error(`Failed to write logs to disk for ${moduleName}:`, error);
       }
     }
   }

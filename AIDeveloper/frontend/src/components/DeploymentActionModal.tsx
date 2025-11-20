@@ -69,7 +69,7 @@ export default function DeploymentActionModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div className="fixed inset-0 z-50 overflow-hidden">
       <div className="flex min-h-screen items-center justify-center p-4">
         {/* Backdrop */}
         <div
@@ -127,7 +127,7 @@ export default function DeploymentActionModal({
           </div>
 
           {/* Log Output */}
-          <div className="flex-1 p-6 overflow-hidden">
+          <div className="flex flex-col flex-1 p-6 overflow-hidden">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2">
                 <span className="text-sm font-medium text-gray-700">Console Output</span>
@@ -155,8 +155,7 @@ export default function DeploymentActionModal({
               className="bg-gray-900 rounded-lg p-4 overflow-y-auto"
               style={{
                 fontFamily: 'Monaco, Consolas, monospace',
-                height: 'calc(80vh - 300px)',
-                minHeight: '300px',
+                height: 'auto'
               }}
             >
               {logs.length === 0 ? (

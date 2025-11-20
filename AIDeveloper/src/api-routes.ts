@@ -500,34 +500,16 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
 
 /**
  * POST /api/workflows/:id/resume
+ * DEPRECATED: Workflow functionality moved to WorkflowOrchestrator module
  * Resume a failed/cancelled workflow from its last checkpoint
  * Optional body: { fromAgentIndex?: number } to resume from specific agent
  */
-router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
-  try {
-    const id = parseInt(req.params.id);
-    const { fromAgentIndex } = req.body || {};
-
-    // Import orchestrator dynamically to avoid circular dependency
-    const { Orchestrator } = await import('./orchestrator.js');
-    const orchestrator = new Orchestrator();
-
-    logger.info('Resuming workflow', { workflowId: id, fromAgentIndex });
-
-    // Resume workflow in background
-    orchestrator.resumeWorkflow(id, fromAgentIndex).catch((error) => {
-      logger.error('Workflow resume failed', error as Error, { workflowId: id });
-    });
-
-    return res.json({
-      success: true,
-      message: 'Workflow resumption started',
-      workflowId: id,
-    });
-  } catch (error) {
-    logger.error('Failed to start workflow resume', error as Error);
-    return res.status(500).json({ error: 'Failed to resume workflow' });
-  }
+router.post('/workflows/:id/resume', async (_req: Request, res: Response) => {
+  return res.status(501).json({
+    success: false,
+    error: 'Workflow functionality has been moved to the WorkflowOrchestrator module',
+    message: 'Please use the WorkflowOrchestrator module for workflow management',
+  });
 });
 
 /**
@@ -1275,6 +1257,129 @@ router.get('/auto-fix/:attemptId', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get auto-fix attempt', error as Error);
     return res.status(500).json({ error: 'Failed to get auto-fix attempt' });
+  }
+});
+
+// ============================================================================
+// Module Testing Routes
+// ============================================================================
+
+/**
+ * POST /api/modules/:name/test/:testName
+ * Run a specific test for a module
+ */
+router.post('/modules/:name/test/:testName', async (req: Request, res: Response) => {
+  try {
+    const { name, testName } = req.params;
+    const modulePath = path.join(process.cwd(), '..', 'modules', name);
+
+    // Check if module exists
+    try {
+      await fs.access(modulePath);
+    } catch {
+      return res.status(404).json({
+        success: false,
+        error: `Module ${name} not found`,
+      });
+    }
+
+    // Check if test file exists
+    const testFilePath = path.join(modulePath, 'tests', 'index.test.ts');
+    try {
+      await fs.access(testFilePath);
+    } catch {
+      return res.status(404).json({
+        success: false,
+        error: `No tests found for module ${name}`,
+      });
+    }
+
+    // Import and run the test
+    try {
+      // Dynamically import the test module
+      const testModule = await import(path.join(modulePath, 'tests', 'index.test.js'));
+
+      if (typeof testModule.runTests !== 'function') {
+        return res.status(500).json({
+          success: false,
+          error: 'Test module does not export runTests function',
+        });
+      }
+
+      // Run all tests and get results
+      const allResults = await testModule.runTests();
+
+      // Get specific test result
+      const result = allResults[testName];
+
+      if (!result) {
+        return res.status(404).json({
+          success: false,
+          error: `Test "${testName}" not found in module ${name}`,
+        });
+      }
+
+      return res.json({
+        success: result.success,
+        output: result.output,
+        duration: result.duration,
+      });
+    } catch (error: any) {
+      logger.error(`Test execution failed for ${name}:${testName}`, error);
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Test execution failed',
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to run test', error as Error);
+    return res.status(500).json({ error: 'Failed to run test' });
+  }
+});
+
+/**
+ * GET /api/modules/:name/tests
+ * Get list of available tests for a module
+ */
+router.get('/modules/:name/tests', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const modulePath = path.join(process.cwd(), '..', 'modules', name);
+
+    // Check if test file exists
+    const testFilePath = path.join(modulePath, 'tests', 'index.test.ts');
+    try {
+      await fs.access(testFilePath);
+
+      // Import the test module to get available tests
+      const testModule = await import(path.join(modulePath, 'tests', 'index.test.js'));
+
+      if (typeof testModule.runTests === 'function') {
+        const allResults = await testModule.runTests();
+        const testNames = Object.keys(allResults);
+
+        return res.json({
+          moduleName: name,
+          tests: testNames,
+          count: testNames.length,
+        });
+      }
+
+      return res.json({
+        moduleName: name,
+        tests: [],
+        count: 0,
+      });
+    } catch {
+      return res.json({
+        moduleName: name,
+        tests: [],
+        count: 0,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to get module tests', error as Error);
+    return res.status(500).json({ error: 'Failed to get module tests' });
   }
 });
 

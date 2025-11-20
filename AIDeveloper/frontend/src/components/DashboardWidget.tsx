@@ -10,7 +10,6 @@ interface DashboardWidgetProps {
   module: string;
   widgetId: string;
   componentName: string;
-  componentPath?: string;
   title?: string;
   width?: 'full' | 'half' | 'third';
 }
@@ -19,7 +18,6 @@ export default function DashboardWidget({
   module,
   widgetId,
   componentName,
-  componentPath,
   title,
   width = 'full',
 }: DashboardWidgetProps) {
@@ -28,7 +26,7 @@ export default function DashboardWidget({
   const [loading, setLoading] = React.useState(true);
 
   React.useEffect(() => {
-    loadModuleComponent(module, componentName, componentPath)
+    loadModuleComponent(module, componentName)
       .then((comp) => {
         setComponent(() => comp);
         setLoading(false);
@@ -37,7 +35,7 @@ export default function DashboardWidget({
         setError(err);
         setLoading(false);
       });
-  }, [module, componentName, componentPath]);
+  }, [module, componentName]);
 
   const widthClasses = {
     full: 'col-span-12',
