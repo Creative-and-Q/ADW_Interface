@@ -434,39 +434,171 @@ router.get('/errors', async (req: Request, res: Response) => {
 
 /**
  * POST /api/workflows/manual
- * Submit manual workflow (same as webhook but via REST)
+ * Submit manual workflow and execute it via WorkflowOrchestrator
  */
 router.post('/workflows/manual', async (req: Request, res: Response) => {
   try {
     const { workflowType, targetModule, taskDescription } = req.body;
 
     if (!workflowType || !taskDescription) {
+      logger.info('Workflow validation failed: missing required fields', {
+        workflowType,
+        taskDescription: !!taskDescription,
+      });
       return res.status(400).json({
         error: 'workflowType and taskDescription are required',
       });
     }
 
     if (!targetModule) {
+      logger.info('Workflow validation failed: missing targetModule');
       return res.status(400).json({
         error: 'targetModule is required',
       });
     }
 
-    // Forward to webhook handler
-    const response = await fetch('http://localhost:3000/webhooks/manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflowType, targetModule, taskDescription }),
+    logger.info('Creating manual workflow', {
+      workflowType,
+      targetModule,
+      taskDescription: taskDescription.substring(0, 100),
     });
 
-    const data = await response.json();
+    // Create workflow in database
+    const result = await query<any>(
+      `INSERT INTO workflows (workflow_type, target_module, status, payload, created_at, updated_at)
+       VALUES (?, ?, 'pending', ?, NOW(), NOW())`,
+      [
+        workflowType,
+        targetModule,
+        JSON.stringify({
+          source: 'custom',
+          customData: {
+            targetModule,
+            workflowType,
+            taskDescription,
+          },
+          targetModule,
+        }),
+      ]
+    );
 
-    return res.json(data);
+    const workflowId = result.insertId;
+
+    logger.info('Workflow created in database', { workflowId, workflowType, targetModule });
+
+    // Execute workflow asynchronously (don't wait for completion)
+    executeWorkflowAsync(workflowId, workflowType, targetModule, taskDescription).catch(
+      (error) => {
+        logger.error('Async workflow execution failed', error as Error);
+        logger.info('Async workflow execution details', {
+          workflowId,
+          errorMessage: error.message,
+        });
+      }
+    );
+
+    return res.json({
+      success: true,
+      workflowId,
+      message: 'Workflow created and queued for execution',
+    });
   } catch (error) {
     logger.error('Failed to submit workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to submit workflow' });
+    return res.status(500).json({
+      error: 'Failed to submit workflow',
+      message: (error as Error).message,
+    });
   }
 });
+
+/**
+ * Execute workflow asynchronously
+ */
+async function executeWorkflowAsync(
+  workflowId: number,
+  workflowType: string,
+  targetModule: string,
+  taskDescription: string
+): Promise<void> {
+  try {
+    logger.info('Starting async workflow execution', { workflowId, workflowType, targetModule });
+
+    // Update status to running
+    await query('UPDATE workflows SET status = ?, updated_at = NOW() WHERE id = ?', [
+      'running',
+      workflowId,
+    ]);
+
+    // Import WorkflowOrchestrator module
+    const { WorkflowOrchestrator } = await import(
+      '../../modules/WorkflowOrchestrator/index.js'
+    );
+
+    const orchestrator = new WorkflowOrchestrator();
+
+    // Determine working directory based on target module
+    const workingDir = path.join(process.cwd(), 'modules', targetModule);
+
+    logger.info('Executing WorkflowOrchestrator', {
+      workflowId,
+      workingDir,
+      workflowType,
+    });
+
+    // Execute the workflow
+    const output = await orchestrator.execute({
+      workflowId,
+      workflowType,
+      targetModule,
+      taskDescription,
+      workingDir,
+    });
+
+    // Update workflow status based on execution result
+    const finalStatus = output.success ? 'completed' : 'failed';
+    await query(
+      'UPDATE workflows SET status = ?, completed_at = NOW(), updated_at = NOW() WHERE id = ?',
+      [finalStatus, workflowId]
+    );
+
+    logger.info('Workflow execution completed', {
+      workflowId,
+      status: finalStatus,
+      artifactsCount: output.artifacts.length,
+    });
+
+    // Store artifacts if any
+    for (const artifact of output.artifacts) {
+      await query(
+        `INSERT INTO workflow_artifacts (workflow_id, artifact_type, content, file_path, metadata, created_at)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [
+          workflowId,
+          artifact.type,
+          artifact.content,
+          artifact.filePath || null,
+          JSON.stringify(artifact.metadata || {}),
+        ]
+      );
+    }
+  } catch (error) {
+    logger.error('Workflow execution failed', error as Error);
+    logger.info('Workflow execution error details', { workflowId });
+
+    // Update workflow status to failed
+    await query(
+      `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [workflowId]
+    );
+
+    // Log the error in agent_executions table for visibility
+    await query(
+      `INSERT INTO agent_executions (workflow_id, agent_type, status, error_message)
+       VALUES (?, 'orchestrator', 'failed', ?)`,
+      [workflowId, (error as Error).message]
+    );
+  }
+}
 
 /**
  * DELETE /api/workflows/:id

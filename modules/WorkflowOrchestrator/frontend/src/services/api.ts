@@ -14,7 +14,7 @@ export const workflowsAPI = {
   },
 
   create: async (workflow: any) => {
-    const response = await axios.post(`${API_BASE}/workflows`, workflow);
+    const response = await axios.post(`${API_BASE}/workflows/manual`, workflow);
     return { data: response.data };
   },
 
