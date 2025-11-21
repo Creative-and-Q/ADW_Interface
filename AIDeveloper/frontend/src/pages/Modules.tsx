@@ -87,6 +87,13 @@ export default function Modules() {
   const [deploymentSuccess, setDeploymentSuccess] = useState(false);
   const deploymentPollInterval = useRef<number | null>(null);
 
+  // Branch switching state
+  const [branchModalOpen, setBranchModalOpen] = useState(false);
+  const [branchModalModule, setBranchModalModule] = useState<string>('');
+  const [availableBranches, setAvailableBranches] = useState<any[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [switchingBranch, setSwitchingBranch] = useState(false);
+
   useEffect(() => {
     loadModules();
   }, []);
@@ -505,6 +512,54 @@ export default function Modules() {
     return envVar.value || envVar.definition.defaultValue || '';
   };
 
+  const handleOpenBranchModal = async (moduleName: string) => {
+    setBranchModalModule(moduleName);
+    setBranchModalOpen(true);
+    setLoadingBranches(true);
+    try {
+      const response = await fetch(`/api/modules/${moduleName}/branches`);
+      const data = await response.json();
+      setAvailableBranches(data.branches || []);
+    } catch (error) {
+      console.error('Failed to load branches:', error);
+      toast.error('Failed to load branches');
+      setAvailableBranches([]);
+    } finally {
+      setLoadingBranches(false);
+    }
+  };
+
+  const handleSwitchBranch = async (branch: string) => {
+    setSwitchingBranch(true);
+    try {
+      const response = await fetch(`/api/modules/${branchModalModule}/branches/switch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (data.hasUncommittedChanges) {
+          toast.error(data.error);
+        } else {
+          toast.error(data.error || 'Failed to switch branch');
+        }
+        return;
+      }
+
+      toast.success(`Switched to ${branch}`);
+      setBranchModalOpen(false);
+      // Reload modules to get updated branch info
+      await loadModules();
+    } catch (error) {
+      console.error('Failed to switch branch:', error);
+      toast.error('Failed to switch branch');
+    } finally {
+      setSwitchingBranch(false);
+    }
+  };
+
   const toggleGroupCollapse = (groupName: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
@@ -764,10 +819,17 @@ export default function Modules() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-4 text-xs text-gray-500">
                           {module.hasGit && (
-                            <div className="flex items-center space-x-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenBranchModal(module.name);
+                              }}
+                              className="flex items-center space-x-1 hover:text-blue-600 transition-colors cursor-pointer"
+                              title="Switch branch"
+                            >
                               <GitBranch className="h-3 w-3" />
                               <span>{module.gitStatus?.branch || 'main'}</span>
-                            </div>
+                            </button>
                           )}
                           {module.hasPrompts && (
                             <div className="flex items-center space-x-1">
@@ -1260,6 +1322,85 @@ export default function Modules() {
                   </div>
                 </div>
               </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Branch Switcher Modal */}
+      {branchModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center">
+                <GitBranch className="h-5 w-5 mr-2" />
+                Switch Branch - {branchModalModule}
+              </h3>
+              <button
+                onClick={() => setBranchModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {loadingBranches ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {availableBranches.map((branch) => (
+                  <button
+                    key={branch.name}
+                    onClick={() => !branch.isCurrent && handleSwitchBranch(branch.name)}
+                    disabled={branch.isCurrent || switchingBranch}
+                    className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+                      branch.isCurrent
+                        ? 'bg-blue-50 border-blue-200 cursor-default'
+                        : switchingBranch
+                        ? 'bg-gray-50 border-gray-200 cursor-not-allowed'
+                        : 'bg-white border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <GitBranch className={`h-4 w-4 ${branch.isCurrent ? 'text-blue-600' : 'text-gray-400'}`} />
+                        <span className={`font-medium ${branch.isCurrent ? 'text-blue-600' : 'text-gray-900'}`}>
+                          {branch.name}
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {branch.isCurrent && (
+                          <CheckCircle className="h-4 w-4 text-blue-600" />
+                        )}
+                        {branch.isLocal && (
+                          <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                            Local
+                          </span>
+                        )}
+                        {branch.isRemote && !branch.isLocal && (
+                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                            Remote
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                {availableBranches.length === 0 && (
+                  <p className="text-center text-gray-500 py-4">No branches available</p>
+                )}
+              </div>
+            )}
+
+            {switchingBranch && (
+              <div className="mt-4 flex items-center justify-center space-x-2 text-blue-600">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span className="text-sm">Switching branch...</span>
+              </div>
             )}
           </div>
         </div>
