@@ -17,6 +17,7 @@ import {
   updateModulePrompt,
   getModuleStats,
   importModule,
+  getModulesPath,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
@@ -1221,6 +1222,173 @@ router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to update auto-load setting', error as Error);
     return res.status(500).json({ error: 'Failed to update auto-load setting' });
+  }
+});
+
+/**
+ * GET /api/modules/:name/branches
+ * Get list of git branches for a module
+ */
+router.get('/modules/:name/branches', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const modulePath = path.join(getModulesPath(), name);
+
+    // Check if module exists and has git
+    try {
+      await fs.access(path.join(modulePath, '.git'));
+    } catch {
+      return res.status(404).json({ error: 'Module not found or not a git repository' });
+    }
+
+    // Fetch latest from remote
+    await import('child_process').then(({ exec }) => {
+      return new Promise((resolve, reject) => {
+        exec('git fetch --all', { cwd: modulePath }, (error) => {
+          if (error) reject(error);
+          else resolve(null);
+        });
+      });
+    });
+
+    // Get all branches
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    const { stdout } = await execAsync('git branch -a', { cwd: modulePath });
+    const currentBranch = (await execAsync('git branch --show-current', { cwd: modulePath })).stdout.trim();
+
+    const branchMap = new Map<string, any>();
+
+    // Parse branches
+    stdout.split('\n').forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.includes('->')) return;
+
+      const isCurrent = trimmed.startsWith('*');
+      const branchLine = trimmed.replace(/^\*\s+/, '');
+
+      if (branchLine.startsWith('remotes/origin/')) {
+        const name = branchLine.replace('remotes/origin/', '');
+        const existing = branchMap.get(name);
+        if (existing) {
+          existing.isRemote = true;
+        } else {
+          branchMap.set(name, {
+            name,
+            isLocal: false,
+            isRemote: true,
+            isCurrent: false,
+          });
+        }
+      } else {
+        const existing = branchMap.get(branchLine);
+        if (existing) {
+          existing.isLocal = true;
+          if (isCurrent) existing.isCurrent = true;
+        } else {
+          branchMap.set(branchLine, {
+            name: branchLine,
+            isLocal: true,
+            isRemote: false,
+            isCurrent,
+          });
+        }
+      }
+    });
+
+    const branches = Array.from(branchMap.values()).sort((a: any, b: any) => {
+      if (a.isCurrent) return -1;
+      if (b.isCurrent) return 1;
+      if (a.isLocal && !b.isLocal) return -1;
+      if (!a.isLocal && b.isLocal) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return res.json({
+      currentBranch,
+      branches
+    });
+  } catch (error) {
+    logger.error('Failed to list branches', error as Error);
+    return res.status(500).json({ error: 'Failed to list branches' });
+  }
+});
+
+/**
+ * POST /api/modules/:name/branches/switch
+ * Switch git branch for a module
+ */
+router.post('/modules/:name/branches/switch', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { branch } = req.body;
+
+    if (!branch) {
+      return res.status(400).json({ error: 'branch is required' });
+    }
+
+    const modulePath = path.join(getModulesPath(), name);
+
+    // Check if module exists and has git
+    try {
+      await fs.access(path.join(modulePath, '.git'));
+    } catch {
+      return res.status(404).json({ error: 'Module not found or not a git repository' });
+    }
+
+    logger.info('Switching module branch', { module: name, branch });
+
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    // Get current branch
+    const previousBranch = (await execAsync('git branch --show-current', { cwd: modulePath })).stdout.trim();
+
+    // Check for uncommitted changes
+    const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: modulePath });
+    if (statusOutput.trim().length > 0) {
+      return res.status(400).json({
+        error: 'Module has uncommitted changes. Please commit or stash them first.',
+        hasUncommittedChanges: true
+      });
+    }
+
+    // Check if branch exists locally
+    const { stdout: branchList } = await execAsync('git branch', { cwd: modulePath });
+    const branchExists = branchList.split('\n').some(line =>
+      line.trim().replace(/^\*\s+/, '') === branch
+    );
+
+    try {
+      if (!branchExists) {
+        // Branch doesn't exist locally, try to check it out from remote
+        await execAsync(`git checkout -b ${branch} origin/${branch}`, { cwd: modulePath });
+      } else {
+        // Branch exists locally, just checkout
+        await execAsync(`git checkout ${branch}`, { cwd: modulePath });
+      }
+
+      logger.info('Successfully switched module branch', { module: name, from: previousBranch, to: branch });
+
+      return res.json({
+        success: true,
+        message: `Switched from ${previousBranch} to ${branch}`,
+        previousBranch,
+        newBranch: branch
+      });
+    } catch (checkoutError: any) {
+      logger.error('Failed to switch branch', checkoutError as Error);
+      return res.status(500).json({
+        error: `Failed to switch branch: ${checkoutError.message}`,
+        previousBranch
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to switch branch', error as Error);
+    return res.status(500).json({ error: 'Failed to switch branch' });
   }
 });
 
