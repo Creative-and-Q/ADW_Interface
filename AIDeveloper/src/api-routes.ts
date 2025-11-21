@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import { query } from './database.js';
-import { WorkflowStatus, AgentStatus } from './types.js';
+import { WorkflowStatus, AgentStatus, WorkflowOutputMode, WorkflowType } from './types.js';
 import * as logger from './utils/logger.js';
 import { getExecutionLogs } from './utils/execution-logger.js';
 import {
@@ -33,6 +33,70 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Intelligently determine workflow output mode based on task description and type
+ * @param taskDescription - The workflow task description
+ * @param workflowType - The workflow type
+ * @returns The appropriate output mode
+ */
+function determineOutputMode(taskDescription: string, workflowType: string): WorkflowOutputMode {
+  const lowerTask = taskDescription.toLowerCase();
+
+  // Keywords that suggest standalone documentation (download only)
+  const standaloneDocKeywords = [
+    'explain what',
+    'explain how',
+    'document what',
+    'document how',
+    'describe what',
+    'describe how',
+    'what does',
+    'how does',
+    'generate documentation for',
+    'create documentation for',
+    'write documentation about',
+  ];
+
+  // Keywords that suggest project integration (PR)
+  const integrationKeywords = [
+    'add documentation to',
+    'update documentation in',
+    'add readme',
+    'update readme',
+    'add docs to',
+    'missing documentation',
+    'needs documentation',
+    'should be documented',
+    'document the code',
+    'add comments',
+  ];
+
+  // Check for integration keywords first (higher priority)
+  const hasIntegrationKeywords = integrationKeywords.some(keyword => lowerTask.includes(keyword));
+  if (hasIntegrationKeywords) {
+    return WorkflowOutputMode.PR;
+  }
+
+  // Check for standalone documentation keywords
+  const hasStandaloneKeywords = standaloneDocKeywords.some(keyword => lowerTask.includes(keyword));
+  if (hasStandaloneKeywords && workflowType === WorkflowType.DOCUMENTATION) {
+    return WorkflowOutputMode.DOWNLOAD;
+  }
+
+  // Check if it's a documentation workflow without clear integration intent
+  if (workflowType === WorkflowType.DOCUMENTATION) {
+    // If no clear integration keywords, provide both options
+    return WorkflowOutputMode.BOTH;
+  }
+
+  // Default to PR for code changes (feature, bugfix, refactor)
+  return WorkflowOutputMode.PR;
+}
 
 // ============================================================================
 // Module Plugin Routes (MUST BE BEFORE PROXY ROUTES)
@@ -201,6 +265,96 @@ router.get('/workflows/:id/logs', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to fetch execution logs', error as Error);
     return res.status(500).json({ error: 'Failed to fetch execution logs' });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/artifacts/:artifactId/download
+ * Download a specific artifact as a file
+ */
+router.get('/workflows/:id/artifacts/:artifactId/download', async (req: Request, res: Response) => {
+  try {
+    const workflowId = parseInt(req.params.id);
+    const artifactId = parseInt(req.params.artifactId);
+
+    // Get artifact from database
+    const [artifact] = await query<any>(
+      'SELECT * FROM workflow_artifacts WHERE id = ? AND workflow_id = ?',
+      [artifactId, workflowId]
+    );
+
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+
+    // Determine filename
+    const filename = artifact.file_path || `${artifact.artifact_type}-${artifactId}.txt`;
+    const extension = path.extname(filename) || '.txt';
+    const basename = path.basename(filename, extension);
+
+    // Set headers for file download
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${basename}${extension}"`);
+
+    // Send content
+    return res.send(artifact.content);
+  } catch (error) {
+    logger.error('Failed to download artifact', error as Error);
+    return res.status(500).json({ error: 'Failed to download artifact' });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/artifacts/download-all
+ * Download all artifacts as a zip file
+ */
+router.get('/workflows/:id/artifacts/download-all', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const workflowId = parseInt(req.params.id);
+
+    // Get workflow info
+    const [workflow] = await query<any>('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+    if (!workflow) {
+      res.status(404).json({ error: 'Workflow not found' });
+      return;
+    }
+
+    // Get all artifacts
+    const artifacts = await query<any>(
+      'SELECT * FROM workflow_artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
+      [workflowId]
+    );
+
+    if (artifacts.length === 0) {
+      res.status(404).json({ error: 'No artifacts found' });
+      return;
+    }
+
+    // Create zip archive
+    const archiver = (await import('archiver')).default;
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    // Set headers
+    const zipFilename = `workflow-${workflowId}-artifacts.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+
+    // Pipe archive to response
+    archive.pipe(res);
+
+    // Add each artifact to archive
+    for (const artifact of artifacts) {
+      const filename = artifact.file_path || `${artifact.artifact_type}-${artifact.id}.txt`;
+      archive.append(artifact.content, { name: filename });
+    }
+
+    // Finalize archive
+    await archive.finalize();
+
+    logger.info('Downloaded all artifacts', { workflowId, count: artifacts.length });
+  } catch (error) {
+    logger.error('Failed to download all artifacts', error as Error);
+    res.status(500).json({ error: 'Failed to download all artifacts' });
   }
 });
 
@@ -466,18 +620,23 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       });
     }
 
+    // Intelligently determine output mode based on task description
+    const outputMode = determineOutputMode(taskDescription, workflowType);
+
     logger.info('Creating manual workflow', {
       workflowType,
       targetModule,
       taskDescription: taskDescription.substring(0, 100),
+      outputMode,
     });
 
     // Create workflow in database
     const result = await query<any>(
-      `INSERT INTO workflows (workflow_type, target_module, status, payload, created_at, updated_at)
-       VALUES (?, ?, 'pending', ?, NOW(), NOW())`,
+      `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())`,
       [
         workflowType,
+        outputMode,
         targetModule,
         JSON.stringify({
           source: 'custom',
@@ -485,6 +644,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
             targetModule,
             workflowType,
             taskDescription,
+            outputMode,
           },
           targetModule,
         }),
@@ -531,9 +691,16 @@ async function executeWorkflowAsync(
 ): Promise<void> {
   // Declare branchName outside try block so it's accessible in catch
   let branchName = '';
+  let outputMode: WorkflowOutputMode = WorkflowOutputMode.PR;
 
   try {
     logger.info('Starting async workflow execution', { workflowId, workflowType, targetModule });
+
+    // Get workflow output mode from database
+    const [workflow] = await query<any>('SELECT output_mode FROM workflows WHERE id = ?', [workflowId]);
+    if (workflow && workflow.output_mode) {
+      outputMode = workflow.output_mode as WorkflowOutputMode;
+    }
 
     // Update status to running
     await query('UPDATE workflows SET status = ?, updated_at = NOW() WHERE id = ?', [
@@ -680,10 +847,10 @@ async function executeWorkflowAsync(
       });
     }
 
-    // If workflow completed successfully, push branch and create PR
-    if (finalStatus === 'completed') {
+    // If workflow completed successfully, push branch and create PR (based on output mode)
+    if (finalStatus === 'completed' && (outputMode === WorkflowOutputMode.PR || outputMode === WorkflowOutputMode.BOTH)) {
       try {
-        logger.info('Pushing branch to remote and creating PR', { workflowId, branchName });
+        logger.info('Pushing branch to remote and creating PR', { workflowId, branchName, outputMode });
 
         // Push branch to remote
         const git = getGit(repoPath);
