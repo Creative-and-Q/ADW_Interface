@@ -167,7 +167,7 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
 
     // Get artifacts
     const artifacts = await query<any>(
-      'SELECT * FROM artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
+      'SELECT * FROM workflow_artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
       [id]
     );
 
