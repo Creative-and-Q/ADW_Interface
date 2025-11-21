@@ -20,7 +20,13 @@ import {
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
-import { createWorkflowDirectory, getWorkflowRepoPath } from './utils/workflow-directory-manager.js';
+import {
+  createWorkflowDirectory,
+  getWorkflowRepoPath,
+  saveWorkflowArtifact,
+  updateWorkflowStatus,
+  getWorkflowDirectory
+} from './utils/workflow-directory-manager.js';
 import { getGit } from './utils/git-helper.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -522,6 +528,9 @@ async function executeWorkflowAsync(
   targetModule: string,
   taskDescription: string
 ): Promise<void> {
+  // Declare branchName outside try block so it's accessible in catch
+  let branchName = '';
+
   try {
     logger.info('Starting async workflow execution', { workflowId, workflowType, targetModule });
 
@@ -537,7 +546,7 @@ async function executeWorkflowAsync(
       .replace(/[^a-z0-9]+/g, '-')
       .substring(0, 50)
       .replace(/-+$/, '');
-    const branchName = `workflow-${workflowType}-${workflowId}-${sanitizedTask}`;
+    branchName = `workflow-${workflowType}-${workflowId}-${sanitizedTask}`;
 
     logger.info('Creating workflow directory and branch', {
       workflowId,
@@ -590,13 +599,18 @@ async function executeWorkflowAsync(
 
     const orchestrator = new WorkflowOrchestrator();
 
-    // Use the workflow repo path as working directory
-    const workingDir = repoPath;
+    // Determine working directory - point to the actual module being worked on
+    // For AIDeveloper, use the cloned repo in workflow directory
+    // For other modules, use the module's actual directory
+    const workingDir = targetModule === 'AIDeveloper'
+      ? repoPath
+      : path.join(process.cwd(), '..', 'modules', targetModule);
 
     logger.info('Executing WorkflowOrchestrator', {
       workflowId,
       workingDir,
       workflowType,
+      targetModule,
     });
 
     // Execute the workflow
@@ -622,8 +636,9 @@ async function executeWorkflowAsync(
       artifactsCount: output.artifacts.length,
     });
 
-    // Store artifacts if any
+    // Store artifacts in database and save to filesystem
     for (const artifact of output.artifacts) {
+      // Save to database
       await query(
         `INSERT INTO workflow_artifacts (workflow_id, artifact_type, content, file_path, metadata, created_at)
          VALUES (?, ?, ?, ?, ?, NOW())`,
@@ -635,10 +650,99 @@ async function executeWorkflowAsync(
           JSON.stringify(artifact.metadata || {}),
         ]
       );
+
+      // Save to workflow artifacts directory
+      try {
+        const artifactFileName = artifact.filePath || `${artifact.type}-${Date.now()}.md`;
+        await saveWorkflowArtifact(workflowId, branchName, artifactFileName, artifact.content);
+        logger.info('Saved artifact to filesystem', { workflowId, artifactFileName });
+      } catch (error) {
+        logger.warn('Failed to save artifact to filesystem', {
+          workflowId,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    // Save execution summary to workflow logs
+    try {
+      const workflowDir = getWorkflowDirectory(workflowId, branchName);
+      const executionLog = {
+        workflowId,
+        workflowType,
+        targetModule,
+        taskDescription,
+        branchName,
+        status: finalStatus,
+        timestamp: new Date().toISOString(),
+        artifacts: output.artifacts.map(a => ({
+          type: a.type,
+          filePath: a.filePath,
+          contentLength: a.content.length,
+        })),
+        summary: output.summary,
+      };
+      await fs.writeFile(
+        path.join(workflowDir, 'logs', `execution-${Date.now()}.json`),
+        JSON.stringify(executionLog, null, 2)
+      );
+      logger.info('Saved execution log to filesystem', { workflowId });
+    } catch (error) {
+      logger.warn('Failed to save execution log', {
+        workflowId,
+        error: (error as Error).message,
+      });
+    }
+
+    // Update workflow README with final status
+    try {
+      await updateWorkflowStatus(workflowId, branchName, finalStatus as any, output.summary);
+      logger.info('Updated workflow README', { workflowId, status: finalStatus });
+    } catch (error) {
+      logger.warn('Failed to update workflow README', {
+        workflowId,
+        error: (error as Error).message,
+      });
     }
   } catch (error) {
     logger.error('Workflow execution failed', error as Error);
     logger.info('Workflow execution error details', { workflowId });
+
+    // Save error log to workflow logs directory if branchName was defined
+    try {
+      if (branchName) {
+        const workflowDir = getWorkflowDirectory(workflowId, branchName);
+        const errorLog = {
+          workflowId,
+          workflowType,
+          targetModule,
+          taskDescription,
+          status: 'failed',
+          timestamp: new Date().toISOString(),
+          error: {
+            message: (error as Error).message,
+            stack: (error as Error).stack,
+          },
+        };
+        await fs.writeFile(
+          path.join(workflowDir, 'logs', `error-${Date.now()}.json`),
+          JSON.stringify(errorLog, null, 2)
+        );
+
+        // Update workflow README with failure status
+        await updateWorkflowStatus(
+          workflowId,
+          branchName,
+          'failed',
+          `Workflow failed: ${(error as Error).message}`
+        );
+      }
+    } catch (logError) {
+      logger.warn('Failed to save error log to filesystem', {
+        workflowId,
+        error: (logError as Error).message,
+      });
+    }
 
     // Update workflow status to failed
     await query(
