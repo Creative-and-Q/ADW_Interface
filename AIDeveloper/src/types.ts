@@ -11,6 +11,13 @@ export enum WorkflowType {
   REVIEW = 'review',
 }
 
+// Workflow output modes
+export enum WorkflowOutputMode {
+  PR = 'pr',                    // Push branch and create PR (default for code changes)
+  DOWNLOAD = 'download',        // Generate artifacts for download only (e.g., standalone docs)
+  BOTH = 'both',               // Both PR and downloadable artifacts
+}
+
 // Workflow statuses
 export enum WorkflowStatus {
   PENDING = 'pending',
