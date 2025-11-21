@@ -76,9 +76,10 @@ async function cloneRepository(
     logger.info('Cloning module repository into workflow directory', { workflowDir, targetModule });
 
     // Get the repository URL from the target module
+    // Note: config.workspace.root is the monorepo root, not the AIDeveloper directory
     const modulePath = targetModule === 'AIDeveloper'
-      ? config.workspace.root
-      : path.join(config.workspace.root, '..', 'modules', targetModule);
+      ? path.join(config.workspace.root, 'AIDeveloper')
+      : path.join(config.workspace.root, 'modules', targetModule);
 
     const git = getGit(modulePath);
 
