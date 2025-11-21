@@ -58,83 +58,92 @@ export function getWorkflowDirectory(workflowId: number, branchName: string): st
  */
 export function getWorkflowRepoPath(workflowId: number, branchName: string): string {
   const workflowDir = getWorkflowDirectory(workflowId, branchName);
-  return path.join(workflowDir, 'repo', 'AIDeveloper');
+  return path.join(workflowDir, 'repo');
 }
 
 /**
  * Clone repository into workflow directory
+ * @param workflowDir - The workflow directory path
+ * @param targetModule - The module to clone (e.g., 'AIDeveloper', 'WorkflowOrchestrator')
+ * @param baseBranch - The base branch to checkout (default: 'master')
  */
 async function cloneRepository(
   workflowDir: string,
-  developBranch: string = 'develop'
+  targetModule: string,
+  baseBranch: string = 'master'
 ): Promise<void> {
   try {
-    logger.info('Cloning repository into workflow directory', { workflowDir });
+    logger.info('Cloning module repository into workflow directory', { workflowDir, targetModule });
 
-    // Get the repository URL from the main workspace
-    const repoPath = config.workspace.root;
-    const git = getGit(repoPath);
+    // Get the repository URL from the target module
+    const modulePath = targetModule === 'AIDeveloper'
+      ? config.workspace.root
+      : path.join(config.workspace.root, '..', 'modules', targetModule);
+
+    const git = getGit(modulePath);
 
     // Get remote URL
     const remotes = await git.getRemotes(true);
     const origin = remotes.find(r => r.name === 'origin');
 
     if (!origin || !origin.refs.fetch) {
-      throw new Error('No origin remote found');
+      throw new Error(`No origin remote found for ${targetModule}`);
     }
 
     const repoUrl = origin.refs.fetch;
     const repoDir = path.join(workflowDir, 'repo');
 
     // Clone the repository
-    logger.info('Cloning repository', { url: repoUrl, target: repoDir });
+    logger.info('Cloning repository', { module: targetModule, url: repoUrl, target: repoDir });
     execSync(`git clone ${repoUrl} ${repoDir}`, {
       stdio: 'inherit',
       cwd: workflowDir,
       env: getSSHEnvironment(),
     });
 
-    // Checkout develop branch
-    logger.info('Checking out develop branch', { branch: developBranch });
+    // Checkout base branch (master for modules, develop for AIDeveloper)
+    logger.info('Checking out base branch', { branch: baseBranch });
     const workflowGit = getGit(repoDir);
-    await workflowGit.checkout(developBranch);
+    await workflowGit.checkout(baseBranch);
 
-    // Install dependencies (including devDependencies)
-    logger.info('Installing dependencies');
+    // Install dependencies if package.json exists
+    const packageJsonPath = path.join(repoDir, 'package.json');
     try {
+      await fs.access(packageJsonPath);
+      logger.info('Installing dependencies');
+
       const installOutput = execSync('npm install --include=dev', {
-        cwd: path.join(repoDir, 'AIDeveloper'),
+        cwd: repoDir,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        env: { ...process.env, NODE_ENV: 'development' }, // Ensure devDependencies are installed
+        env: { ...process.env, NODE_ENV: 'development' },
       });
       logger.info('Dependencies installed successfully', { output: installOutput.slice(-500) });
-    } catch (error: any) {
-      logger.error('npm install failed', error, {
-        stdout: error.stdout?.toString().slice(-500),
-        stderr: error.stderr?.toString().slice(-500),
-      });
-      throw new Error(`npm install failed: ${error.message}`);
+
+      // Build the project if build script exists
+      try {
+        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+        if (packageJson.scripts && packageJson.scripts.build) {
+          logger.info('Building project');
+          const buildOutput = execSync('npm run build', {
+            cwd: repoDir,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024,
+          });
+          logger.info('Build completed successfully', { output: buildOutput.slice(-500) });
+        }
+      } catch (buildError: any) {
+        logger.warn('Build step skipped or failed', {
+          error: buildError.message,
+          stdout: buildError.stdout?.toString().slice(-500),
+          stderr: buildError.stderr?.toString().slice(-500),
+        });
+      }
+    } catch (error) {
+      logger.info('No package.json found, skipping npm install');
     }
 
-    // Build the project
-    logger.info('Building project');
-    try {
-      const buildOutput = execSync('npm run build', {
-        cwd: path.join(repoDir, 'AIDeveloper'),
-        encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-      });
-      logger.info('Build completed successfully', { output: buildOutput.slice(-500) });
-    } catch (error: any) {
-      logger.error('npm run build failed', error, {
-        stdout: error.stdout?.toString().slice(-500),
-        stderr: error.stderr?.toString().slice(-500),
-      });
-      throw new Error(`Build failed: ${error.message}`);
-    }
-
-    logger.info('Repository cloned and built successfully');
+    logger.info('Repository cloned successfully', { module: targetModule });
   } catch (error) {
     logger.error('Failed to clone repository', error as Error);
     throw error;
@@ -147,7 +156,8 @@ async function cloneRepository(
 export async function createWorkflowDirectory(
   workflowId: number,
   branchName: string,
-  workflowType: WorkflowType
+  workflowType: WorkflowType,
+  targetModule: string
 ): Promise<string> {
   try {
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
@@ -160,8 +170,11 @@ export async function createWorkflowDirectory(
     await fs.mkdir(path.join(workflowDir, 'artifacts'), { recursive: true });
     await fs.mkdir(path.join(workflowDir, 'stages'), { recursive: true });
 
-    // Clone repository into workflow directory
-    await cloneRepository(workflowDir);
+    // Determine base branch: 'develop' for AIDeveloper, 'master' for modules
+    const baseBranch = targetModule === 'AIDeveloper' ? 'develop' : 'master';
+
+    // Clone the target module's repository into workflow directory
+    await cloneRepository(workflowDir, targetModule, baseBranch);
 
     // Create README
     const readme = `# Workflow ${workflowId}: ${workflowType}

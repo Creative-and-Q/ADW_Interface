@@ -553,13 +553,14 @@ async function executeWorkflowAsync(
       workflowId,
       branchName,
       workflowType,
+      targetModule,
     });
 
-    // Create workflow directory structure (with repo clone)
-    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any);
+    // Create workflow directory structure (clones the target module's specific repo)
+    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any, targetModule);
     const repoPath = getWorkflowRepoPath(workflowId, branchName);
 
-    // Create and checkout new branch in workflow repo
+    // Create and checkout new branch in the cloned repo
     const git = getGit(repoPath);
     await git.checkoutLocalBranch(branchName);
 
@@ -567,32 +568,8 @@ async function executeWorkflowAsync(
       workflowDir,
       repoPath,
       branchName,
+      targetModule,
     });
-
-    // Also create branch in target module if it's not AIDeveloper
-    // This creates the branch in the CLONED module inside the workflow directory
-    if (targetModule !== 'AIDeveloper') {
-      const targetModulePath = path.join(workflowDir, 'repo', 'modules', targetModule);
-      try {
-        await fs.access(path.join(targetModulePath, '.git'));
-        const targetGit = getGit(targetModulePath);
-
-        // Check if branch already exists
-        const branches = await targetGit.branchLocal();
-        if (!branches.all.includes(branchName)) {
-          await targetGit.checkoutLocalBranch(branchName);
-          logger.info('Created branch in cloned target module', { targetModule, branchName, path: targetModulePath });
-        } else {
-          await targetGit.checkout(branchName);
-          logger.info('Checked out existing branch in cloned target module', { targetModule, branchName, path: targetModulePath });
-        }
-      } catch (error) {
-        logger.warn('Could not create branch in cloned target module (not a git repo or error)', {
-          targetModule,
-          error: (error as Error).message,
-        });
-      }
-    }
 
     // Import WorkflowOrchestrator module
     const { WorkflowOrchestrator } = await import(
@@ -601,12 +578,8 @@ async function executeWorkflowAsync(
 
     const orchestrator = new WorkflowOrchestrator();
 
-    // Determine working directory - ALWAYS use the cloned repo in workflow directory
-    // For AIDeveloper, use the cloned AIDeveloper directory
-    // For other modules, use the cloned module inside the workflow repo
-    const workingDir = targetModule === 'AIDeveloper'
-      ? repoPath
-      : path.join(workflowDir, 'repo', 'modules', targetModule);
+    // Working directory is always the cloned repo (which is the target module)
+    const workingDir = repoPath;
 
     logger.info('Executing WorkflowOrchestrator', {
       workflowId,
