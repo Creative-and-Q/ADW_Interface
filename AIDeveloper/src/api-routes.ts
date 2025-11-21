@@ -20,6 +20,8 @@ import {
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
+import { createWorkflowDirectory, getWorkflowRepoPath } from './utils/workflow-directory-manager.js';
+import { getGit } from './utils/git-helper.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -529,6 +531,58 @@ async function executeWorkflowAsync(
       workflowId,
     ]);
 
+    // Generate branch name for this workflow
+    const sanitizedTask = taskDescription
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .substring(0, 50)
+      .replace(/-+$/, '');
+    const branchName = `workflow-${workflowType}-${workflowId}-${sanitizedTask}`;
+
+    logger.info('Creating workflow directory and branch', {
+      workflowId,
+      branchName,
+      workflowType,
+    });
+
+    // Create workflow directory structure (with repo clone)
+    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any);
+    const repoPath = getWorkflowRepoPath(workflowId, branchName);
+
+    // Create and checkout new branch in workflow repo
+    const git = getGit(repoPath);
+    await git.checkoutLocalBranch(branchName);
+
+    logger.info('Workflow directory and branch created', {
+      workflowDir,
+      repoPath,
+      branchName,
+    });
+
+    // Also create branch in target module if it's not AIDeveloper
+    if (targetModule !== 'AIDeveloper') {
+      const targetModulePath = path.join(process.cwd(), '..', 'modules', targetModule);
+      try {
+        await fs.access(path.join(targetModulePath, '.git'));
+        const targetGit = getGit(targetModulePath);
+
+        // Check if branch already exists
+        const branches = await targetGit.branchLocal();
+        if (!branches.all.includes(branchName)) {
+          await targetGit.checkoutLocalBranch(branchName);
+          logger.info('Created branch in target module', { targetModule, branchName });
+        } else {
+          await targetGit.checkout(branchName);
+          logger.info('Checked out existing branch in target module', { targetModule, branchName });
+        }
+      } catch (error) {
+        logger.warn('Could not create branch in target module (not a git repo or error)', {
+          targetModule,
+          error: (error as Error).message,
+        });
+      }
+    }
+
     // Import WorkflowOrchestrator module
     const { WorkflowOrchestrator } = await import(
       '../../modules/WorkflowOrchestrator/index.js'
@@ -536,8 +590,8 @@ async function executeWorkflowAsync(
 
     const orchestrator = new WorkflowOrchestrator();
 
-    // Determine working directory based on target module
-    const workingDir = path.join(process.cwd(), 'modules', targetModule);
+    // Use the workflow repo path as working directory
+    const workingDir = repoPath;
 
     logger.info('Executing WorkflowOrchestrator', {
       workflowId,
@@ -551,6 +605,7 @@ async function executeWorkflowAsync(
       workflowType,
       targetModule,
       taskDescription,
+      branchName,
       workingDir,
     });
 
