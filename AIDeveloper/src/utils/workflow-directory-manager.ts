@@ -152,13 +152,68 @@ async function cloneRepository(
 }
 
 /**
+ * Clone an additional module as a sibling in the workflow directory
+ * @param workflowDir - The workflow directory path
+ * @param moduleName - The module to clone
+ */
+async function cloneAdditionalModule(
+  workflowDir: string,
+  moduleName: string
+): Promise<void> {
+  try {
+    logger.info('Cloning additional module for multi-module workflow', { workflowDir, moduleName });
+
+    // Get the repository URL from the module
+    const modulePath = moduleName === 'AIDeveloper'
+      ? path.join(config.workspace.root, 'AIDeveloper')
+      : path.join(config.workspace.root, 'modules', moduleName);
+
+    const git = getGit(modulePath);
+
+    // Get remote URL
+    const remotes = await git.getRemotes(true);
+    const origin = remotes.find(r => r.name === 'origin');
+
+    if (!origin || !origin.refs.fetch) {
+      throw new Error(`No origin remote found for ${moduleName}`);
+    }
+
+    const repoUrl = origin.refs.fetch;
+    // Additional modules are cloned into 'modules/' directory under workflow
+    const modulesDir = path.join(workflowDir, 'modules');
+    await fs.mkdir(modulesDir, { recursive: true });
+    const targetDir = path.join(modulesDir, moduleName);
+
+    // Clone the repository
+    logger.info('Cloning additional module', { module: moduleName, url: repoUrl, target: targetDir });
+    execSync(`git clone ${repoUrl} ${targetDir}`, {
+      stdio: 'inherit',
+      cwd: workflowDir,
+      env: getSSHEnvironment(),
+    });
+
+    // Checkout appropriate branch
+    const baseBranch = moduleName === 'AIDeveloper' ? 'develop' : 'master';
+    const moduleGit = getGit(targetDir);
+    await moduleGit.checkout(baseBranch);
+
+    logger.info('Additional module cloned successfully', { module: moduleName });
+  } catch (error) {
+    logger.error('Failed to clone additional module', error as Error, { moduleName });
+    throw error;
+  }
+}
+
+/**
  * Create workflow directory structure
+ * @param targetModules - Optional array of all target modules (first is primary, rest are additional)
  */
 export async function createWorkflowDirectory(
   workflowId: number,
   branchName: string,
   workflowType: WorkflowType,
-  targetModule: string
+  targetModule: string,
+  targetModules?: string[]
 ): Promise<string> {
   try {
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
@@ -174,19 +229,40 @@ export async function createWorkflowDirectory(
     // Determine base branch: 'develop' for AIDeveloper, 'master' for modules
     const baseBranch = targetModule === 'AIDeveloper' ? 'develop' : 'master';
 
-    // Clone the target module's repository into workflow directory
+    // Clone the primary module's repository into workflow directory (as 'repo')
     await cloneRepository(workflowDir, targetModule, baseBranch);
 
+    // Clone additional modules if this is a multi-module workflow
+    const allModules = targetModules || [targetModule];
+    const additionalModules = allModules.slice(1); // Skip the primary module
+
+    if (additionalModules.length > 0) {
+      logger.info('Cloning additional modules for multi-module workflow', {
+        additionalModules,
+        primaryModule: targetModule
+      });
+
+      for (const moduleName of additionalModules) {
+        await cloneAdditionalModule(workflowDir, moduleName);
+      }
+    }
+
     // Create README
+    const modulesSection = allModules.length > 1
+      ? `- \`modules/\` - Additional target modules for cross-module work\n  ${additionalModules.map(m => `- \`${m}/\``).join('\n  ')}`
+      : '';
+
     const readme = `# Workflow ${workflowId}: ${workflowType}
 
 **Branch:** \`${branchName}\`
 **Created:** ${new Date().toISOString()}
 **Status:** In Progress
+**Target Modules:** ${allModules.join(', ')}
 
 ## Directory Structure
 
-- \`repo/\` - Cloned repository (isolated workspace)
+- \`repo/\` - Primary module (${targetModule}) - isolated workspace
+${modulesSection}
 - \`logs/\` - Agent execution logs and output
 - \`artifacts/\` - Generated code, tests, and documentation
 - \`stages/\` - Stage-by-stage documentation
@@ -199,7 +275,10 @@ Future agents can traverse this history to understand decisions and outcomes.
 
     await fs.writeFile(path.join(workflowDir, 'README.md'), readme);
 
-    logger.info(`Workflow directory created: ${workflowDir}`);
+    logger.info(`Workflow directory created: ${workflowDir}`, {
+      targetModules: allModules,
+      primaryModule: targetModule
+    });
 
     return workflowDir;
   } catch (error) {
