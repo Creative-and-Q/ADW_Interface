@@ -18,6 +18,7 @@ import {
   getModuleStats,
   importModule,
   getModulesPath,
+  readModuleManifest,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
@@ -1322,10 +1323,59 @@ router.get('/modules/:name', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Module not found' });
     }
 
-    return res.json({ module });
+    // Check if module has a manifest
+    const manifest = await readModuleManifest(name);
+    const hasManifest = manifest !== null;
+
+    return res.json({ module, hasManifest });
   } catch (error) {
     logger.error('Failed to get module info', error as Error);
     return res.status(500).json({ error: 'Failed to get module info' });
+  }
+});
+
+/**
+ * POST /api/modules/:name/generate-manifest
+ * Trigger the ModuleImportAgent to generate a module.json for a module
+ */
+router.post('/modules/:name/generate-manifest', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const module = await getModuleInfo(name);
+
+    if (!module) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+
+    // Dynamically import and execute the ModuleImportAgent
+    const modulePath = `file://${getModulesPath()}/ModuleImportAgent/index.js`;
+    const { default: ModuleImportAgent } = await import(modulePath);
+
+    const agent = new ModuleImportAgent();
+    const result = await agent.execute({
+      modulePath: module.path,
+      moduleName: name,
+      workingDir: module.path,
+    });
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        message: result.message,
+        artifacts: result.artifacts,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.error || result.message,
+      });
+    }
+  } catch (error: any) {
+    logger.error('Failed to generate module manifest', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate module manifest',
+    });
   }
 });
 

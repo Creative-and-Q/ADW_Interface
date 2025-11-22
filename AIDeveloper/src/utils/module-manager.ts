@@ -649,57 +649,40 @@ export async function importModule(options: ImportModuleOptions): Promise<{
       };
     }
 
-    // Read existing module.json or package.json for defaults
-    let existingManifest: Partial<ModuleManifest> = {};
-    let manifestPath = path.join(modulePath, 'module.json');
+    // Check if module.json already exists
+    const manifestPath = path.join(modulePath, 'module.json');
 
     try {
-      const content = await fs.readFile(manifestPath, 'utf-8');
-      existingManifest = JSON.parse(content);
+      await fs.access(manifestPath);
+      logger.info(`Module ${moduleName} already has module.json`);
     } catch {
-      // No existing module.json, try to create from package.json
-      try {
-        const packagePath = path.join(modulePath, 'package.json');
-        const packageContent = await fs.readFile(packagePath, 'utf-8');
-        const packageJson = JSON.parse(packageContent);
+      // No existing module.json - try to generate one with ModuleImportAgent
+      logger.info(`No module.json found for ${moduleName}, triggering AI generation...`);
 
-        existingManifest = {
-          name: packageJson.name || moduleName,
-          version: packageJson.version || '1.0.0',
-          description: packageJson.description || 'Imported module',
-        };
-      } catch {
-        // No package.json either, use defaults
-        existingManifest = {
-          name: moduleName,
-          version: '1.0.0',
-          description: 'Imported module',
-        };
+      try {
+        const agentPath = path.join(getModulesPath(), 'ModuleImportAgent', 'index.js');
+        const { default: ModuleImportAgent } = await import(`file://${agentPath}`);
+
+        const agent = new ModuleImportAgent();
+        const result = await agent.execute({
+          modulePath,
+          moduleName,
+          workingDir: modulePath,
+        });
+
+        if (result.success) {
+          logger.info(`AI-generated module.json for ${moduleName}`);
+        } else {
+          logger.warn(`AI generation failed for ${moduleName}: ${result.error}`);
+          // Fall back to basic manifest
+          await createBasicManifest(modulePath, moduleName, { category, project, tags });
+        }
+      } catch (agentError: any) {
+        logger.warn(`ModuleImportAgent not available, creating basic manifest: ${agentError.message}`);
+        // Fall back to basic manifest if agent fails
+        await createBasicManifest(modulePath, moduleName, { category, project, tags });
       }
     }
-
-    // Merge with provided metadata
-    const updatedManifest: ModuleManifest = {
-      name: existingManifest.name || moduleName,
-      version: existingManifest.version || '1.0.0',
-      description: existingManifest.description || 'Imported module',
-      category: category || existingManifest.category,
-      project: project || existingManifest.project,
-      tags: tags || existingManifest.tags,
-      pages: existingManifest.pages,
-      dashboardWidgets: existingManifest.dashboardWidgets,
-      envVars: existingManifest.envVars,
-      apiRoutes: existingManifest.apiRoutes,
-    };
-
-    // Write module.json
-    await fs.writeFile(
-      manifestPath,
-      JSON.stringify(updatedManifest, null, 2) + '\n',
-      'utf-8'
-    );
-
-    logger.info(`Created/updated module.json for ${moduleName}`);
 
     // Optionally install dependencies
     if (autoInstall) {
@@ -734,4 +717,45 @@ export async function importModule(options: ImportModuleOptions): Promise<{
       message: `Import failed: ${error.message}`,
     };
   }
+}
+
+/**
+ * Create a basic module.json manifest (fallback when AI agent unavailable)
+ */
+async function createBasicManifest(
+  modulePath: string,
+  moduleName: string,
+  options: { category?: string; project?: string; tags?: string[] }
+): Promise<void> {
+  const { category, project, tags } = options;
+  let manifest: Partial<ModuleManifest> = {
+    name: moduleName,
+    version: '1.0.0',
+    description: 'Imported module',
+  };
+
+  // Try to read package.json for better defaults
+  try {
+    const packagePath = path.join(modulePath, 'package.json');
+    const packageContent = await fs.readFile(packagePath, 'utf-8');
+    const packageJson = JSON.parse(packageContent);
+
+    manifest = {
+      name: packageJson.name || moduleName,
+      version: packageJson.version || '1.0.0',
+      description: packageJson.description || 'Imported module',
+      category: category,
+      project: project,
+      tags: tags || packageJson.keywords,
+    };
+  } catch {
+    // Use defaults with provided metadata
+    manifest.category = category;
+    manifest.project = project;
+    manifest.tags = tags;
+  }
+
+  const manifestPath = path.join(modulePath, 'module.json');
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+  logger.info(`Created basic module.json for ${moduleName}`);
 }
