@@ -2,23 +2,20 @@
  * Unit tests for ModuleImportAgent
  */
 
-export async function runTests() {
-  const results = {
-    execute: {
-      success: true,
-      output: 'Module analysis completed',
-      duration: 120,
-    },
-    analyzeModule: {
-      success: true,
-      output: 'Analyzed module structure and dependencies',
-      duration: 180,
-    },
-    generateConfig: {
-      success: true,
-      output: 'Generated module.json configuration',
-      duration: 90,
-    },
-  };
-  return results;
-}
+import ModuleImportAgent from '../index';
+
+describe('ModuleImportAgent', () => {
+  beforeAll(() => {
+    // Set required environment variable for tests
+    process.env.OPENROUTER_API_KEY = 'test-api-key';
+  });
+
+  it('should be defined', () => {
+    expect(ModuleImportAgent).toBeDefined();
+  });
+
+  it('should create an instance', () => {
+    const agent = new ModuleImportAgent();
+    expect(agent).toBeInstanceOf(ModuleImportAgent);
+  });
+});

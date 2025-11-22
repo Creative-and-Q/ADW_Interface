@@ -2,23 +2,20 @@
  * Unit tests for CodingAgent
  */
 
-export async function runTests() {
-  const results = {
-    execute: {
-      success: true,
-      output: 'Code generation completed',
-      duration: 250,
-    },
-    parseInput: {
-      success: true,
-      output: 'Input validation passed',
-      duration: 15,
-    },
-    generateCode: {
-      success: true,
-      output: 'Generated 3 files, 450 lines of code',
-      duration: 400,
-    },
-  };
-  return results;
-}
+import { CodingAgent } from '../index';
+
+describe('CodingAgent', () => {
+  beforeAll(() => {
+    // Set required environment variable for tests
+    process.env.OPENROUTER_API_KEY = 'test-api-key';
+  });
+
+  it('should be defined', () => {
+    expect(CodingAgent).toBeDefined();
+  });
+
+  it('should create an instance', () => {
+    const agent = new CodingAgent();
+    expect(agent).toBeInstanceOf(CodingAgent);
+  });
+});
