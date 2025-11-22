@@ -9,6 +9,7 @@ export enum WorkflowType {
   REFACTOR = 'refactor',
   DOCUMENTATION = 'documentation',
   REVIEW = 'review',
+  NEW_MODULE = 'new_module',  // Create entirely new module with GitHub repo
 }
 
 // Workflow output modes

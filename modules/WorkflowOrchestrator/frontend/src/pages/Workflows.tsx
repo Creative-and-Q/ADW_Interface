@@ -181,13 +181,29 @@ export default function Workflows() {
   );
 }
 
+interface ModulePortInfo {
+  name: string;
+  port?: number;
+  frontendPort?: number;
+}
+
 function CreateWorkflowModal({ onClose, onSuccess }: any) {
   const [workflowType, setWorkflowType] = useState('feature');
   const [targetModule, setTargetModule] = useState('AIDeveloper');
   const [taskDescription, setTaskDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [modules, setModules] = useState<string[]>(['AIDeveloper']);
+  const [modulePortInfo, setModulePortInfo] = useState<ModulePortInfo[]>([]);
   const [loadingModules, setLoadingModules] = useState(true);
+
+  // New Module specific fields
+  const [newModuleName, setNewModuleName] = useState('');
+  const [newModuleDescription, setNewModuleDescription] = useState('');
+  const [newModuleType, setNewModuleType] = useState<'service' | 'library'>('library');
+  const [newModulePort, setNewModulePort] = useState('');
+  const [newModuleHasFrontend, setNewModuleHasFrontend] = useState(false);
+  const [newModuleFrontendPort, setNewModuleFrontendPort] = useState('');
+  const [newModuleRelated, setNewModuleRelated] = useState<string[]>([]);
 
   useEffect(() => {
     loadModules();
@@ -198,6 +214,21 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
       const { data } = await modulesAPI.list();
       const moduleNames = data.modules.map((m: any) => m.name);
       setModules(['AIDeveloper', ...moduleNames]);
+
+      // Extract port information from modules
+      const portInfo: ModulePortInfo[] = [
+        { name: 'AIDeveloper', port: 3000, frontendPort: 5173 }
+      ];
+      data.modules.forEach((m: any) => {
+        if (m.port || m.frontend?.port) {
+          portInfo.push({
+            name: m.name,
+            port: m.port,
+            frontendPort: m.frontend?.port
+          });
+        }
+      });
+      setModulePortInfo(portInfo);
     } catch (error) {
       console.error('Failed to load modules:', error);
       toast.error('Failed to load modules');
@@ -206,28 +237,72 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
     }
   };
 
+  // Check for port conflicts
+  const getPortConflict = (port: string, type: 'service' | 'frontend'): string | null => {
+    if (!port) return null;
+    const portNum = parseInt(port);
+    if (isNaN(portNum)) return null;
+
+    for (const module of modulePortInfo) {
+      if (type === 'service' && module.port === portNum) {
+        return module.name;
+      }
+      if (type === 'frontend' && module.frontendPort === portNum) {
+        return module.name;
+      }
+      // Also check cross-conflicts (service port matching frontend port)
+      if (type === 'service' && module.frontendPort === portNum) {
+        return `${module.name} (frontend)`;
+      }
+      if (type === 'frontend' && module.port === portNum) {
+        return `${module.name} (service)`;
+      }
+    }
+    return null;
+  };
+
+  const servicePortConflict = getPortConflict(newModulePort, 'service');
+  const frontendPortConflict = getPortConflict(newModuleFrontendPort, 'frontend');
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
 
     try {
-      await workflowsAPI.create({ workflowType, targetModule, taskDescription });
-      toast.success('Workflow created successfully');
+      if (workflowType === 'new_module') {
+        // Call the new module creation endpoint
+        await workflowsAPI.createNewModule({
+          moduleName: newModuleName,
+          description: newModuleDescription,
+          moduleType: newModuleType,
+          port: newModulePort ? parseInt(newModulePort) : undefined,
+          hasFrontend: newModuleHasFrontend,
+          frontendPort: newModuleFrontendPort ? parseInt(newModuleFrontendPort) : undefined,
+          relatedModules: newModuleRelated,
+          taskDescription: taskDescription || undefined,
+        });
+        toast.success(`Module ${newModuleName} created successfully`);
+      } else {
+        await workflowsAPI.create({ workflowType, targetModule, taskDescription });
+        toast.success('Workflow created successfully');
+      }
       onSuccess();
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create workflow:', error);
-      toast.error('Failed to create workflow');
+      toast.error(error.response?.data?.error || 'Failed to create workflow');
     } finally {
       setSubmitting(false);
     }
   };
 
+  const isNewModule = workflowType === 'new_module';
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg max-w-md w-full p-6">
+      <div className={`bg-white rounded-lg w-full p-6 ${isNewModule ? 'max-w-2xl' : 'max-w-md'}`}>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
-          Create New Workflow
+          {isNewModule ? 'Create New Module' : 'Create New Workflow'}
         </h3>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -244,42 +319,209 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
               <option value="refactor">Refactor</option>
               <option value="documentation">Documentation</option>
               <option value="review">Review</option>
+              <option value="new_module">New Module</option>
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Target Module
-            </label>
-            <select
-              value={targetModule}
-              onChange={(e) => setTargetModule(e.target.value)}
-              disabled={loadingModules}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-            >
-              {modules.map((module) => (
-                <option key={module} value={module}>
-                  {module}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
-              Agents will only be allowed to edit files in this module
-            </p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Task Description
-            </label>
-            <textarea
-              value={taskDescription}
-              onChange={(e) => setTaskDescription(e.target.value)}
-              rows={4}
-              required
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Describe what you want the AI to build..."
-            />
-          </div>
-          <div className="flex justify-end space-x-3">
+
+          {isNewModule ? (
+            <>
+              {/* New Module specific fields */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Module Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={newModuleName}
+                    onChange={(e) => setNewModuleName(e.target.value)}
+                    required
+                    placeholder="DataProcessor"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">PascalCase (e.g., DataProcessor)</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Module Type *
+                  </label>
+                  <select
+                    value={newModuleType}
+                    onChange={(e) => setNewModuleType(e.target.value as 'service' | 'library')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="library">Library (importable)</option>
+                    <option value="service">Service (runs standalone)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Module Description *
+                </label>
+                <input
+                  type="text"
+                  value={newModuleDescription}
+                  onChange={(e) => setNewModuleDescription(e.target.value)}
+                  required
+                  placeholder="Processes and transforms data for analysis"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {newModuleType === 'service' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Service Port
+                  </label>
+                  <input
+                    type="number"
+                    value={newModulePort}
+                    onChange={(e) => setNewModulePort(e.target.value)}
+                    placeholder="3050"
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                      servicePortConflict
+                        ? 'border-red-300 focus:ring-red-500 bg-red-50'
+                        : 'border-gray-300 focus:ring-blue-500'
+                    }`}
+                  />
+                  {servicePortConflict && (
+                    <p className="mt-1 text-xs text-red-600">
+                      Port conflict with {servicePortConflict}
+                    </p>
+                  )}
+                  {/* Used ports reference */}
+                  <div className="mt-2 p-2 bg-gray-50 rounded text-xs">
+                    <p className="font-medium text-gray-700 mb-1">Used service ports:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {modulePortInfo.filter(m => m.port).map(m => (
+                        <span key={m.name} className="px-2 py-0.5 bg-gray-200 rounded text-gray-600">
+                          {m.port} ({m.name})
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <label className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    checked={newModuleHasFrontend}
+                    onChange={(e) => setNewModuleHasFrontend(e.target.checked)}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700">Include Frontend</span>
+                </label>
+                {newModuleHasFrontend && (
+                  <div>
+                    <input
+                      type="number"
+                      value={newModuleFrontendPort}
+                      onChange={(e) => setNewModuleFrontendPort(e.target.value)}
+                      placeholder="Frontend port (e.g., 5180)"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                        frontendPortConflict
+                          ? 'border-red-300 focus:ring-red-500 bg-red-50'
+                          : 'border-gray-300 focus:ring-blue-500'
+                      }`}
+                    />
+                    {frontendPortConflict && (
+                      <p className="mt-1 text-xs text-red-600">
+                        Port conflict with {frontendPortConflict}
+                      </p>
+                    )}
+                    {/* Used frontend ports reference */}
+                    <div className="mt-2 p-2 bg-gray-50 rounded text-xs">
+                      <p className="font-medium text-gray-700 mb-1">Used frontend ports:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {modulePortInfo.filter(m => m.frontendPort).map(m => (
+                          <span key={m.name} className="px-2 py-0.5 bg-gray-200 rounded text-gray-600">
+                            {m.frontendPort} ({m.name})
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Related Modules
+                </label>
+                <select
+                  multiple
+                  value={newModuleRelated}
+                  onChange={(e) => setNewModuleRelated(Array.from(e.target.selectedOptions, o => o.value))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  size={3}
+                >
+                  {modules.map((module) => (
+                    <option key={module} value={module}>{module}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">Hold Ctrl/Cmd to select multiple</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Additional Task (optional)
+                </label>
+                <textarea
+                  value={taskDescription}
+                  onChange={(e) => setTaskDescription(e.target.value)}
+                  rows={3}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="After creating the module scaffold, implement..."
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  If provided, a follow-up feature workflow will be queued
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Standard workflow fields */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Target Module
+                </label>
+                <select
+                  value={targetModule}
+                  onChange={(e) => setTargetModule(e.target.value)}
+                  disabled={loadingModules}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                >
+                  {modules.map((module) => (
+                    <option key={module} value={module}>
+                      {module}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Agents will only be allowed to edit files in this module
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Task Description
+                </label>
+                <textarea
+                  value={taskDescription}
+                  onChange={(e) => setTaskDescription(e.target.value)}
+                  rows={4}
+                  required
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Describe what you want the AI to build..."
+                />
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end space-x-3 pt-2">
             <button
               type="button"
               onClick={onClose}
@@ -290,10 +532,14 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
-              disabled={submitting}
+              className={`px-4 py-2 text-sm font-medium text-white rounded-md ${
+                (servicePortConflict || frontendPortConflict)
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
+              disabled={submitting || !!(servicePortConflict || frontendPortConflict)}
             >
-              {submitting ? 'Creating...' : 'Create'}
+              {submitting ? 'Creating...' : isNewModule ? 'Create Module' : 'Create'}
             </button>
           </div>
         </form>

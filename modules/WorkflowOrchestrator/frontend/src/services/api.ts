@@ -41,6 +41,20 @@ export const workflowsAPI = {
   getLogs: async (id: number, params: any = {}) => {
     const response = await axios.get(`${API_BASE}/workflows/${id}/logs`, { params });
     return { data: response.data };
+  },
+
+  createNewModule: async (moduleConfig: {
+    moduleName: string;
+    description: string;
+    moduleType?: 'service' | 'library';
+    port?: number;
+    hasFrontend?: boolean;
+    frontendPort?: number;
+    relatedModules?: string[];
+    taskDescription?: string;
+  }) => {
+    const response = await axios.post(`${API_BASE}/workflows/new-module`, moduleConfig);
+    return { data: response.data };
   }
 };
 
