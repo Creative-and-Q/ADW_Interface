@@ -30,6 +30,7 @@ import {
   getWorkflowDirectory
 } from './utils/workflow-directory-manager.js';
 import { getGit } from './utils/git-helper.js';
+import { config } from './config.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -797,7 +798,7 @@ ${hasFrontend ? `- \`frontend/\` - React frontend scaffold with Vite + Tailwind`
  */
 router.post('/workflows/manual', async (req: Request, res: Response) => {
   try {
-    const { workflowType, targetModule, targetModules, taskDescription } = req.body;
+    const { workflowType, targetModule, targetModules, taskDescription, callback } = req.body;
 
     if (!workflowType || !taskDescription) {
       logger.info('Workflow validation failed: missing required fields', {
@@ -855,6 +856,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
           },
           targetModule: primaryModule,
           targetModules: modules,
+          callback: callback || null, // Store callback metadata for post-completion handling
         }),
       ]
     );
@@ -897,6 +899,122 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
     });
   }
 });
+
+/**
+ * Handle workflow completion callbacks
+ * Re-validates modules or triggers retry workflows as needed
+ */
+async function handleWorkflowCallback(
+  workflowId: number,
+  status: string,
+  callback: { type: string; moduleName: string; retryCount: number; maxRetries: number },
+  _primaryModule: string
+): Promise<void> {
+  logger.info('Processing workflow callback', { workflowId, status, callback });
+
+  if (callback.type === 'module_import_validation') {
+    const { moduleName, retryCount, maxRetries } = callback;
+
+    if (status === 'completed') {
+      // Workflow completed - re-run validation to verify the fix worked
+      logger.info('Bugfix workflow completed, re-validating module', { workflowId, moduleName });
+
+      try {
+        // Dynamically import and execute ModuleImportAgent to re-validate
+        const modulesPath = path.join(config.workspace.root, 'modules');
+        const agentPath = `file://${modulesPath}/ModuleImportAgent/index.js`;
+        const { default: ModuleImportAgent } = await import(agentPath);
+
+        const agent = new ModuleImportAgent();
+        const modulePath = path.join(modulesPath, moduleName);
+
+        // Just run validation (module.json already exists)
+        const result = await agent.execute({
+          modulePath,
+          moduleName,
+          workingDir: modulePath,
+        });
+
+        if (result.validation?.allPassed) {
+          logger.info('Module validation passed after bugfix', { workflowId, moduleName });
+        } else {
+          logger.warn('Module validation still failing after bugfix', {
+            workflowId,
+            moduleName,
+            validation: result.validation,
+          });
+          // The agent will auto-trigger another bugfix if needed
+        }
+      } catch (error) {
+        logger.error('Failed to re-validate module after bugfix', error as Error, { workflowId, moduleName });
+      }
+    } else if (status === 'failed' && retryCount < maxRetries) {
+      // Workflow failed - trigger a retry with incremented count
+      logger.info('Bugfix workflow failed, triggering retry', {
+        workflowId,
+        moduleName,
+        retryCount: retryCount + 1,
+        maxRetries,
+      });
+
+      try {
+        // Get the original task description and create a new workflow
+        const [originalWorkflow] = await query<any>(
+          'SELECT payload FROM workflows WHERE id = ?',
+          [workflowId]
+        );
+
+        if (originalWorkflow?.payload) {
+          const originalPayload = JSON.parse(originalWorkflow.payload);
+          const taskDescription = `Retry #${retryCount + 1}: Fix script validation failures in ${moduleName} module.
+
+Previous bugfix attempt (workflow #${workflowId}) failed. Please investigate what went wrong and try a different approach.
+
+Original task: ${originalPayload.customData?.taskDescription || 'Fix module validation issues'}`;
+
+          // Create retry workflow
+          const retryResult = await query<any>(
+            `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
+             VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())`,
+            [
+              'bugfix',
+              WorkflowOutputMode.PR,
+              moduleName,
+              JSON.stringify({
+                source: 'callback_retry',
+                targetModule: moduleName,
+                targetModules: [moduleName],
+                callback: {
+                  type: 'module_import_validation',
+                  moduleName,
+                  retryCount: retryCount + 1,
+                  maxRetries,
+                },
+              }),
+            ]
+          );
+
+          const retryWorkflowId = retryResult.insertId;
+          logger.info('Retry workflow created', { originalWorkflowId: workflowId, retryWorkflowId, moduleName });
+
+          // Execute the retry workflow
+          executeWorkflowAsync(retryWorkflowId, 'bugfix', [moduleName], taskDescription).catch(
+            (error) => logger.error('Retry workflow execution failed', error as Error, { retryWorkflowId })
+          );
+        }
+      } catch (error) {
+        logger.error('Failed to create retry workflow', error as Error, { workflowId, moduleName });
+      }
+    } else if (status === 'failed') {
+      logger.warn('Bugfix workflow failed and max retries exceeded', {
+        workflowId,
+        moduleName,
+        retryCount,
+        maxRetries,
+      });
+    }
+  }
+}
 
 /**
  * Execute workflow asynchronously
@@ -1069,6 +1187,22 @@ async function executeWorkflowAsync(
       logger.warn('Failed to update workflow README', {
         workflowId,
         error: (error as Error).message,
+      });
+    }
+
+    // Handle workflow callbacks (e.g., re-validate module after bugfix)
+    try {
+      const [workflowData] = await query<any>('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+      if (workflowData?.payload) {
+        const payload = JSON.parse(workflowData.payload);
+        if (payload.callback) {
+          await handleWorkflowCallback(workflowId, finalStatus, payload.callback, primaryModule);
+        }
+      }
+    } catch (callbackError) {
+      logger.warn('Failed to handle workflow callback', {
+        workflowId,
+        error: (callbackError as Error).message,
       });
     }
 
