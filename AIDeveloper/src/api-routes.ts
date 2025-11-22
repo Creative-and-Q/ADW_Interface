@@ -1363,11 +1363,13 @@ router.post('/modules/:name/generate-manifest', async (req: Request, res: Respon
         success: true,
         message: result.message,
         artifacts: result.artifacts,
+        validation: result.validation,
       });
     } else {
       return res.status(400).json({
         success: false,
         error: result.error || result.message,
+        validation: result.validation,
       });
     }
   } catch (error: any) {
