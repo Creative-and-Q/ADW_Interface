@@ -17,6 +17,7 @@ import { setSocketIo } from './websocket-emitter.js';
 import apiRoutes from './api-routes.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import { cleanupStuckAgents, getRunningAgentCount } from './workflow-state.js';
+import { discoverModules, readModuleManifest, getModulesPath } from './utils/module-manager.js';
 
 // ES Module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -169,6 +170,80 @@ async function autoStartModules() {
 }
 
 /**
+ * Check all modules for missing module.json and trigger ModuleImportAgent
+ */
+async function checkModuleManifests() {
+  try {
+    logger.info('Checking modules for missing manifests...');
+
+    const modules = await discoverModules();
+    const modulesWithoutManifest: string[] = [];
+
+    for (const module of modules) {
+      // Skip the ModuleImportAgent itself to avoid circular dependency
+      if (module.name === 'ModuleImportAgent') {
+        continue;
+      }
+
+      const manifest = await readModuleManifest(module.name);
+      if (!manifest) {
+        modulesWithoutManifest.push(module.name);
+      }
+    }
+
+    if (modulesWithoutManifest.length === 0) {
+      logger.info('All modules have manifests');
+      return;
+    }
+
+    logger.info(`Found ${modulesWithoutManifest.length} module(s) without manifest`, {
+      modules: modulesWithoutManifest,
+    });
+
+    // Trigger ModuleImportAgent for each module without manifest
+    for (const moduleName of modulesWithoutManifest) {
+      try {
+        logger.info(`Triggering ModuleImportAgent for ${moduleName}`);
+
+        const modulesPath = getModulesPath();
+        const agentPath = `file://${modulesPath}/ModuleImportAgent/index.js`;
+        const { default: ModuleImportAgent } = await import(agentPath);
+
+        const agent = new ModuleImportAgent();
+        const modulePath = path.join(modulesPath, moduleName);
+
+        const result = await agent.execute({
+          modulePath,
+          moduleName,
+          workingDir: modulePath,
+        });
+
+        if (result.success) {
+          if (result.validation?.allPassed) {
+            logger.info(`Generated and validated manifest for ${moduleName}`);
+          } else {
+            logger.warn(`Generated manifest for ${moduleName} but validation failed - bugfix workflow triggered`, {
+              workflowId: result.validation?.workflowId,
+            });
+          }
+        } else {
+          logger.error(`Failed to generate manifest for ${moduleName}: ${result.error}`);
+        }
+
+        // Wait a bit before processing next module
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        logger.error(`Failed to process module ${moduleName}`, error as Error);
+      }
+    }
+
+    logger.info('Module manifest check complete');
+  } catch (error) {
+    logger.error('Failed to check module manifests', error as Error);
+  }
+}
+
+/**
  * Start periodic cleanup of stuck agent executions
  * Runs every 15 minutes to clean up agents that have been running for over 60 minutes
  */
@@ -299,6 +374,9 @@ async function initialize() {
 
       // Auto-start modules with auto_load enabled
       await autoStartModules();
+
+      // Check for modules missing manifests and trigger ModuleImportAgent
+      await checkModuleManifests();
     });
 
   } catch (error) {
