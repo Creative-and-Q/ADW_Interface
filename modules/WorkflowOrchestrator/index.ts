@@ -3,16 +3,39 @@
  * Orchestrates workflow execution and manages agent sequence
  */
 
-import axios from 'axios';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
+import mysql from 'mysql2/promise';
 
 dotenv.config();
 
 const execAsync = promisify(exec);
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Database connection
+let dbPool: mysql.Pool | null = null;
+
+function getDbPool(): mysql.Pool {
+  if (!dbPool) {
+    dbPool = mysql.createPool({
+      host: process.env.DB_HOST || 'localhost',
+      port: parseInt(process.env.DB_PORT || '3306'),
+      user: process.env.DB_USER || 'root',
+      password: process.env.DB_PASSWORD || 'rootpass',
+      database: process.env.DB_NAME || 'aideveloper',
+      waitForConnections: true,
+      connectionLimit: 10,
+    });
+  }
+  return dbPool;
+}
 
 /**
  * Agent Input Interface
@@ -20,7 +43,8 @@ const execAsync = promisify(exec);
 export interface AgentInput {
   workflowId: number;
   workflowType?: string;
-  targetModule?: string;
+  targetModule?: string;           // Primary module (backwards compatibility)
+  targetModules?: string[];        // All target modules for cross-module workflows
   taskDescription?: string;
   branchName?: string;
   workingDir: string; // Required
@@ -47,27 +71,11 @@ export interface AgentOutput {
 }
 
 /**
- * OpenRouter API Message
- */
-interface AIMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-}
-
-/**
  * WorkflowOrchestrator Agent
  */
 export class WorkflowOrchestrator {
-  private model: string;
-  private apiKey: string;
-
   constructor() {
-    this.apiKey = process.env.OPENROUTER_API_KEY || '';
-    this.model = process.env.OPENROUTER_MODEL_ORCHESTRATOR || 'anthropic/claude-3.5-sonnet';
-
-    if (!this.apiKey) {
-      throw new Error('OPENROUTER_API_KEY environment variable is required');
-    }
+    // Orchestrator doesn't need API key for now
   }
 
   /**
@@ -86,126 +94,75 @@ export class WorkflowOrchestrator {
       throw new Error(`Working directory does not exist: ${input.workingDir}`);
     }
 
+    const allArtifacts: any[] = [];
+    const allSummaries: string[] = [];
+    let hasFailedAgent = false;
+
     try {
-      // Load tools.md to inform AI about available tools
-      const toolsDoc = await this.loadToolsDocumentation();
+      // Determine agent sequence based on workflow type
+      const agentSequence = this.getAgentSequence(input.workflowType || 'feature');
 
-      // Load system prompt
-      const systemPrompt = this.buildSystemPrompt(toolsDoc);
-
-      // Build user prompt
-      const userPrompt = this.buildUserPrompt(input);
-
-      // Call OpenRouter API
-      const aiResponse = await this.callOpenRouter([
-        {
-          role: 'user',
-          content: userPrompt,
-        },
-      ], {
-        systemPrompt,
-        maxTokens: 8192,
-        temperature: 0.7,
+      await this.logWorkflow(input.workflowId, 'info', 'workflow_started', `Starting workflow with ${agentSequence.length} agents`, {
+        agentSequence,
+        workflowType: input.workflowType,
       });
 
-      // Parse and return response
-      return this.parseResponse(aiResponse, input);
+      // Execute agents in sequence
+      for (let i = 0; i < agentSequence.length; i++) {
+        const agentType = agentSequence[i];
+
+        await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_starting`, `Starting ${agentType} agent (${i + 1}/${agentSequence.length})`);
+
+        // Create agent_execution record
+        const agentExecutionId = await this.createAgentExecution(input.workflowId, agentType, input);
+
+        try {
+          // Execute the agent
+          const agentOutput = await this.executeAgent(agentType, input, agentExecutionId);
+
+          // Update agent execution as completed
+          await this.updateAgentExecution(agentExecutionId, 'completed', agentOutput);
+
+          // Collect artifacts and summaries
+          allArtifacts.push(...agentOutput.artifacts);
+          allSummaries.push(`${agentType}: ${agentOutput.summary}`);
+
+          await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_completed`, `${agentType} agent completed successfully`, {
+            artifactsCount: agentOutput.artifacts.length,
+          });
+
+        } catch (agentError) {
+          // Update agent execution as failed
+          await this.updateAgentExecution(agentExecutionId, 'failed', null, (agentError as Error).message);
+
+          await this.logWorkflow(input.workflowId, 'error', `agent_${agentType}_failed`, `${agentType} agent failed: ${(agentError as Error).message}`);
+
+          // Mark that we have a failed agent
+          hasFailedAgent = true;
+
+          // Continue with next agent even if one fails (for now)
+          allSummaries.push(`${agentType}: FAILED - ${(agentError as Error).message}`);
+        }
+      }
+
+      await this.logWorkflow(input.workflowId, 'info', 'workflow_completed', 'Workflow completed successfully', {
+        totalArtifacts: allArtifacts.length,
+      });
+
+      return {
+        success: !hasFailedAgent,
+        artifacts: allArtifacts,
+        summary: allSummaries.join('\n\n'),
+      };
     } catch (error) {
+      await this.logWorkflow(input.workflowId, 'error', 'workflow_failed', `Workflow failed: ${(error as Error).message}`);
+
       return {
         success: false,
-        artifacts: [],
-        summary: `WorkflowOrchestrator failed: ${(error as Error).message}`,
+        artifacts: allArtifacts,
+        summary: `WorkflowOrchestrator failed: ${(error as Error).message}\n\n${allSummaries.join('\n\n')}`,
       };
     }
-  }
-
-  /**
-   * Load tools.md documentation
-   */
-  private async loadToolsDocumentation(): Promise<string> {
-    try {
-      const toolsPath = path.join(__dirname, 'tools.md');
-      return await fs.readFile(toolsPath, 'utf-8');
-    } catch (error) {
-      console.warn('Failed to load tools.md:', (error as Error).message);
-      return 'No tools documentation available.';
-    }
-  }
-
-  /**
-   * Build system prompt
-   */
-  private buildSystemPrompt(toolsDoc: string): string {
-    return `You are a WorkflowOrchestrator agent responsible for orchestrating workflow execution and managing agent sequences.
-
-## Available Tools
-
-${toolsDoc}
-
-## Your Responsibilities
-
-1. Analyze workflow requirements and determine the appropriate agent sequence
-2. Coordinate execution of multiple agents in the correct order
-3. Manage workflow state and handle errors/retries
-4. Ensure proper data flow between agents
-
-When you need to execute a tool, respond with a JSON object containing the tool name and parameters.`;
-  }
-
-  /**
-   * Build user prompt
-   */
-  private buildUserPrompt(input: AgentInput): string {
-    return `
-Workflow ID: ${input.workflowId}
-Workflow Type: ${input.workflowType || 'unknown'}
-Target Module: ${input.targetModule || 'none'}
-Task Description: ${input.taskDescription || 'none'}
-Working Directory: ${input.workingDir}
-
-Please analyze this workflow and determine the appropriate agent sequence and execution plan.
-    `.trim();
-  }
-
-  /**
-   * Call OpenRouter API
-   */
-  private async callOpenRouter(
-    messages: AIMessage[],
-    options?: {
-      systemPrompt?: string;
-      maxTokens?: number;
-      temperature?: number;
-    }
-  ): Promise<string> {
-    const apiMessages = [...messages];
-
-    if (options?.systemPrompt) {
-      apiMessages.unshift({
-        role: 'system',
-        content: options.systemPrompt,
-      });
-    }
-
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: this.model,
-        messages: apiMessages,
-        max_tokens: options?.maxTokens || 4096,
-        temperature: options?.temperature || 0.7,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'http://localhost:3000',
-          'X-Title': 'WorkflowOrchestrator',
-        },
-      }
-    );
-
-    return response.data.choices[0]?.message?.content || '';
   }
 
   /**
@@ -235,20 +192,116 @@ Please analyze this workflow and determine the appropriate agent sequence and ex
   }
 
   /**
-   * Parse AI response
+   * Get agent sequence based on workflow type
    */
-  private parseResponse(response: string, input: AgentInput): AgentOutput {
-    // Basic parsing - can be enhanced based on actual response format
-    return {
-      success: true,
-      artifacts: [],
-      summary: response.substring(0, 500),
-      metadata: {
-        workflowId: input.workflowId,
-        responseLength: response.length,
-      },
+  private getAgentSequence(workflowType: string): string[] {
+    const sequences: Record<string, string[]> = {
+      feature: ['plan', 'code', 'test', 'review', 'document'],
+      bugfix: ['plan', 'code', 'test', 'review'],
+      refactor: ['plan', 'code', 'test', 'review', 'document'],
+      documentation: ['document'],
+      review: ['review'],
     };
+
+    return sequences[workflowType] || sequences.feature;
   }
+
+  /**
+   * Create agent_execution record
+   */
+  private async createAgentExecution(workflowId: number, agentType: string, input: AgentInput): Promise<number> {
+    const db = getDbPool();
+    const [result] = await db.execute(
+      `INSERT INTO agent_executions (workflow_id, agent_type, status, input, started_at)
+       VALUES (?, ?, 'running', ?, NOW())`,
+      [workflowId, agentType, JSON.stringify(input)]
+    );
+    return (result as any).insertId;
+  }
+
+  /**
+   * Update agent_execution record
+   */
+  private async updateAgentExecution(
+    agentExecutionId: number,
+    status: string,
+    output: AgentOutput | null,
+    errorMessage?: string
+  ): Promise<void> {
+    const db = getDbPool();
+    await db.execute(
+      `UPDATE agent_executions
+       SET status = ?, output = ?, error_message = ?, completed_at = NOW()
+       WHERE id = ?`,
+      [status, output ? JSON.stringify(output) : null, errorMessage || null, agentExecutionId]
+    );
+  }
+
+  /**
+   * Execute an agent
+   */
+  private async executeAgent(agentType: string, input: AgentInput, _agentExecutionId: number): Promise<AgentOutput> {
+    // Map agent type to module
+    const agentModules: Record<string, string> = {
+      plan: 'CodePlannerAgent',
+      code: 'CodingAgent',
+      test: 'CodeTestingAgent',
+      review: 'CodeReviewAgent',
+      document: 'CodeDocumentationAgent',
+    };
+
+    const moduleName = agentModules[agentType];
+    if (!moduleName) {
+      throw new Error(`Unknown agent type: ${agentType}`);
+    }
+
+    await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_executing`, `Executing ${moduleName}`);
+
+    try {
+      // Dynamically import the agent module
+      // Modules are in /home/kevin/Home/ex_nihilo/modules/, not in AIDeveloper/dist
+      const modulePath = `file:///home/kevin/Home/ex_nihilo/modules/${moduleName}/index.js`;
+      const agentModule = await import(modulePath);
+
+      // Get the agent class (handle both default and named exports)
+      const AgentClass = agentModule.default || agentModule[moduleName];
+
+      if (!AgentClass) {
+        throw new Error(`Could not find agent class in ${moduleName}`);
+      }
+
+      // Create instance and execute
+      const agent = new AgentClass();
+      const output = await agent.execute(input);
+
+      return output;
+    } catch (error) {
+      throw new Error(`Failed to execute ${moduleName}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Log workflow event
+   */
+  private async logWorkflow(
+    workflowId: number,
+    level: string,
+    eventType: string,
+    message: string,
+    data?: any
+  ): Promise<void> {
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `INSERT INTO execution_logs (workflow_id, level, event_type, message, data, timestamp)
+         VALUES (?, ?, ?, ?, ?, NOW())`,
+        [workflowId, level, eventType, message, data ? JSON.stringify(data) : null]
+      );
+    } catch (error) {
+      console.error('Failed to log workflow event:', error);
+    }
+  }
+
 }
 
 export default WorkflowOrchestrator;

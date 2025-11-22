@@ -796,7 +796,7 @@ ${hasFrontend ? `- \`frontend/\` - React frontend scaffold with Vite + Tailwind`
  */
 router.post('/workflows/manual', async (req: Request, res: Response) => {
   try {
-    const { workflowType, targetModule, taskDescription } = req.body;
+    const { workflowType, targetModule, targetModules, taskDescription } = req.body;
 
     if (!workflowType || !taskDescription) {
       logger.info('Workflow validation failed: missing required fields', {
@@ -808,50 +808,71 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       });
     }
 
-    if (!targetModule) {
-      logger.info('Workflow validation failed: missing targetModule');
+    // Support both single targetModule (backwards compatibility) and targetModules array
+    let modules: string[] = [];
+    if (targetModules && Array.isArray(targetModules) && targetModules.length > 0) {
+      modules = targetModules;
+    } else if (targetModule) {
+      modules = [targetModule];
+    } else {
+      logger.info('Workflow validation failed: missing targetModule(s)');
       return res.status(400).json({
-        error: 'targetModule is required',
+        error: 'targetModule or targetModules is required',
       });
     }
+
+    // Primary module is the first one (used for PR base branch decisions)
+    const primaryModule = modules[0];
 
     // Intelligently determine output mode based on task description
     const outputMode = determineOutputMode(taskDescription, workflowType);
 
     logger.info('Creating manual workflow', {
       workflowType,
-      targetModule,
+      targetModules: modules,
+      primaryModule,
       taskDescription: taskDescription.substring(0, 100),
       outputMode,
     });
 
-    // Create workflow in database
+    // Create workflow in database (target_module stores primary for backwards compatibility)
     const result = await query<any>(
       `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
        VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())`,
       [
         workflowType,
         outputMode,
-        targetModule,
+        primaryModule,
         JSON.stringify({
           source: 'custom',
           customData: {
-            targetModule,
+            targetModule: primaryModule,
+            targetModules: modules,
             workflowType,
             taskDescription,
             outputMode,
           },
-          targetModule,
+          targetModule: primaryModule,
+          targetModules: modules,
         }),
       ]
     );
 
     const workflowId = result.insertId;
 
-    logger.info('Workflow created in database', { workflowId, workflowType, targetModule });
+    // Insert into workflow_modules junction table for multi-module tracking
+    for (let i = 0; i < modules.length; i++) {
+      await query(
+        `INSERT INTO workflow_modules (workflow_id, module_name, is_primary, created_at)
+         VALUES (?, ?, ?, NOW())`,
+        [workflowId, modules[i], i === 0]
+      );
+    }
+
+    logger.info('Workflow created in database', { workflowId, workflowType, targetModules: modules });
 
     // Execute workflow asynchronously (don't wait for completion)
-    executeWorkflowAsync(workflowId, workflowType, targetModule, taskDescription).catch(
+    executeWorkflowAsync(workflowId, workflowType, modules, taskDescription).catch(
       (error) => {
         logger.error('Async workflow execution failed', error as Error);
         logger.info('Async workflow execution details', {
@@ -864,6 +885,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       workflowId,
+      targetModules: modules,
       message: 'Workflow created and queued for execution',
     });
   } catch (error) {
@@ -877,19 +899,23 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 
 /**
  * Execute workflow asynchronously
+ * @param targetModules - Array of modules this workflow targets (first is primary)
  */
 async function executeWorkflowAsync(
   workflowId: number,
   workflowType: string,
-  targetModule: string,
+  targetModules: string[],
   taskDescription: string
 ): Promise<void> {
   // Declare branchName outside try block so it's accessible in catch
   let branchName = '';
   let outputMode: WorkflowOutputMode = WorkflowOutputMode.PR;
 
+  // Primary module is the first one (used for cloning and PR decisions)
+  const primaryModule = targetModules[0];
+
   try {
-    logger.info('Starting async workflow execution', { workflowId, workflowType, targetModule });
+    logger.info('Starting async workflow execution', { workflowId, workflowType, targetModules, primaryModule });
 
     // Get workflow output mode from database
     const [workflow] = await query<any>('SELECT output_mode FROM workflows WHERE id = ?', [workflowId]);
@@ -915,11 +941,12 @@ async function executeWorkflowAsync(
       workflowId,
       branchName,
       workflowType,
-      targetModule,
+      targetModules,
     });
 
-    // Create workflow directory structure (clones the target module's specific repo)
-    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any, targetModule);
+    // Create workflow directory structure (clones the primary module's repo)
+    // For multi-module workflows, additional modules are cloned as siblings
+    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any, primaryModule, targetModules);
     const repoPath = getWorkflowRepoPath(workflowId, branchName);
 
     // Create and checkout new branch in the cloned repo
@@ -930,7 +957,7 @@ async function executeWorkflowAsync(
       workflowDir,
       repoPath,
       branchName,
-      targetModule,
+      targetModules,
     });
 
     // Import WorkflowOrchestrator module
@@ -940,21 +967,22 @@ async function executeWorkflowAsync(
 
     const orchestrator = new WorkflowOrchestrator();
 
-    // Working directory is always the cloned repo (which is the target module)
+    // Working directory is always the cloned repo (which is the primary module)
     const workingDir = repoPath;
 
     logger.info('Executing WorkflowOrchestrator', {
       workflowId,
       workingDir,
       workflowType,
-      targetModule,
+      targetModules,
     });
 
-    // Execute the workflow
+    // Execute the workflow with all target modules
     const output = await orchestrator.execute({
       workflowId,
       workflowType,
-      targetModule,
+      targetModule: primaryModule,  // Backwards compatibility
+      targetModules,                // New: all target modules
       taskDescription,
       branchName,
       workingDir,
@@ -1007,7 +1035,8 @@ async function executeWorkflowAsync(
       const executionLog = {
         workflowId,
         workflowType,
-        targetModule,
+        targetModules,
+        primaryModule,
         taskDescription,
         branchName,
         status: finalStatus,
@@ -1052,8 +1081,8 @@ async function executeWorkflowAsync(
         await git.push('origin', branchName, ['--set-upstream']);
         logger.info('Branch pushed to remote', { workflowId, branchName });
 
-        // Determine base branch for PR
-        const baseBranch = targetModule === 'AIDeveloper' ? 'develop' : 'master';
+        // Determine base branch for PR (based on primary module)
+        const baseBranch = primaryModule === 'AIDeveloper' ? 'develop' : 'master';
 
         // Create PR using GitHub CLI
         const prTitle = `[Workflow #${workflowId}] ${workflowType}: ${taskDescription.substring(0, 100)}`;
@@ -1061,7 +1090,7 @@ async function executeWorkflowAsync(
 
 **Workflow ID**: #${workflowId}
 **Type**: ${workflowType}
-**Target Module**: ${targetModule}
+**Target Modules**: ${targetModules.join(', ')}
 **Branch**: \`${branchName}\`
 
 ${output.summary || 'No summary provided'}
@@ -1113,7 +1142,8 @@ ${output.artifacts.map(a => `- **${a.type}**: ${a.filePath || 'N/A'}`).join('\n'
         const errorLog = {
           workflowId,
           workflowType,
-          targetModule,
+          targetModules,
+          primaryModule,
           taskDescription,
           status: 'failed',
           timestamp: new Date().toISOString(),

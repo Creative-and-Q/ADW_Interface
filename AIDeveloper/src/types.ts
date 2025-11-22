@@ -65,7 +65,8 @@ export enum ArtifactType {
 export interface WebhookPayload {
   source: 'github' | 'gitlab' | 'custom' | 'manual';
   eventType?: string;
-  targetModule?: string; // Module restriction for agent file edits
+  targetModule?: string; // Primary module (backwards compatibility)
+  targetModules?: string[]; // Multiple modules for cross-module workflows
   repository?: {
     name: string;
     fullName: string;
@@ -105,7 +106,8 @@ export interface WorkflowExecution {
   id: number;
   webhookId?: string;
   type: WorkflowType;
-  target_module?: string;
+  target_module?: string; // Primary module (backwards compatibility)
+  target_modules?: string[]; // All target modules for this workflow
   status: WorkflowStatus;
   payload: WebhookPayload;
   branchName?: string;
@@ -132,7 +134,8 @@ export interface AgentExecution {
 export interface AgentInput {
   workflowId: number;
   workflowType?: WorkflowType;
-  targetModule?: string; // Module restriction for agent file edits
+  targetModule?: string; // Primary module (backwards compatibility)
+  targetModules?: string[]; // All target modules for cross-module workflows
   taskDescription?: string;
   branchName?: string;
   webhookPayload?: WebhookPayload;

@@ -189,7 +189,7 @@ interface ModulePortInfo {
 
 function CreateWorkflowModal({ onClose, onSuccess }: any) {
   const [workflowType, setWorkflowType] = useState('feature');
-  const [targetModule, setTargetModule] = useState('AIDeveloper');
+  const [targetModules, setTargetModules] = useState<string[]>(['AIDeveloper']);
   const [taskDescription, setTaskDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [modules, setModules] = useState<string[]>(['AIDeveloper']);
@@ -283,7 +283,7 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
         });
         toast.success(`Module ${newModuleName} created successfully`);
       } else {
-        await workflowsAPI.create({ workflowType, targetModule, taskDescription });
+        await workflowsAPI.create({ workflowType, targetModules, taskDescription });
         toast.success('Workflow created successfully');
       }
       onSuccess();
@@ -487,23 +487,42 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
               {/* Standard workflow fields */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Target Module
+                  Target Modules
                 </label>
-                <select
-                  value={targetModule}
-                  onChange={(e) => setTargetModule(e.target.value)}
-                  disabled={loadingModules}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
-                >
-                  {modules.map((module) => (
-                    <option key={module} value={module}>
-                      {module}
-                    </option>
-                  ))}
-                </select>
+                <div className="border border-gray-300 rounded-md p-2 max-h-40 overflow-y-auto">
+                  {loadingModules ? (
+                    <p className="text-gray-500 text-sm">Loading modules...</p>
+                  ) : (
+                    modules.map((module) => (
+                      <label key={module} className="flex items-center space-x-2 py-1 hover:bg-gray-50 px-1 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={targetModules.includes(module)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setTargetModules([...targetModules, module]);
+                            } else {
+                              setTargetModules(targetModules.filter(m => m !== module));
+                            }
+                          }}
+                          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                        />
+                        <span className="text-sm text-gray-700">{module}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
                 <p className="mt-1 text-xs text-gray-500">
-                  Agents will only be allowed to edit files in this module
+                  Select one or more modules. First selected is the primary module for PR creation.
+                  {targetModules.length > 1 && (
+                    <span className="text-blue-600 font-medium"> ({targetModules.length} modules selected)</span>
+                  )}
                 </p>
+                {targetModules.length === 0 && (
+                  <p className="mt-1 text-xs text-red-500">
+                    At least one module must be selected
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -533,11 +552,11 @@ function CreateWorkflowModal({ onClose, onSuccess }: any) {
             <button
               type="submit"
               className={`px-4 py-2 text-sm font-medium text-white rounded-md ${
-                (servicePortConflict || frontendPortConflict)
+                (servicePortConflict || frontendPortConflict || (!isNewModule && targetModules.length === 0))
                   ? 'bg-gray-400 cursor-not-allowed'
                   : 'bg-blue-600 hover:bg-blue-700'
               }`}
-              disabled={submitting || !!(servicePortConflict || frontendPortConflict)}
+              disabled={submitting || !!(servicePortConflict || frontendPortConflict) || (!isNewModule && targetModules.length === 0)}
             >
               {submitting ? 'Creating...' : isNewModule ? 'Create Module' : 'Create'}
             </button>
