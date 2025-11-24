@@ -296,7 +296,7 @@ export class WorkflowOrchestrator {
     try {
       const db = getDbPool();
       await db.execute(
-        `INSERT INTO execution_logs (workflow_id, level, event_type, message, data, timestamp)
+        `INSERT INTO execution_logs (workflow_id, log_level, event_type, message, data, created_at)
          VALUES (?, ?, ?, ?, ?, NOW())`,
         [workflowId, level, eventType, message, data ? JSON.stringify(data) : null]
       );

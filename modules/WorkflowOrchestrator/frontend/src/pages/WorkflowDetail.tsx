@@ -18,6 +18,7 @@ import AgentExecutionChart from '../components/AgentExecutionChart';
 import AgentExecutionTimeline from '../components/AgentExecutionTimeline';
 import ArtifactsList from '../components/ArtifactsList';
 import ExecutionLogs from '../components/ExecutionLogs';
+import SubWorkflowList from '../components/SubWorkflowList';
 
 type ViewMode = 'overview' | 'timeline';
 
@@ -28,6 +29,8 @@ export default function WorkflowDetail() {
   const [agents, setAgents] = useState<any[]>([]);
   const [artifacts, setArtifacts] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
+  const [subWorkflows, setSubWorkflows] = useState<any[]>([]);
+  const [queueStatus, setQueueStatus] = useState<any>(null);
   const [selectedAgentLogs, setSelectedAgentLogs] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [resumeState, setResumeState] = useState<any>(null);
@@ -65,6 +68,7 @@ export default function WorkflowDetail() {
       setAgents(data.agents);
       setArtifacts(data.artifacts);
       await loadLogs();
+      await loadSubWorkflows();
       // Load resume state if workflow failed
       if (data.workflow.status === 'failed') {
         await loadResumeState();
@@ -73,6 +77,29 @@ export default function WorkflowDetail() {
       console.error('Failed to load workflow:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSubWorkflows = async () => {
+    try {
+      const response = await fetch(`/api/workflows/${id}/sub-workflows`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          setSubWorkflows(data.data);
+        }
+      }
+      
+      const queueResponse = await fetch(`/api/workflows/${id}/queue-status`);
+      if (queueResponse.ok) {
+        const queueData = await queueResponse.json();
+        if (queueData.success) {
+          setQueueStatus(queueData.data);
+        }
+      }
+    } catch (error) {
+      // Sub-workflows not available for this workflow (not hierarchical)
+      console.debug('No sub-workflows for this workflow');
     }
   };
 
@@ -280,6 +307,16 @@ export default function WorkflowDetail() {
           {/* Artifacts and Logs in grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <ArtifactsList artifacts={artifacts} />
+            
+            {/* Sub-Workflows */}
+            {subWorkflows && subWorkflows.length > 0 && (
+              <SubWorkflowList 
+                parentWorkflowId={parseInt(id!)}
+                subWorkflows={subWorkflows}
+                queueStatus={queueStatus}
+              />
+            )}
+            
             <div className="bg-white rounded-lg border border-gray-200 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
               <div className="space-y-4">

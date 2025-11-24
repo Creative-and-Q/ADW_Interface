@@ -827,6 +827,62 @@ export async function createNewModule(
       repoUrl,
     });
 
+    // Step 9: Trigger implementation workflow to complete the module
+    if (moduleConfig.workflowId && moduleConfig.description) {
+      try {
+        logger.info('Triggering implementation workflow for new module', {
+          moduleName: moduleConfig.name,
+          parentWorkflowId: moduleConfig.workflowId,
+        });
+
+        const axios = (await import('axios')).default;
+        
+        // Create feature workflow to implement actual functionality
+        const implWorkflow = await axios.post('http://localhost:3000/api/workflows/manual', {
+          workflowType: 'feature',
+          targetModule: moduleConfig.name,
+          taskDescription: `Implement the functionality for ${moduleConfig.name}: ${moduleConfig.description}
+
+The module scaffold has been created. Now implement the actual features:
+
+1. Add state management (useState, context, etc.) where needed
+2. Implement interactive UI elements (buttons, forms, inputs)
+3. Add event handlers (onClick, onChange, onSubmit)
+4. Create working functionality (not just placeholders showing description)
+5. Style with Tailwind CSS for modern appearance
+
+Make sure the module actually works and implements what was requested in the description.`
+        });
+
+        logger.info('Implementation workflow created', {
+          implementationWorkflowId: implWorkflow.data.workflowId,
+          scaffoldWorkflowId: moduleConfig.workflowId,
+        });
+
+        // Link as sub-workflow using hierarchy API
+        try {
+          await axios.post(`http://localhost:3000/api/workflows/${moduleConfig.workflowId}/sub-workflows`, {
+            subTasks: [{
+              title: `Implement ${moduleConfig.name} functionality`,
+              description: moduleConfig.description,
+              workflowType: 'feature',
+              targetModule: moduleConfig.name,
+              priority: 1,
+              estimatedComplexity: 'medium',
+              dependsOn: []
+            }]
+          });
+
+          logger.info('Linked implementation workflow as sub-workflow');
+        } catch (linkError) {
+          logger.warn('Could not link as sub-workflow (hierarchy may not be fully deployed)', linkError as Error);
+        }
+      } catch (error) {
+        logger.error('Failed to create implementation workflow', error as Error);
+        // Don't fail the whole process if follow-up workflow fails
+      }
+    }
+
     return {
       success: true,
       workflowPath,
