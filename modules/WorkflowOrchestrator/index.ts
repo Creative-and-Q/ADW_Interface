@@ -43,8 +43,7 @@ function getDbPool(): mysql.Pool {
 export interface AgentInput {
   workflowId: number;
   workflowType?: string;
-  targetModule?: string;           // Primary module (backwards compatibility)
-  targetModules?: string[];        // All target modules for cross-module workflows
+  targetModule?: string;
   taskDescription?: string;
   branchName?: string;
   workingDir: string; // Required
@@ -149,6 +148,9 @@ export class WorkflowOrchestrator {
         totalArtifacts: allArtifacts.length,
       });
 
+      // Check for structured plan and create sub-workflows if present
+      await this.handleSubWorkflowCreation(input.workflowId, allArtifacts);
+
       return {
         success: !hasFailedAgent,
         artifacts: allArtifacts,
@@ -201,6 +203,7 @@ export class WorkflowOrchestrator {
       refactor: ['plan', 'code', 'test', 'review', 'document'],
       documentation: ['document'],
       review: ['review'],
+      new_module: ['plan', 'code', 'test', 'review', 'document'], // Create complete working modules
     };
 
     return sequences[workflowType] || sequences.feature;
@@ -299,6 +302,65 @@ export class WorkflowOrchestrator {
       );
     } catch (error) {
       console.error('Failed to log workflow event:', error);
+    }
+  }
+
+  /**
+   * Handle sub-workflow creation from structured plan
+   * If the planning agent generated a structured plan, automatically create sub-workflows
+   */
+  private async handleSubWorkflowCreation(
+    workflowId: number,
+    artifacts: AgentOutput['artifacts']
+  ): Promise<void> {
+    try {
+      // Look for structured_plan artifact
+      const planArtifact = artifacts.find(a => a.type === 'structured_plan');
+      if (!planArtifact) {
+        return; // No structured plan, nothing to do
+      }
+
+      const structuredPlan = JSON.parse(planArtifact.content);
+      
+      // Check if workflow should auto-create sub-workflows
+      const db = getDbPool();
+      const [rows] = await db.execute(
+        'SELECT auto_execute_children, branch_name, target_module FROM workflows WHERE id = ?',
+        [workflowId]
+      );
+      const workflow = (rows as any[])[0];
+      
+      if (!workflow || workflow.auto_execute_children === false) {
+        await this.logWorkflow(workflowId, 'info', 'sub_workflow_skipped', 'Auto-execution disabled, skipping sub-workflow creation');
+        return;
+      }
+
+      // Save plan to workflow
+      await db.execute(
+        'UPDATE workflows SET plan_json = ?, updated_at = NOW() WHERE id = ?',
+        [JSON.stringify(structuredPlan), workflowId]
+      );
+
+      await this.logWorkflow(workflowId, 'info', 'sub_workflow_plan_saved', `Saved structured plan with ${structuredPlan.subTasks?.length || 0} sub-tasks`);
+
+      // Create sub-workflows if there are subtasks
+      if (structuredPlan.subTasks && Array.isArray(structuredPlan.subTasks) && structuredPlan.subTasks.length > 0) {
+        // Call the API to create sub-workflows
+        const axios = (await import('axios')).default;
+        const apiUrl = process.env.AIDEVELOPER_API_URL || 'http://localhost:3000';
+        
+        const response = await axios.post(`${apiUrl}/api/workflows/${workflowId}/sub-workflows`, {
+          subTasks: structuredPlan.subTasks,
+        });
+
+        await this.logWorkflow(workflowId, 'info', 'sub_workflows_created', `Created ${structuredPlan.subTasks.length} sub-workflows from plan`, {
+          childWorkflowIds: response.data?.data?.childWorkflowIds,
+        });
+      }
+    } catch (error) {
+      console.error('Failed to handle sub-workflow creation:', error);
+      await this.logWorkflow(workflowId, 'error', 'sub_workflow_creation_failed', `Failed to create sub-workflows: ${(error as Error).message}`);
+      // Don't throw - this is a non-critical enhancement
     }
   }
 

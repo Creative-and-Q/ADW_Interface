@@ -11,7 +11,7 @@
     "agent"
   ],
   "scripts": {
-    "install": "npm install --include=dev",
+    "install": "npm install",
     "build": "npm run build",
     "typecheck": "npm run typecheck"
   },

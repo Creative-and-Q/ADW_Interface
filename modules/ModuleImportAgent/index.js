@@ -5,8 +5,11 @@
  * generates appropriate module.json configuration files.
  */
 import axios from 'axios';
-import { readFile, writeFile, access } from 'fs/promises';
+import { readFile, writeFile, access, readdir } from 'fs/promises';
 import { join } from 'path';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
 /**
  * ModuleImportAgent class
  */
@@ -41,9 +44,21 @@ class ModuleImportAgent {
             const moduleJsonPath = join(input.modulePath, 'module.json');
             const moduleJsonContent = JSON.stringify(moduleConfig, null, 2);
             await writeFile(moduleJsonPath, moduleJsonContent, 'utf-8');
+            // Step 4: Validate scripts actually work
+            console.log(`Validating scripts for ${input.moduleName}...`);
+            const validation = await this.validateScripts(input.modulePath, moduleConfig, analysis.packageJson);
+            // Step 5: If validation failed, trigger a bugfix workflow
+            if (!validation.allPassed) {
+                console.log(`Script validation failed for ${input.moduleName}, triggering bugfix workflow...`);
+                const workflowResult = await this.triggerBugfixWorkflow(input.moduleName, validation);
+                validation.workflowTriggered = workflowResult.triggered;
+                validation.workflowId = workflowResult.workflowId;
+            }
             return {
                 success: true,
-                message: `Successfully generated module.json for ${input.moduleName}`,
+                message: validation.allPassed
+                    ? `Successfully generated and validated module.json for ${input.moduleName}`
+                    : `Generated module.json for ${input.moduleName} but validation failed - bugfix workflow triggered`,
                 artifacts: [
                     {
                         type: 'module-config',
@@ -53,10 +68,11 @@ class ModuleImportAgent {
                             moduleName: input.moduleName,
                             category: moduleConfig.category,
                             project: moduleConfig.project,
-                            envVarsCount: moduleConfig.env?.length || 0,
+                            envVarsCount: moduleConfig.envVars?.length || 0,
                         },
                     },
                 ],
+                validation,
             };
         }
         catch (error) {
@@ -100,7 +116,7 @@ class ModuleImportAgent {
         catch (error) {
             // README.md not found
         }
-        // Check for .env.example
+        // Check for .env.example files (both root and nested like frontend/)
         try {
             const envExamplePath = join(modulePath, '.env.example');
             await access(envExamplePath);
@@ -108,9 +124,136 @@ class ModuleImportAgent {
             analysis.envExampleContent = await readFile(envExamplePath, 'utf-8');
         }
         catch (error) {
-            // .env.example not found
+            // Try nested .env.example (like frontend/.env.example)
+            try {
+                const frontendEnvPath = join(modulePath, 'frontend', '.env.example');
+                await access(frontendEnvPath);
+                analysis.hasEnvExample = true;
+                analysis.envExampleContent = await readFile(frontendEnvPath, 'utf-8');
+            }
+            catch {
+                // No .env.example found
+            }
+        }
+        // Scan for nested package.json files (e.g., frontend/package.json)
+        try {
+            const nestedPackageJsons = await this.findNestedPackageJsons(modulePath);
+            if (nestedPackageJsons.length > 0) {
+                analysis.nestedPackageJsons = nestedPackageJsons;
+                console.log(`Found ${nestedPackageJsons.length} nested package.json file(s): ${nestedPackageJsons.map(p => p.path).join(', ')}`);
+            }
+        }
+        catch (error) {
+            console.warn('Failed to scan for nested package.json files:', error);
+        }
+        // Scan source code for process.env usage (including nested directories like frontend/)
+        try {
+            const envVariables = await this.scanForEnvVariables(modulePath);
+            if (envVariables.length > 0) {
+                analysis.envVariablesFound = envVariables;
+                console.log(`Found ${envVariables.length} environment variables in source code: ${envVariables.join(', ')}`);
+            }
+        }
+        catch (error) {
+            console.warn('Failed to scan for environment variables:', error);
         }
         return analysis;
+    }
+    /**
+     * Find all nested package.json files (excluding node_modules)
+     */
+    async findNestedPackageJsons(dirPath, depth = 0) {
+        const results = [];
+        const maxDepth = 3; // Prevent deep recursion
+        const excludeDirs = ['node_modules', 'dist', 'build', '.git'];
+        if (depth > maxDepth)
+            return results;
+        try {
+            const entries = await readdir(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    // Skip excluded directories
+                    if (excludeDirs.includes(entry.name))
+                        continue;
+                    const fullPath = join(dirPath, entry.name);
+                    // Check if this directory has a package.json
+                    try {
+                        const packageJsonPath = join(fullPath, 'package.json');
+                        await access(packageJsonPath);
+                        const content = await readFile(packageJsonPath, 'utf-8');
+                        const packageJson = JSON.parse(content);
+                        results.push({
+                            path: entry.name + '/package.json',
+                            content: packageJson,
+                        });
+                        console.log(`Found nested package.json in ${entry.name}/`);
+                    }
+                    catch {
+                        // No package.json in this directory, continue
+                    }
+                    // Recursively scan subdirectories
+                    const nested = await this.findNestedPackageJsons(fullPath, depth + 1);
+                    results.push(...nested.map(n => ({
+                        path: entry.name + '/' + n.path,
+                        content: n.content,
+                    })));
+                }
+            }
+        }
+        catch (error) {
+            // Directory access failed, skip it
+        }
+        return results;
+    }
+    /**
+     * Recursively scan source files for process.env usage
+     */
+    async scanForEnvVariables(dirPath, depth = 0) {
+        const envVars = new Set();
+        const maxDepth = 5; // Prevent infinite recursion
+        const excludeDirs = ['node_modules', 'dist', 'build', '.git', 'coverage', '.next'];
+        if (depth > maxDepth)
+            return [];
+        try {
+            const entries = await readdir(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = join(dirPath, entry.name);
+                if (entry.isDirectory()) {
+                    // Skip excluded directories
+                    if (excludeDirs.includes(entry.name))
+                        continue;
+                    // Recursively scan subdirectories
+                    const subDirVars = await this.scanForEnvVariables(fullPath, depth + 1);
+                    subDirVars.forEach(v => envVars.add(v));
+                }
+                else if (entry.isFile()) {
+                    // Only scan source code files
+                    const ext = entry.name.split('.').pop()?.toLowerCase();
+                    if (!ext || !['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'].includes(ext))
+                        continue;
+                    try {
+                        const content = await readFile(fullPath, 'utf-8');
+                        // Match process.env.VARIABLE_NAME patterns
+                        // This regex matches: process.env.VAR_NAME or process.env['VAR_NAME'] or process.env["VAR_NAME"]
+                        const regex = /process\.env\.([A-Z_][A-Z0-9_]*)|process\.env\[['"]([A-Z_][A-Z0-9_]*)['"]]/g;
+                        let match;
+                        while ((match = regex.exec(content)) !== null) {
+                            const varName = match[1] || match[2];
+                            if (varName) {
+                                envVars.add(varName);
+                            }
+                        }
+                    }
+                    catch (error) {
+                        // Skip files that can't be read
+                    }
+                }
+            }
+        }
+        catch (error) {
+            // Directory access failed, skip it
+        }
+        return Array.from(envVars).sort();
     }
     /**
      * Use AI to generate module.json configuration based on analysis
@@ -152,12 +295,24 @@ Module Name: ${moduleName}
 
 `;
         if (analysis.packageJson) {
-            prompt += `Package.json:
+            prompt += `Root Package.json:
 \`\`\`json
 ${JSON.stringify(analysis.packageJson, null, 2)}
 \`\`\`
 
 `;
+        }
+        if (analysis.nestedPackageJsons && analysis.nestedPackageJsons.length > 0) {
+            prompt += `Nested Package.json Files:\n`;
+            for (const nested of analysis.nestedPackageJsons) {
+                prompt += `
+**${nested.path}:**
+\`\`\`json
+${JSON.stringify(nested.content, null, 2)}
+\`\`\`
+
+`;
+            }
         }
         if (analysis.readmeContent) {
             prompt += `README.md:
@@ -172,6 +327,15 @@ ${analysis.readmeContent.substring(0, 2000)}${analysis.readmeContent.length > 20
 \`\`\`
 ${analysis.envExampleContent}
 \`\`\`
+
+`;
+        }
+        if (analysis.envVariablesFound && analysis.envVariablesFound.length > 0) {
+            prompt += `Environment Variables Found in Source Code:
+The following process.env variables were detected in the source code:
+${analysis.envVariablesFound.map(v => `- ${v}`).join('\n')}
+
+You MUST include all of these variables in the env array of the generated module.json.
 
 `;
         }
@@ -192,7 +356,7 @@ ${analysis.envExampleContent}
     "test": "npm test",
     "typecheck": "npm run typecheck"
   },
-  "env": [
+  "envVars": [
     {
       "key": "ENV_VAR_NAME",
       "description": "Description of the variable",
@@ -222,20 +386,130 @@ Instructions:
    - "test": Use "npm test" if test script exists, otherwise omit
    - "typecheck": Use "npm run typecheck" if typecheck script exists, otherwise omit
    - Only include scripts that exist in package.json (except install which is always included)
-7. For env variables:
+7. For envVars array:
+   - CRITICAL: Include ALL variables found in source code scanning (listed above)
    - Extract from .env.example if available
    - Infer from package.json dependencies (e.g., mysql2 = MySQL variables, express = PORT)
    - Mark API keys as secret: true
    - Mark passwords/tokens as secret: true
+   - Mark environment variables ending in KEY, SECRET, PASSWORD, TOKEN as secret: true
    - Provide sensible defaults where appropriate
+   - For each variable, provide a clear description of its purpose
+   - Variables with defaults should be marked as required: false
 8. Common environment variables to include based on dependencies:
    - If express: PORT (default based on module type)
    - If mysql2: MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
    - If axios + mentions OpenRouter/AI: OPENROUTER_API_KEY, OPENROUTER_MODEL
    - If dotenv: Check .env.example first
+   - If nested frontend/package.json exists: FRONTEND_PORT (for Vite dev server)
+   - Check BOTH root and nested package.json files for dependencies
+   - Note: Nested package.json files (like frontend/) indicate multi-part modules
 
 Return ONLY the JSON configuration wrapped in \`\`\`json\`\`\` code blocks, no additional explanation.`;
         return prompt;
+    }
+    /**
+     * Validate that scripts in module.json actually work
+     */
+    async validateScripts(modulePath, moduleConfig, packageJson) {
+        const results = [];
+        const scriptsToValidate = [];
+        // Determine which scripts to validate based on what's in module.json
+        if (moduleConfig.scripts?.install) {
+            scriptsToValidate.push({ name: 'install', command: 'npm install', critical: true });
+        }
+        if (moduleConfig.scripts?.build && packageJson?.scripts?.build) {
+            scriptsToValidate.push({ name: 'build', command: 'npm run build', critical: true });
+        }
+        if (moduleConfig.scripts?.typecheck && packageJson?.scripts?.typecheck) {
+            scriptsToValidate.push({ name: 'typecheck', command: 'npm run typecheck', critical: false });
+        }
+        // Run each validation
+        for (const script of scriptsToValidate) {
+            console.log(`  Validating ${script.name}: ${script.command}`);
+            const result = await this.runScript(modulePath, script.name, script.command);
+            results.push(result);
+            // Stop on critical failures
+            if (!result.success && script.critical) {
+                console.log(`  Critical script ${script.name} failed, stopping validation`);
+                break;
+            }
+        }
+        const allPassed = results.every(r => r.success);
+        return { allPassed, results };
+    }
+    /**
+     * Run a single script and capture result
+     */
+    async runScript(modulePath, scriptName, command) {
+        try {
+            const { stdout, stderr } = await execAsync(command, {
+                cwd: modulePath,
+                timeout: 120000, // 2 minute timeout
+                maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+            });
+            return {
+                script: scriptName,
+                command,
+                success: true,
+                output: (stdout + stderr).slice(-1000), // Last 1000 chars
+            };
+        }
+        catch (error) {
+            return {
+                script: scriptName,
+                command,
+                success: false,
+                error: error.message,
+                output: (error.stdout || '') + (error.stderr || '').slice(-1000),
+            };
+        }
+    }
+    /**
+     * Trigger a bugfix workflow to fix validation issues
+     */
+    async triggerBugfixWorkflow(moduleName, validation) {
+        try {
+            const failedScripts = validation.results.filter(r => !r.success);
+            const errorSummary = failedScripts
+                .map(r => `${r.script}: ${r.error}\nOutput: ${r.output?.slice(-500) || 'N/A'}`)
+                .join('\n\n');
+            const taskDescription = `Fix script validation failures in ${moduleName} module:
+
+Failed Scripts:
+${errorSummary}
+
+Please investigate and fix:
+1. Missing dependencies or incorrect versions
+2. TypeScript compilation errors
+3. Missing configuration files
+4. Build script issues
+
+Ensure all scripts (install, build, typecheck) pass successfully.`;
+            // Call the AIDeveloper API to create a bugfix workflow with callback metadata
+            const apiUrl = process.env.AIDEVELOPER_API_URL || 'http://localhost:3000';
+            const response = await axios.post(`${apiUrl}/api/workflows/manual`, {
+                workflowType: 'bugfix',
+                targetModule: moduleName,
+                taskDescription,
+                // Callback metadata for post-completion handling
+                callback: {
+                    type: 'module_import_validation',
+                    moduleName,
+                    retryCount: 0,
+                    maxRetries: 3,
+                },
+            });
+            if (response.data?.workflowId) {
+                console.log(`  Bugfix workflow ${response.data.workflowId} triggered for ${moduleName}`);
+                return { triggered: true, workflowId: response.data.workflowId };
+            }
+            return { triggered: false };
+        }
+        catch (error) {
+            console.error(`  Failed to trigger bugfix workflow: ${error.message}`);
+            return { triggered: false };
+        }
     }
 }
 export default ModuleImportAgent;

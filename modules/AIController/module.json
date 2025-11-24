@@ -4,23 +4,7 @@
   "description": "Meta-controller for chaining requests across Ex Nihilo modules",
   "category": "Controllers",
   "project": "Ex Nihilo",
-  "tags": [
-    "controller",
-    "chains",
-    "orchestration",
-    "ai"
-  ],
-  "scripts": {
-    "install": "npm install --include=dev",
-    "build": "npm run build",
-    "typecheck": "npm run typecheck",
-    "start": "npm start",
-    "dev": "npm run dev",
-    "test": "npm test",
-    "frontend-install": "cd frontend && npm install",
-    "frontend-dev": "cd frontend && npm run dev",
-    "frontend-build": "cd frontend && npm run build"
-  },
+  "tags": ["controller", "chains", "orchestration", "ai"],
   "pages": [
     {
       "path": "/chains",
@@ -101,9 +85,7 @@
       "prefix": "/aicontroller",
       "port": 3035
     }
-  ],
-  "frontend": {
-    "port": 5174,
-    "enabled": true
-  }
+  ]
 }
+
+

@@ -4,18 +4,12 @@
   "description": "Orchestrates workflow execution and manages agent sequence",
   "category": "Workflow Management",
   "project": "AIDeveloper",
-  "tags": [
-    "orchestration",
-    "workflows",
-    "management"
-  ],
+  "tags": ["orchestration", "workflows", "management"],
   "scripts": {
-    "install": "npm install --include=dev",
+    "install": "npm install",
+    "start": "npm start",
     "build": "npm run build",
-    "typecheck": "npm run typecheck",
-    "frontend-install": "cd frontend && npm install",
-    "frontend-dev": "cd frontend && npm run dev",
-    "frontend-build": "cd frontend && npm run build"
+    "typecheck": "npm run typecheck"
   },
   "pages": [
     {
@@ -30,13 +24,6 @@
       "component": "WorkflowDetail",
       "label": "Workflow Detail",
       "navOrder": 0
-    },
-    {
-      "path": "/workflow-testing",
-      "component": "WorkflowTesting",
-      "label": "Agent Testing",
-      "icon": "TestTube",
-      "navOrder": 3
     }
   ],
   "envVars": [
@@ -56,9 +43,6 @@
       "type": "string",
       "modulePrefix": "WORKFLOW"
     }
-  ],
-  "frontend": {
-    "port": 5175,
-    "enabled": true
-  }
+  ]
 }
+

@@ -4,14 +4,9 @@
   "description": "Code testing agent with read, write, and execute access to create and run tests",
   "category": "AI Agents",
   "project": "AIDeveloper",
-  "tags": [
-    "ai",
-    "testing",
-    "qa",
-    "agent"
-  ],
+  "tags": ["ai", "testing", "qa", "agent"],
   "scripts": {
-    "install": "npm install --include=dev",
+    "install": "npm install",
     "build": "npm run build",
     "typecheck": "npm run typecheck"
   },
@@ -34,3 +29,5 @@
     }
   ]
 }
+
+

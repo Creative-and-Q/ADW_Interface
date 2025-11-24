@@ -15,6 +15,25 @@ export interface AgentInput {
     workflowId?: number;
 }
 /**
+ * Script validation result
+ */
+interface ScriptValidationResult {
+    script: string;
+    command: string;
+    success: boolean;
+    error?: string;
+    output?: string;
+}
+/**
+ * Validation summary
+ */
+interface ValidationSummary {
+    allPassed: boolean;
+    results: ScriptValidationResult[];
+    workflowTriggered?: boolean;
+    workflowId?: number;
+}
+/**
  * Agent output structure
  */
 export interface AgentOutput {
@@ -22,6 +41,7 @@ export interface AgentOutput {
     message: string;
     artifacts: Artifact[];
     error?: string;
+    validation?: ValidationSummary;
 }
 /**
  * Artifact structure for generated files
@@ -49,6 +69,14 @@ declare class ModuleImportAgent {
      */
     private analyzeModule;
     /**
+     * Find all nested package.json files (excluding node_modules)
+     */
+    private findNestedPackageJsons;
+    /**
+     * Recursively scan source files for process.env usage
+     */
+    private scanForEnvVariables;
+    /**
      * Use AI to generate module.json configuration based on analysis
      */
     private generateModuleConfig;
@@ -56,6 +84,18 @@ declare class ModuleImportAgent {
      * Build the analysis prompt for the AI
      */
     private buildAnalysisPrompt;
+    /**
+     * Validate that scripts in module.json actually work
+     */
+    private validateScripts;
+    /**
+     * Run a single script and capture result
+     */
+    private runScript;
+    /**
+     * Trigger a bugfix workflow to fix validation issues
+     */
+    private triggerBugfixWorkflow;
 }
 export default ModuleImportAgent;
 //# sourceMappingURL=index.d.ts.map

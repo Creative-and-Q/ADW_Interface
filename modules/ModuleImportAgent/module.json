@@ -1,23 +1,22 @@
 {
   "name": "ModuleImportAgent",
   "version": "1.0.0",
-  "description": "AI-powered agent that automatically generates module.json configurations for newly imported modules",
+  "description": "AI-powered agent that automatically generates module.json configurations for newly imported modules with environment variable detection",
   "category": "Agents",
   "project": "AIDeveloper",
   "tags": [
+    "ai",
     "module-import",
-    "code-analysis",
-    "ai-agent",
     "automation",
-    "configuration-generation"
+    "agent",
+    "configuration"
   ],
   "scripts": {
-    "install": "npm install --include=dev",
+    "install": "npm install",
     "build": "npm run build",
-    "typecheck": "npm run typecheck",
-    "dev": "npm run dev"
+    "typecheck": "npm run typecheck"
   },
-  "env": [
+  "envVars": [
     {
       "key": "OPENROUTER_API_KEY",
       "description": "OpenRouter API key for AI-powered module analysis",
@@ -27,10 +26,19 @@
     },
     {
       "key": "OPENROUTER_MODEL",
-      "description": "OpenRouter model to use for module analysis",
+      "description": "OpenRouter AI model to use for module analysis",
       "required": false,
       "defaultValue": "anthropic/claude-3.5-sonnet",
-      "type": "string"
+      "type": "string",
+      "secret": false
+    },
+    {
+      "key": "AIDEVELOPER_API_URL",
+      "description": "AIDeveloper API URL for triggering workflows",
+      "required": false,
+      "defaultValue": "http://localhost:3000",
+      "type": "string",
+      "secret": false
     }
   ]
 }
