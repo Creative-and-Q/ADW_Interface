@@ -476,6 +476,67 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/workflows/new-module
+ * Create a new module with workflow orchestration
+ */
+router.post('/workflows/new-module', async (req: Request, res: Response) => {
+  try {
+    const {
+      moduleName,
+      description,
+      moduleType = 'service',
+      port,
+      hasFrontend = true,
+      frontendPort,
+      relatedModules = [],
+      taskDescription,
+    } = req.body;
+
+    if (!moduleName || !description) {
+      return res.status(400).json({
+        error: 'moduleName and description are required',
+      });
+    }
+
+    // Import dynamically to avoid circular dependencies
+    const { createWorkflow } = await import('./workflow-state.js');
+
+    // Create workflow record
+    const workflowId = await createWorkflow({
+      type: 'new_module',
+      targetModule: moduleName,
+      description: taskDescription || description,
+      metadata: {
+        moduleType,
+        port,
+        hasFrontend,
+        frontendPort,
+        relatedModules,
+      },
+    });
+
+    logger.info('New module workflow created', {
+      workflowId,
+      moduleName,
+      moduleType,
+      hasFrontend,
+    });
+
+    return res.json({
+      success: true,
+      workflowId,
+      message: `Module creation workflow started for ${moduleName}`,
+    });
+  } catch (error) {
+    logger.error('Failed to create new module workflow', error as Error);
+    return res.status(500).json({
+      error: 'Failed to create module workflow',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
  * DELETE /api/workflows/:id
  * Cancel a workflow
  */

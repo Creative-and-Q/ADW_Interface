@@ -203,7 +203,7 @@ export class WorkflowOrchestrator {
       refactor: ['plan', 'code', 'test', 'review', 'document'],
       documentation: ['document'],
       review: ['review'],
-      new_module: ['plan', 'code', 'test', 'review', 'document'], // Create complete working modules
+      new_module: ['scaffold'], // Scaffold module and create sub-workflows for implementation
     };
 
     return sequences[workflowType] || sequences.feature;
@@ -251,6 +251,7 @@ export class WorkflowOrchestrator {
       test: 'CodeTestingAgent',
       review: 'CodeReviewAgent',
       document: 'CodeDocumentationAgent',
+      scaffold: 'ModuleScaffoldAgent',
     };
 
     const moduleName = agentModules[agentType];
