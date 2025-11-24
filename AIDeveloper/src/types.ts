@@ -9,14 +9,6 @@ export enum WorkflowType {
   REFACTOR = 'refactor',
   DOCUMENTATION = 'documentation',
   REVIEW = 'review',
-  NEW_MODULE = 'new_module',  // Create entirely new module with GitHub repo
-}
-
-// Workflow output modes
-export enum WorkflowOutputMode {
-  PR = 'pr',                    // Push branch and create PR (default for code changes)
-  DOWNLOAD = 'download',        // Generate artifacts for download only (e.g., standalone docs)
-  BOTH = 'both',               // Both PR and downloadable artifacts
 }
 
 // Workflow statuses
@@ -65,8 +57,7 @@ export enum ArtifactType {
 export interface WebhookPayload {
   source: 'github' | 'gitlab' | 'custom' | 'manual';
   eventType?: string;
-  targetModule?: string; // Primary module (backwards compatibility)
-  targetModules?: string[]; // Multiple modules for cross-module workflows
+  targetModule?: string; // Module restriction for agent file edits
   repository?: {
     name: string;
     fullName: string;
@@ -106,14 +97,55 @@ export interface WorkflowExecution {
   id: number;
   webhookId?: string;
   type: WorkflowType;
-  target_module?: string; // Primary module (backwards compatibility)
-  target_modules?: string[]; // All target modules for this workflow
+  target_module?: string;
   status: WorkflowStatus;
   payload: WebhookPayload;
   branchName?: string;
   createdAt: Date;
   updatedAt: Date;
   completedAt?: Date;
+  // Workflow hierarchy fields
+  parentWorkflowId?: number;
+  workflowDepth?: number;
+  executionOrder?: number;
+  planJson?: WorkflowPlan;
+  autoExecuteChildren?: boolean;
+}
+
+// Workflow plan structure for breaking down complex tasks
+export interface WorkflowPlan {
+  objective: string;
+  totalSteps: number;
+  subTasks: SubTask[];
+  estimatedDuration?: string;
+  dependencies?: Record<number, number[]>; // task index -> depends on task indices
+}
+
+// Sub-task definition
+export interface SubTask {
+  id: number;
+  title: string;
+  description: string;
+  workflowType: WorkflowType;
+  targetModule?: string;
+  priority: number;
+  estimatedComplexity: 'low' | 'medium' | 'high';
+  dependsOn?: number[]; // IDs of tasks this depends on
+  metadata?: Record<string, any>;
+}
+
+// Sub-workflow queue entry
+export interface SubWorkflowQueueEntry {
+  id: number;
+  parentWorkflowId: number;
+  childWorkflowId: number;
+  executionOrder: number;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+  dependsOn?: number[];
+  createdAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+  errorMessage?: string;
 }
 
 // Agent execution state
@@ -134,8 +166,7 @@ export interface AgentExecution {
 export interface AgentInput {
   workflowId: number;
   workflowType?: WorkflowType;
-  targetModule?: string; // Primary module (backwards compatibility)
-  targetModules?: string[]; // All target modules for cross-module workflows
+  targetModule?: string; // Module restriction for agent file edits
   taskDescription?: string;
   branchName?: string;
   webhookPayload?: WebhookPayload;

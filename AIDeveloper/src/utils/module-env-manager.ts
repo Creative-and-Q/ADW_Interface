@@ -8,6 +8,7 @@ import path from 'path';
 import { config } from '../config.js';
 import * as logger from './logger.js';
 import { getAllModuleEnvVars, readModuleManifest } from './module-manager.js';
+// dotenv configured in server.ts
 
 /**
  * Environment variable value with metadata

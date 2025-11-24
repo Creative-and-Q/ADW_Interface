@@ -32,20 +32,80 @@ import * as logger from './utils/logger.js';
 export async function createWorkflow(
   type: WorkflowType,
   payload: WebhookPayload,
-  targetModule: string = 'AIDeveloper'
+  targetModule: string = 'AIDeveloper',
+  options?: {
+    parentWorkflowId?: number;
+    workflowDepth?: number;
+    executionOrder?: number;
+    branchName?: string;
+    autoExecuteChildren?: boolean;
+  }
 ): Promise<number> {
   try {
-    const workflowId = await insert('workflows', {
+    const data: Record<string, any> = {
       workflow_type: type,
       target_module: targetModule,
       status: WorkflowStatus.PENDING,
       payload: JSON.stringify(payload),
-    });
+    };
 
-    logger.info(`Workflow created: ${workflowId}`, { type, targetModule });
+    // Add hierarchy fields if provided
+    if (options) {
+      if (options.parentWorkflowId !== undefined) {
+        data.parent_workflow_id = options.parentWorkflowId;
+      }
+      if (options.workflowDepth !== undefined) {
+        data.workflow_depth = options.workflowDepth;
+      }
+      if (options.executionOrder !== undefined) {
+        data.execution_order = options.executionOrder;
+      }
+      if (options.branchName) {
+        data.branch_name = options.branchName;
+      }
+      if (options.autoExecuteChildren !== undefined) {
+        data.auto_execute_children = options.autoExecuteChildren;
+      }
+    }
+
+    const workflowId = await insert('workflows', data);
+
+    logger.info(`Workflow created: ${workflowId}`, { 
+      type, 
+      targetModule,
+      parentWorkflowId: options?.parentWorkflowId,
+      depth: options?.workflowDepth || 0,
+    });
     return workflowId;
   } catch (error) {
     logger.error('Failed to create workflow', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Save structured plan to workflow
+ */
+export async function saveWorkflowPlan(
+  workflowId: number,
+  plan: any
+): Promise<void> {
+  try {
+    await update(
+      'workflows',
+      {
+        plan_json: JSON.stringify(plan),
+        updated_at: new Date(),
+      },
+      'id = ?',
+      [workflowId]
+    );
+
+    logger.info(`Saved plan for workflow ${workflowId}`, {
+      subTasks: plan.subTasks?.length || 0,
+    });
+  } catch (error) {
+    logger.error('Failed to save workflow plan', error as Error);
     throw error;
   }
 }
