@@ -15,6 +15,8 @@ const execAsync = promisify(exec);
  * CodeReviewAgent
  */
 export class CodeReviewAgent {
+    model;
+    apiKey;
     constructor() {
         this.apiKey = process.env.OPENROUTER_API_KEY || '';
         this.model = process.env.OPENROUTER_MODEL_REVIEW || 'anthropic/claude-3.5-sonnet';

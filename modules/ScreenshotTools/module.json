@@ -1,0 +1,14 @@
+{
+  "name": "ScreenshotTools",
+  "version": "1.0.0",
+  "description": "Screenshot and image processing tools for AI agents using Puppeteer",
+  "category": "Utilities",
+  "project": "AIDeveloper",
+  "tags": ["screenshot", "puppeteer", "image", "tools", "utility"],
+  "scripts": {
+    "install": "npm install",
+    "build": "npm run build",
+    "typecheck": "npm run typecheck"
+  },
+  "envVars": []
+}

@@ -5,7 +5,7 @@
 
 import { Router, Request, Response } from 'express';
 import { query } from './database.js';
-import { WorkflowStatus, AgentStatus, WorkflowOutputMode, WorkflowType } from './types.js';
+import { WorkflowStatus, AgentStatus } from './types.js';
 import * as logger from './utils/logger.js';
 import { getExecutionLogs } from './utils/execution-logger.js';
 import {
@@ -17,94 +17,26 @@ import {
   updateModulePrompt,
   getModuleStats,
   importModule,
-  getModulesPath,
-  readModuleManifest,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
-import {
-  createWorkflowDirectory,
-  getWorkflowRepoPath,
-  saveWorkflowArtifact,
-  updateWorkflowStatus,
-  getWorkflowDirectory
-} from './utils/workflow-directory-manager.js';
-import { getGit } from './utils/git-helper.js';
-import { config } from './config.js';
+import workflowHierarchyRouter from './api/workflow-hierarchy.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
 
 // ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Intelligently determine workflow output mode based on task description and type
- * @param taskDescription - The workflow task description
- * @param workflowType - The workflow type
- * @returns The appropriate output mode
- */
-function determineOutputMode(taskDescription: string, workflowType: string): WorkflowOutputMode {
-  const lowerTask = taskDescription.toLowerCase();
-
-  // Keywords that suggest standalone documentation (download only)
-  const standaloneDocKeywords = [
-    'explain what',
-    'explain how',
-    'document what',
-    'document how',
-    'describe what',
-    'describe how',
-    'what does',
-    'how does',
-    'generate documentation for',
-    'create documentation for',
-    'write documentation about',
-  ];
-
-  // Keywords that suggest project integration (PR)
-  const integrationKeywords = [
-    'add documentation to',
-    'update documentation in',
-    'add readme',
-    'update readme',
-    'add docs to',
-    'missing documentation',
-    'needs documentation',
-    'should be documented',
-    'document the code',
-    'add comments',
-  ];
-
-  // Check for integration keywords first (higher priority)
-  const hasIntegrationKeywords = integrationKeywords.some(keyword => lowerTask.includes(keyword));
-  if (hasIntegrationKeywords) {
-    return WorkflowOutputMode.PR;
-  }
-
-  // Check for standalone documentation keywords
-  const hasStandaloneKeywords = standaloneDocKeywords.some(keyword => lowerTask.includes(keyword));
-  if (hasStandaloneKeywords && workflowType === WorkflowType.DOCUMENTATION) {
-    return WorkflowOutputMode.DOWNLOAD;
-  }
-
-  // Check if it's a documentation workflow without clear integration intent
-  if (workflowType === WorkflowType.DOCUMENTATION) {
-    // If no clear integration keywords, provide both options
-    return WorkflowOutputMode.BOTH;
-  }
-
-  // Default to PR for code changes (feature, bugfix, refactor)
-  return WorkflowOutputMode.PR;
-}
-
-// ============================================================================
 // Module Plugin Routes (MUST BE BEFORE PROXY ROUTES)
 // ============================================================================
 
 router.use('/modules', modulePluginsRouter);
+
+// ============================================================================
+// Workflow Hierarchy Routes
+// ============================================================================
+
+router.use('/workflows', workflowHierarchyRouter);
 
 // ============================================================================
 // AIController Proxy Routes (MUST BE FIRST)
@@ -234,7 +166,7 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
 
     // Get artifacts
     const artifacts = await query<any>(
-      'SELECT * FROM workflow_artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
+      'SELECT * FROM artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
       [id]
     );
 
@@ -267,96 +199,6 @@ router.get('/workflows/:id/logs', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to fetch execution logs', error as Error);
     return res.status(500).json({ error: 'Failed to fetch execution logs' });
-  }
-});
-
-/**
- * GET /api/workflows/:id/artifacts/:artifactId/download
- * Download a specific artifact as a file
- */
-router.get('/workflows/:id/artifacts/:artifactId/download', async (req: Request, res: Response) => {
-  try {
-    const workflowId = parseInt(req.params.id);
-    const artifactId = parseInt(req.params.artifactId);
-
-    // Get artifact from database
-    const [artifact] = await query<any>(
-      'SELECT * FROM workflow_artifacts WHERE id = ? AND workflow_id = ?',
-      [artifactId, workflowId]
-    );
-
-    if (!artifact) {
-      return res.status(404).json({ error: 'Artifact not found' });
-    }
-
-    // Determine filename
-    const filename = artifact.file_path || `${artifact.artifact_type}-${artifactId}.txt`;
-    const extension = path.extname(filename) || '.txt';
-    const basename = path.basename(filename, extension);
-
-    // Set headers for file download
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${basename}${extension}"`);
-
-    // Send content
-    return res.send(artifact.content);
-  } catch (error) {
-    logger.error('Failed to download artifact', error as Error);
-    return res.status(500).json({ error: 'Failed to download artifact' });
-  }
-});
-
-/**
- * GET /api/workflows/:id/artifacts/download-all
- * Download all artifacts as a zip file
- */
-router.get('/workflows/:id/artifacts/download-all', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const workflowId = parseInt(req.params.id);
-
-    // Get workflow info
-    const [workflow] = await query<any>('SELECT * FROM workflows WHERE id = ?', [workflowId]);
-    if (!workflow) {
-      res.status(404).json({ error: 'Workflow not found' });
-      return;
-    }
-
-    // Get all artifacts
-    const artifacts = await query<any>(
-      'SELECT * FROM workflow_artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
-      [workflowId]
-    );
-
-    if (artifacts.length === 0) {
-      res.status(404).json({ error: 'No artifacts found' });
-      return;
-    }
-
-    // Create zip archive
-    const archiver = (await import('archiver')).default;
-    const archive = archiver('zip', { zlib: { level: 9 } });
-
-    // Set headers
-    const zipFilename = `workflow-${workflowId}-artifacts.zip`;
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
-
-    // Pipe archive to response
-    archive.pipe(res);
-
-    // Add each artifact to archive
-    for (const artifact of artifacts) {
-      const filename = artifact.file_path || `${artifact.artifact_type}-${artifact.id}.txt`;
-      archive.append(artifact.content, { name: filename });
-    }
-
-    // Finalize archive
-    await archive.finalize();
-
-    logger.info('Downloaded all artifacts', { workflowId, count: artifacts.length });
-  } catch (error) {
-    logger.error('Failed to download all artifacts', error as Error);
-    res.status(500).json({ error: 'Failed to download all artifacts' });
   }
 });
 
@@ -598,729 +440,40 @@ router.get('/errors', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/workflows/new-module
- * Create a completely new module with GitHub repo and scaffolding
- */
-router.post('/workflows/new-module', async (req: Request, res: Response) => {
-  try {
-    const {
-      moduleName,
-      description,
-      moduleType,  // 'service' or 'library'
-      port,
-      hasFrontend,
-      frontendPort,
-      relatedModules,
-      taskDescription,
-    } = req.body;
-
-    if (!moduleName || !description) {
-      return res.status(400).json({
-        error: 'moduleName and description are required',
-      });
-    }
-
-    // Validate module name (PascalCase, no special chars)
-    if (!/^[A-Z][a-zA-Z0-9]*$/.test(moduleName)) {
-      return res.status(400).json({
-        error: 'Module name must be PascalCase (e.g., DataProcessor, AIHelper)',
-      });
-    }
-
-    logger.info('Creating new module workflow', {
-      moduleName,
-      description: description.substring(0, 100),
-      moduleType,
-    });
-
-    // Import module creator
-    const { createNewModule } = await import('./utils/module-creator.js');
-
-    // Create the new module
-    const result = await createNewModule({
-      name: moduleName,
-      description,
-      type: moduleType || 'library',
-      port: port ? parseInt(port) : undefined,
-      hasFrontend: hasFrontend || false,
-      frontendPort: frontendPort ? parseInt(frontendPort) : undefined,
-      relatedModules: relatedModules || [],
-    });
-
-    if (!result.success) {
-      return res.status(500).json({
-        error: result.error || 'Failed to create module',
-      });
-    }
-
-    // Create a workflow record for tracking
-    const workflowResult = await query<any>(
-      `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at, completed_at)
-       VALUES (?, 'pr', ?, 'completed', ?, NOW(), NOW(), NOW())`,
-      [
-        'new_module',
-        moduleName,
-        JSON.stringify({
-          source: 'custom',
-          customData: {
-            moduleName,
-            description,
-            moduleType: moduleType || 'library',
-            port,
-            hasFrontend,
-            frontendPort,
-            relatedModules,
-            taskDescription: taskDescription || `Create new module: ${moduleName}`,
-            repoUrl: result.repoUrl,
-            modulePath: result.modulePath,
-          },
-          targetModule: moduleName,
-        }),
-      ]
-    );
-
-    const workflowId = workflowResult.insertId;
-
-    // Create artifacts for the new module workflow
-    try {
-      // Create a summary artifact
-      const summaryContent = `# New Module Created: ${moduleName}
-
-## Module Details
-- **Name**: ${moduleName}
-- **Type**: ${moduleType || 'library'}
-- **Description**: ${description}
-${port ? `- **Port**: ${port}` : ''}
-${hasFrontend ? `- **Frontend Port**: ${frontendPort || 5176}` : ''}
-${relatedModules?.length ? `- **Related Modules**: ${relatedModules.join(', ')}` : ''}
-
-## Locations
-- **Module Path**: ${result.modulePath}
-- **Workflow Path**: ${result.workflowPath}
-- **GitHub Repository**: ${result.repoUrl || 'N/A'}
-
-## Generated Files
-- \`package.json\` - Node.js package configuration
-- \`tsconfig.json\` - TypeScript configuration
-- \`module.json\` - Module metadata for AIDeveloper
-- \`README.md\` - Documentation
-- \`src/server.ts\` - Main entry point${moduleType === 'service' ? ' (Express server)' : ''}
-${hasFrontend ? `- \`frontend/\` - React frontend scaffold with Vite + Tailwind` : ''}
-
-## Next Steps
-1. Navigate to the module: \`cd ${result.modulePath}\`
-2. Install dependencies: \`npm install\`${hasFrontend ? `\n3. Install frontend dependencies: \`cd frontend && npm install\`` : ''}
-3. Start development: \`npm run dev\`
-
----
-*Generated by AIDeveloper New Module Creator*
-`;
-
-      await query(
-        `INSERT INTO workflow_artifacts (workflow_id, artifact_type, file_path, content, created_at)
-         VALUES (?, 'documentation', 'MODULE_CREATION_SUMMARY.md', ?, NOW())`,
-        [workflowId, summaryContent]
-      );
-
-      logger.info('Created artifact for new module workflow', { workflowId, moduleName });
-    } catch (artifactError) {
-      logger.warn('Failed to create artifact for new module', { error: (artifactError as Error).message });
-    }
-
-    // If there's additional task description, create a separate follow-up feature workflow
-    let followUpWorkflowId: number | undefined;
-    if (taskDescription && taskDescription.trim()) {
-      try {
-        // Create a new workflow record for the follow-up task
-        const followUpResult = await query<any>(
-          `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
-           VALUES ('feature', 'pr', ?, 'pending', ?, NOW(), NOW())`,
-          [
-            moduleName,
-            JSON.stringify({
-              source: 'manual',
-              customData: {
-                taskDescription,
-                parentWorkflowId: workflowId,
-              },
-              targetModule: moduleName,
-            }),
-          ]
-        );
-        followUpWorkflowId = followUpResult.insertId;
-
-        // Execute the follow-up workflow asynchronously
-        executeWorkflowAsync(
-          followUpWorkflowId!,
-          'feature',
-          moduleName,
-          taskDescription
-        ).catch((error) => {
-          logger.error('Follow-up workflow failed', error as Error);
-        });
-
-        logger.info('Follow-up workflow queued', { followUpWorkflowId, moduleName });
-      } catch (followUpError) {
-        logger.error('Failed to create follow-up workflow', followUpError as Error);
-        // Don't fail the whole operation if follow-up fails
-      }
-    }
-
-    logger.info('New module created successfully', {
-      moduleName,
-      workflowId,
-      repoUrl: result.repoUrl,
-      followUpWorkflowId,
-    });
-
-    return res.json({
-      success: true,
-      workflowId,
-      followUpWorkflowId,
-      moduleName,
-      modulePath: result.modulePath,
-      workflowPath: result.workflowPath,
-      repoUrl: result.repoUrl,
-      message: `Module ${moduleName} created successfully${followUpWorkflowId ? `. Follow-up workflow #${followUpWorkflowId} queued.` : ''}`,
-    });
-  } catch (error) {
-    logger.error('Failed to create new module', error as Error);
-    return res.status(500).json({
-      error: 'Failed to create new module',
-      message: (error as Error).message,
-    });
-  }
-});
-
-/**
  * POST /api/workflows/manual
- * Submit manual workflow and execute it via WorkflowOrchestrator
+ * Submit manual workflow (same as webhook but via REST)
  */
 router.post('/workflows/manual', async (req: Request, res: Response) => {
   try {
-    const { workflowType, targetModule, targetModules, taskDescription, callback } = req.body;
+    const { workflowType, targetModule, taskDescription } = req.body;
 
     if (!workflowType || !taskDescription) {
-      logger.info('Workflow validation failed: missing required fields', {
-        workflowType,
-        taskDescription: !!taskDescription,
-      });
       return res.status(400).json({
         error: 'workflowType and taskDescription are required',
       });
     }
 
-    // Support both single targetModule (backwards compatibility) and targetModules array
-    let modules: string[] = [];
-    if (targetModules && Array.isArray(targetModules) && targetModules.length > 0) {
-      modules = targetModules;
-    } else if (targetModule) {
-      modules = [targetModule];
-    } else {
-      logger.info('Workflow validation failed: missing targetModule(s)');
+    if (!targetModule) {
       return res.status(400).json({
-        error: 'targetModule or targetModules is required',
+        error: 'targetModule is required',
       });
     }
 
-    // Primary module is the first one (used for PR base branch decisions)
-    const primaryModule = modules[0];
-
-    // Intelligently determine output mode based on task description
-    const outputMode = determineOutputMode(taskDescription, workflowType);
-
-    logger.info('Creating manual workflow', {
-      workflowType,
-      targetModules: modules,
-      primaryModule,
-      taskDescription: taskDescription.substring(0, 100),
-      outputMode,
+    // Forward to webhook handler
+    const response = await fetch('http://localhost:3000/webhooks/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflowType, targetModule, taskDescription }),
     });
 
-    // Create workflow in database (target_module stores primary for backwards compatibility)
-    const result = await query<any>(
-      `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
-       VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())`,
-      [
-        workflowType,
-        outputMode,
-        primaryModule,
-        JSON.stringify({
-          source: 'custom',
-          customData: {
-            targetModule: primaryModule,
-            targetModules: modules,
-            workflowType,
-            taskDescription,
-            outputMode,
-          },
-          targetModule: primaryModule,
-          targetModules: modules,
-          callback: callback || null, // Store callback metadata for post-completion handling
-        }),
-      ]
-    );
+    const data = await response.json();
 
-    const workflowId = result.insertId;
-
-    // Insert into workflow_modules junction table for multi-module tracking
-    for (let i = 0; i < modules.length; i++) {
-      await query(
-        `INSERT INTO workflow_modules (workflow_id, module_name, is_primary, created_at)
-         VALUES (?, ?, ?, NOW())`,
-        [workflowId, modules[i], i === 0]
-      );
-    }
-
-    logger.info('Workflow created in database', { workflowId, workflowType, targetModules: modules });
-
-    // Execute workflow asynchronously (don't wait for completion)
-    executeWorkflowAsync(workflowId, workflowType, modules, taskDescription).catch(
-      (error) => {
-        logger.error('Async workflow execution failed', error as Error);
-        logger.info('Async workflow execution details', {
-          workflowId,
-          errorMessage: error.message,
-        });
-      }
-    );
-
-    return res.json({
-      success: true,
-      workflowId,
-      targetModules: modules,
-      message: 'Workflow created and queued for execution',
-    });
+    return res.json(data);
   } catch (error) {
     logger.error('Failed to submit workflow', error as Error);
-    return res.status(500).json({
-      error: 'Failed to submit workflow',
-      message: (error as Error).message,
-    });
+    return res.status(500).json({ error: 'Failed to submit workflow' });
   }
 });
-
-/**
- * Handle workflow completion callbacks
- * Re-validates modules or triggers retry workflows as needed
- */
-async function handleWorkflowCallback(
-  workflowId: number,
-  status: string,
-  callback: { type: string; moduleName: string; retryCount: number; maxRetries: number },
-  _primaryModule: string
-): Promise<void> {
-  logger.info('Processing workflow callback', { workflowId, status, callback });
-
-  if (callback.type === 'module_import_validation') {
-    const { moduleName, retryCount, maxRetries } = callback;
-
-    if (status === 'completed') {
-      // Workflow completed - re-run validation to verify the fix worked
-      logger.info('Bugfix workflow completed, re-validating module', { workflowId, moduleName });
-
-      try {
-        // Dynamically import and execute ModuleImportAgent to re-validate
-        const modulesPath = path.join(config.workspace.root, 'modules');
-        const agentPath = `file://${modulesPath}/ModuleImportAgent/index.js`;
-        const { default: ModuleImportAgent } = await import(agentPath);
-
-        const agent = new ModuleImportAgent();
-        const modulePath = path.join(modulesPath, moduleName);
-
-        // Just run validation (module.json already exists)
-        const result = await agent.execute({
-          modulePath,
-          moduleName,
-          workingDir: modulePath,
-        });
-
-        if (result.validation?.allPassed) {
-          logger.info('Module validation passed after bugfix', { workflowId, moduleName });
-        } else {
-          logger.warn('Module validation still failing after bugfix', {
-            workflowId,
-            moduleName,
-            validation: result.validation,
-          });
-          // The agent will auto-trigger another bugfix if needed
-        }
-      } catch (error) {
-        logger.error('Failed to re-validate module after bugfix', error as Error, { workflowId, moduleName });
-      }
-    } else if (status === 'failed' && retryCount < maxRetries) {
-      // Workflow failed - trigger a retry with incremented count
-      logger.info('Bugfix workflow failed, triggering retry', {
-        workflowId,
-        moduleName,
-        retryCount: retryCount + 1,
-        maxRetries,
-      });
-
-      try {
-        // Get the original task description and create a new workflow
-        const [originalWorkflow] = await query<any>(
-          'SELECT payload FROM workflows WHERE id = ?',
-          [workflowId]
-        );
-
-        if (originalWorkflow?.payload) {
-          const originalPayload = JSON.parse(originalWorkflow.payload);
-          const taskDescription = `Retry #${retryCount + 1}: Fix script validation failures in ${moduleName} module.
-
-Previous bugfix attempt (workflow #${workflowId}) failed. Please investigate what went wrong and try a different approach.
-
-Original task: ${originalPayload.customData?.taskDescription || 'Fix module validation issues'}`;
-
-          // Create retry workflow
-          const retryResult = await query<any>(
-            `INSERT INTO workflows (workflow_type, output_mode, target_module, status, payload, created_at, updated_at)
-             VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())`,
-            [
-              'bugfix',
-              WorkflowOutputMode.PR,
-              moduleName,
-              JSON.stringify({
-                source: 'callback_retry',
-                targetModule: moduleName,
-                targetModules: [moduleName],
-                callback: {
-                  type: 'module_import_validation',
-                  moduleName,
-                  retryCount: retryCount + 1,
-                  maxRetries,
-                },
-              }),
-            ]
-          );
-
-          const retryWorkflowId = retryResult.insertId;
-          logger.info('Retry workflow created', { originalWorkflowId: workflowId, retryWorkflowId, moduleName });
-
-          // Execute the retry workflow
-          executeWorkflowAsync(retryWorkflowId, 'bugfix', [moduleName], taskDescription).catch(
-            (error) => logger.error('Retry workflow execution failed', error as Error, { retryWorkflowId })
-          );
-        }
-      } catch (error) {
-        logger.error('Failed to create retry workflow', error as Error, { workflowId, moduleName });
-      }
-    } else if (status === 'failed') {
-      logger.warn('Bugfix workflow failed and max retries exceeded', {
-        workflowId,
-        moduleName,
-        retryCount,
-        maxRetries,
-      });
-    }
-  }
-}
-
-/**
- * Execute workflow asynchronously
- * @param targetModules - Array of modules this workflow targets (first is primary)
- */
-async function executeWorkflowAsync(
-  workflowId: number,
-  workflowType: string,
-  targetModules: string[],
-  taskDescription: string
-): Promise<void> {
-  // Declare branchName outside try block so it's accessible in catch
-  let branchName = '';
-  let outputMode: WorkflowOutputMode = WorkflowOutputMode.PR;
-
-  // Primary module is the first one (used for cloning and PR decisions)
-  const primaryModule = targetModules[0];
-
-  try {
-    logger.info('Starting async workflow execution', { workflowId, workflowType, targetModules, primaryModule });
-
-    // Get workflow output mode from database
-    const [workflow] = await query<any>('SELECT output_mode FROM workflows WHERE id = ?', [workflowId]);
-    if (workflow && workflow.output_mode) {
-      outputMode = workflow.output_mode as WorkflowOutputMode;
-    }
-
-    // Update status to running
-    await query('UPDATE workflows SET status = ?, updated_at = NOW() WHERE id = ?', [
-      'running',
-      workflowId,
-    ]);
-
-    // Generate branch name for this workflow
-    const sanitizedTask = taskDescription
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .substring(0, 50)
-      .replace(/-+$/, '');
-    branchName = `workflow-${workflowType}-${workflowId}-${sanitizedTask}`;
-
-    logger.info('Creating workflow directory and branch', {
-      workflowId,
-      branchName,
-      workflowType,
-      targetModules,
-    });
-
-    // Create workflow directory structure (clones the primary module's repo)
-    // For multi-module workflows, additional modules are cloned as siblings
-    const workflowDir = await createWorkflowDirectory(workflowId, branchName, workflowType as any, primaryModule, targetModules);
-    const repoPath = getWorkflowRepoPath(workflowId, branchName);
-
-    // Create and checkout new branch in the cloned repo
-    const git = getGit(repoPath);
-    await git.checkoutLocalBranch(branchName);
-
-    logger.info('Workflow directory and branch created', {
-      workflowDir,
-      repoPath,
-      branchName,
-      targetModules,
-    });
-
-    // Import WorkflowOrchestrator module
-    const { WorkflowOrchestrator } = await import(
-      '../../modules/WorkflowOrchestrator/index.js'
-    );
-
-    const orchestrator = new WorkflowOrchestrator();
-
-    // Working directory is always the cloned repo (which is the primary module)
-    const workingDir = repoPath;
-
-    logger.info('Executing WorkflowOrchestrator', {
-      workflowId,
-      workingDir,
-      workflowType,
-      targetModules,
-    });
-
-    // Execute the workflow with all target modules
-    const output = await orchestrator.execute({
-      workflowId,
-      workflowType,
-      targetModule: primaryModule,  // Backwards compatibility
-      targetModules,                // New: all target modules
-      taskDescription,
-      branchName,
-      workingDir,
-    });
-
-    // Update workflow status based on execution result
-    const finalStatus = output.success ? 'completed' : 'failed';
-    await query(
-      'UPDATE workflows SET status = ?, completed_at = NOW(), updated_at = NOW() WHERE id = ?',
-      [finalStatus, workflowId]
-    );
-
-    logger.info('Workflow execution completed', {
-      workflowId,
-      status: finalStatus,
-      artifactsCount: output.artifacts.length,
-    });
-
-    // Store artifacts in database and save to filesystem
-    for (const artifact of output.artifacts) {
-      // Save to database
-      await query(
-        `INSERT INTO workflow_artifacts (workflow_id, artifact_type, content, file_path, metadata, created_at)
-         VALUES (?, ?, ?, ?, ?, NOW())`,
-        [
-          workflowId,
-          artifact.type,
-          artifact.content,
-          artifact.filePath || null,
-          JSON.stringify(artifact.metadata || {}),
-        ]
-      );
-
-      // Save to workflow artifacts directory
-      try {
-        const artifactFileName = artifact.filePath || `${artifact.type}-${Date.now()}.md`;
-        await saveWorkflowArtifact(workflowId, branchName, artifactFileName, artifact.content);
-        logger.info('Saved artifact to filesystem', { workflowId, artifactFileName });
-      } catch (error) {
-        logger.warn('Failed to save artifact to filesystem', {
-          workflowId,
-          error: (error as Error).message,
-        });
-      }
-    }
-
-    // Save execution summary to workflow logs
-    try {
-      const workflowDir = getWorkflowDirectory(workflowId, branchName);
-      const executionLog = {
-        workflowId,
-        workflowType,
-        targetModules,
-        primaryModule,
-        taskDescription,
-        branchName,
-        status: finalStatus,
-        timestamp: new Date().toISOString(),
-        artifacts: output.artifacts.map(a => ({
-          type: a.type,
-          filePath: a.filePath,
-          contentLength: a.content.length,
-        })),
-        summary: output.summary,
-      };
-      await fs.writeFile(
-        path.join(workflowDir, 'logs', `execution-${Date.now()}.json`),
-        JSON.stringify(executionLog, null, 2)
-      );
-      logger.info('Saved execution log to filesystem', { workflowId });
-    } catch (error) {
-      logger.warn('Failed to save execution log', {
-        workflowId,
-        error: (error as Error).message,
-      });
-    }
-
-    // Update workflow README with final status
-    try {
-      await updateWorkflowStatus(workflowId, branchName, finalStatus as any, output.summary);
-      logger.info('Updated workflow README', { workflowId, status: finalStatus });
-    } catch (error) {
-      logger.warn('Failed to update workflow README', {
-        workflowId,
-        error: (error as Error).message,
-      });
-    }
-
-    // Handle workflow callbacks (e.g., re-validate module after bugfix)
-    try {
-      const [workflowData] = await query<any>('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
-      if (workflowData?.payload) {
-        const payload = JSON.parse(workflowData.payload);
-        if (payload.callback) {
-          await handleWorkflowCallback(workflowId, finalStatus, payload.callback, primaryModule);
-        }
-      }
-    } catch (callbackError) {
-      logger.warn('Failed to handle workflow callback', {
-        workflowId,
-        error: (callbackError as Error).message,
-      });
-    }
-
-    // If workflow completed successfully, push branch and create PR (based on output mode)
-    if (finalStatus === 'completed' && (outputMode === WorkflowOutputMode.PR || outputMode === WorkflowOutputMode.BOTH)) {
-      try {
-        logger.info('Pushing branch to remote and creating PR', { workflowId, branchName, outputMode });
-
-        // Push branch to remote
-        const git = getGit(repoPath);
-        await git.push('origin', branchName, ['--set-upstream']);
-        logger.info('Branch pushed to remote', { workflowId, branchName });
-
-        // Determine base branch for PR (based on primary module)
-        const baseBranch = primaryModule === 'AIDeveloper' ? 'develop' : 'master';
-
-        // Create PR using GitHub CLI
-        const prTitle = `[Workflow #${workflowId}] ${workflowType}: ${taskDescription.substring(0, 100)}`;
-        const prBodyContent = `## Workflow Summary
-
-**Workflow ID**: #${workflowId}
-**Type**: ${workflowType}
-**Target Modules**: ${targetModules.join(', ')}
-**Branch**: \`${branchName}\`
-
-${output.summary || 'No summary provided'}
-
-## Artifacts Generated
-
-${output.artifacts.map(a => `- **${a.type}**: ${a.filePath || 'N/A'}`).join('\n')}
-
----
-🤖 This PR was automatically generated by workflow execution.`;
-
-        // Write PR body to temp file to handle multi-line content safely
-        const prBodyFile = path.join(workflowDir, 'logs', 'pr-body.md');
-        await fs.writeFile(prBodyFile, prBodyContent);
-
-        const { execSync } = await import('child_process');
-        const prResult = execSync(
-          `gh pr create --title "${prTitle}" --body-file "${prBodyFile}" --base "${baseBranch}" --head "${branchName}"`,
-          {
-            cwd: repoPath,
-            encoding: 'utf-8',
-            env: process.env,
-          }
-        );
-
-        const prUrl = prResult.trim();
-        logger.info('Pull request created', { workflowId, prUrl });
-
-        // Store PR URL in database
-        await query(
-          'UPDATE workflows SET pr_url = ?, updated_at = NOW() WHERE id = ?',
-          [prUrl, workflowId]
-        );
-
-        logger.info('Workflow branch pushed and PR created successfully', { workflowId, prUrl });
-      } catch (error) {
-        logger.error('Failed to push branch or create PR', error as Error, { workflowId });
-        // Don't fail the workflow if PR creation fails
-      }
-    }
-  } catch (error) {
-    logger.error('Workflow execution failed', error as Error);
-    logger.info('Workflow execution error details', { workflowId });
-
-    // Save error log to workflow logs directory if branchName was defined
-    try {
-      if (branchName) {
-        const workflowDir = getWorkflowDirectory(workflowId, branchName);
-        const errorLog = {
-          workflowId,
-          workflowType,
-          targetModules,
-          primaryModule,
-          taskDescription,
-          status: 'failed',
-          timestamp: new Date().toISOString(),
-          error: {
-            message: (error as Error).message,
-            stack: (error as Error).stack,
-          },
-        };
-        await fs.writeFile(
-          path.join(workflowDir, 'logs', `error-${Date.now()}.json`),
-          JSON.stringify(errorLog, null, 2)
-        );
-
-        // Update workflow README with failure status
-        await updateWorkflowStatus(
-          workflowId,
-          branchName,
-          'failed',
-          `Workflow failed: ${(error as Error).message}`
-        );
-      }
-    } catch (logError) {
-      logger.warn('Failed to save error log to filesystem', {
-        workflowId,
-        error: (logError as Error).message,
-      });
-    }
-
-    // Update workflow status to failed
-    await query(
-      `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
-      [workflowId]
-    );
-
-    // Log the error in agent_executions table for visibility
-    await query(
-      `INSERT INTO agent_executions (workflow_id, agent_type, status, error_message)
-       VALUES (?, 'orchestrator', 'failed', ?)`,
-      [workflowId, (error as Error).message]
-    );
-  }
-}
 
 /**
  * DELETE /api/workflows/:id
@@ -1354,16 +507,25 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
 
 /**
  * POST /api/workflows/:id/resume
- * DEPRECATED: Workflow functionality moved to WorkflowOrchestrator module
  * Resume a failed/cancelled workflow from its last checkpoint
  * Optional body: { fromAgentIndex?: number } to resume from specific agent
+ * TODO: Re-implement with WorkflowOrchestrator module
  */
-router.post('/workflows/:id/resume', async (_req: Request, res: Response) => {
-  return res.status(501).json({
-    success: false,
-    error: 'Workflow functionality has been moved to the WorkflowOrchestrator module',
-    message: 'Please use the WorkflowOrchestrator module for workflow management',
-  });
+router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    
+    logger.warn('Workflow resume not implemented', { workflowId: id });
+
+    return res.status(501).json({
+      success: false,
+      error: 'Workflow resume feature not yet implemented',
+      message: 'This feature will be re-implemented with the WorkflowOrchestrator module',
+    });
+  } catch (error) {
+    logger.error('Failed to start workflow resume', error as Error);
+    return res.status(500).json({ error: 'Failed to resume workflow' });
+  }
 });
 
 /**
@@ -1457,61 +619,10 @@ router.get('/modules/:name', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Module not found' });
     }
 
-    // Check if module has a manifest
-    const manifest = await readModuleManifest(name);
-    const hasManifest = manifest !== null;
-
-    return res.json({ module, hasManifest });
+    return res.json({ module });
   } catch (error) {
     logger.error('Failed to get module info', error as Error);
     return res.status(500).json({ error: 'Failed to get module info' });
-  }
-});
-
-/**
- * POST /api/modules/:name/generate-manifest
- * Trigger the ModuleImportAgent to generate a module.json for a module
- */
-router.post('/modules/:name/generate-manifest', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const module = await getModuleInfo(name);
-
-    if (!module) {
-      return res.status(404).json({ error: 'Module not found' });
-    }
-
-    // Dynamically import and execute the ModuleImportAgent
-    const modulePath = `file://${getModulesPath()}/ModuleImportAgent/index.js`;
-    const { default: ModuleImportAgent } = await import(modulePath);
-
-    const agent = new ModuleImportAgent();
-    const result = await agent.execute({
-      modulePath: module.path,
-      moduleName: name,
-      workingDir: module.path,
-    });
-
-    if (result.success) {
-      return res.json({
-        success: true,
-        message: result.message,
-        artifacts: result.artifacts,
-        validation: result.validation,
-      });
-    } else {
-      return res.status(400).json({
-        success: false,
-        error: result.error || result.message,
-        validation: result.validation,
-      });
-    }
-  } catch (error: any) {
-    logger.error('Failed to generate module manifest', error);
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to generate module manifest',
-    });
   }
 });
 
@@ -1662,22 +773,6 @@ router.post('/modules/:name/test', async (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/modules/:name/typecheck
- * Run type checking for a module
- */
-router.post('/modules/:name/typecheck', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const operationId = await deploymentManager.typecheckModule(name);
-    logger.info('Module type check started', { module: name, operationId });
-    return res.json({ operationId, message: 'Type check started' });
-  } catch (error) {
-    logger.error('Failed to start module type check', error as Error);
-    return res.status(500).json({ error: 'Failed to start type check' });
-  }
-});
-
-/**
  * POST /api/modules/:name/start
  * Start a module server
  */
@@ -1706,51 +801,6 @@ router.post('/modules/:name/stop', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to stop module server', error as Error);
     return res.status(500).json({ error: 'Failed to stop server' });
-  }
-});
-
-/**
- * POST /api/modules/:name/run-script
- * Run a generic script command from module.json
- */
-router.post('/modules/:name/run-script', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const { scriptName } = req.body;
-
-    if (!scriptName) {
-      return res.status(400).json({ error: 'scriptName is required in request body' });
-    }
-
-    const operationId = await deploymentManager.runScript(name, scriptName);
-    logger.info('Module script started', { module: name, scriptName, operationId });
-    return res.json({ operationId, message: `Script "${scriptName}" started` });
-  } catch (error) {
-    logger.error('Failed to run module script', error as Error);
-    return res.status(500).json({ error: 'Failed to run script' });
-  }
-});
-
-/**
- * GET /api/modules/:name/scripts
- * Get the available scripts from a module's module.json
- */
-router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const modulePath = path.join(process.cwd(), '..', 'modules', name);
-    const moduleJsonPath = path.join(modulePath, 'module.json');
-
-    // Read module.json
-    const moduleJsonContent = await fs.readFile(moduleJsonPath, 'utf-8');
-    const moduleJson = JSON.parse(moduleJsonContent);
-
-    // Return the scripts section
-    const scripts = moduleJson.scripts || {};
-    return res.json({ scripts });
-  } catch (error) {
-    logger.error('Failed to get module scripts', error as Error);
-    return res.status(500).json({ error: 'Failed to get scripts' });
   }
 });
 
@@ -1835,173 +885,6 @@ router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to update auto-load setting', error as Error);
     return res.status(500).json({ error: 'Failed to update auto-load setting' });
-  }
-});
-
-/**
- * GET /api/modules/:name/branches
- * Get list of git branches for a module
- */
-router.get('/modules/:name/branches', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const modulePath = path.join(getModulesPath(), name);
-
-    // Check if module exists and has git
-    try {
-      await fs.access(path.join(modulePath, '.git'));
-    } catch {
-      return res.status(404).json({ error: 'Module not found or not a git repository' });
-    }
-
-    // Fetch latest from remote
-    await import('child_process').then(({ exec }) => {
-      return new Promise((resolve, reject) => {
-        exec('git fetch --all', { cwd: modulePath }, (error) => {
-          if (error) reject(error);
-          else resolve(null);
-        });
-      });
-    });
-
-    // Get all branches
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-
-    const { stdout } = await execAsync('git branch -a', { cwd: modulePath });
-    const currentBranch = (await execAsync('git branch --show-current', { cwd: modulePath })).stdout.trim();
-
-    const branchMap = new Map<string, any>();
-
-    // Parse branches
-    stdout.split('\n').forEach(line => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.includes('->')) return;
-
-      const isCurrent = trimmed.startsWith('*');
-      const branchLine = trimmed.replace(/^\*\s+/, '');
-
-      if (branchLine.startsWith('remotes/origin/')) {
-        const name = branchLine.replace('remotes/origin/', '');
-        const existing = branchMap.get(name);
-        if (existing) {
-          existing.isRemote = true;
-        } else {
-          branchMap.set(name, {
-            name,
-            isLocal: false,
-            isRemote: true,
-            isCurrent: false,
-          });
-        }
-      } else {
-        const existing = branchMap.get(branchLine);
-        if (existing) {
-          existing.isLocal = true;
-          if (isCurrent) existing.isCurrent = true;
-        } else {
-          branchMap.set(branchLine, {
-            name: branchLine,
-            isLocal: true,
-            isRemote: false,
-            isCurrent,
-          });
-        }
-      }
-    });
-
-    const branches = Array.from(branchMap.values()).sort((a: any, b: any) => {
-      if (a.isCurrent) return -1;
-      if (b.isCurrent) return 1;
-      if (a.isLocal && !b.isLocal) return -1;
-      if (!a.isLocal && b.isLocal) return 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    return res.json({
-      currentBranch,
-      branches
-    });
-  } catch (error) {
-    logger.error('Failed to list branches', error as Error);
-    return res.status(500).json({ error: 'Failed to list branches' });
-  }
-});
-
-/**
- * POST /api/modules/:name/branches/switch
- * Switch git branch for a module
- */
-router.post('/modules/:name/branches/switch', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const { branch } = req.body;
-
-    if (!branch) {
-      return res.status(400).json({ error: 'branch is required' });
-    }
-
-    const modulePath = path.join(getModulesPath(), name);
-
-    // Check if module exists and has git
-    try {
-      await fs.access(path.join(modulePath, '.git'));
-    } catch {
-      return res.status(404).json({ error: 'Module not found or not a git repository' });
-    }
-
-    logger.info('Switching module branch', { module: name, branch });
-
-    const { exec } = await import('child_process');
-    const { promisify } = await import('util');
-    const execAsync = promisify(exec);
-
-    // Get current branch
-    const previousBranch = (await execAsync('git branch --show-current', { cwd: modulePath })).stdout.trim();
-
-    // Check for uncommitted changes
-    const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: modulePath });
-    if (statusOutput.trim().length > 0) {
-      return res.status(400).json({
-        error: 'Module has uncommitted changes. Please commit or stash them first.',
-        hasUncommittedChanges: true
-      });
-    }
-
-    // Check if branch exists locally
-    const { stdout: branchList } = await execAsync('git branch', { cwd: modulePath });
-    const branchExists = branchList.split('\n').some(line =>
-      line.trim().replace(/^\*\s+/, '') === branch
-    );
-
-    try {
-      if (!branchExists) {
-        // Branch doesn't exist locally, try to check it out from remote
-        await execAsync(`git checkout -b ${branch} origin/${branch}`, { cwd: modulePath });
-      } else {
-        // Branch exists locally, just checkout
-        await execAsync(`git checkout ${branch}`, { cwd: modulePath });
-      }
-
-      logger.info('Successfully switched module branch', { module: name, from: previousBranch, to: branch });
-
-      return res.json({
-        success: true,
-        message: `Switched from ${previousBranch} to ${branch}`,
-        previousBranch,
-        newBranch: branch
-      });
-    } catch (checkoutError: any) {
-      logger.error('Failed to switch branch', checkoutError as Error);
-      return res.status(500).json({
-        error: `Failed to switch branch: ${checkoutError.message}`,
-        previousBranch
-      });
-    }
-  } catch (error) {
-    logger.error('Failed to switch branch', error as Error);
-    return res.status(500).json({ error: 'Failed to switch branch' });
   }
 });
 
@@ -2329,129 +1212,6 @@ router.get('/auto-fix/:attemptId', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to get auto-fix attempt', error as Error);
     return res.status(500).json({ error: 'Failed to get auto-fix attempt' });
-  }
-});
-
-// ============================================================================
-// Module Testing Routes
-// ============================================================================
-
-/**
- * POST /api/modules/:name/test/:testName
- * Run a specific test for a module
- */
-router.post('/modules/:name/test/:testName', async (req: Request, res: Response) => {
-  try {
-    const { name, testName } = req.params;
-    const modulePath = path.join(process.cwd(), '..', 'modules', name);
-
-    // Check if module exists
-    try {
-      await fs.access(modulePath);
-    } catch {
-      return res.status(404).json({
-        success: false,
-        error: `Module ${name} not found`,
-      });
-    }
-
-    // Check if test file exists
-    const testFilePath = path.join(modulePath, 'tests', 'index.test.ts');
-    try {
-      await fs.access(testFilePath);
-    } catch {
-      return res.status(404).json({
-        success: false,
-        error: `No tests found for module ${name}`,
-      });
-    }
-
-    // Import and run the test
-    try {
-      // Dynamically import the test module
-      const testModule = await import(path.join(modulePath, 'tests', 'index.test.js'));
-
-      if (typeof testModule.runTests !== 'function') {
-        return res.status(500).json({
-          success: false,
-          error: 'Test module does not export runTests function',
-        });
-      }
-
-      // Run all tests and get results
-      const allResults = await testModule.runTests();
-
-      // Get specific test result
-      const result = allResults[testName];
-
-      if (!result) {
-        return res.status(404).json({
-          success: false,
-          error: `Test "${testName}" not found in module ${name}`,
-        });
-      }
-
-      return res.json({
-        success: result.success,
-        output: result.output,
-        duration: result.duration,
-      });
-    } catch (error: any) {
-      logger.error(`Test execution failed for ${name}:${testName}`, error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || 'Test execution failed',
-      });
-    }
-  } catch (error) {
-    logger.error('Failed to run test', error as Error);
-    return res.status(500).json({ error: 'Failed to run test' });
-  }
-});
-
-/**
- * GET /api/modules/:name/tests
- * Get list of available tests for a module
- */
-router.get('/modules/:name/tests', async (req: Request, res: Response) => {
-  try {
-    const { name } = req.params;
-    const modulePath = path.join(process.cwd(), '..', 'modules', name);
-
-    // Check if test file exists
-    const testFilePath = path.join(modulePath, 'tests', 'index.test.ts');
-    try {
-      await fs.access(testFilePath);
-
-      // Import the test module to get available tests
-      const testModule = await import(path.join(modulePath, 'tests', 'index.test.js'));
-
-      if (typeof testModule.runTests === 'function') {
-        const allResults = await testModule.runTests();
-        const testNames = Object.keys(allResults);
-
-        return res.json({
-          moduleName: name,
-          tests: testNames,
-          count: testNames.length,
-        });
-      }
-
-      return res.json({
-        moduleName: name,
-        tests: [],
-        count: 0,
-      });
-    } catch {
-      return res.json({
-        moduleName: name,
-        tests: [],
-        count: 0,
-      });
-    }
-  } catch (error) {
-    logger.error('Failed to get module tests', error as Error);
-    return res.status(500).json({ error: 'Failed to get module tests' });
   }
 });
 

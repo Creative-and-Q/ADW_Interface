@@ -45,6 +45,23 @@ export declare class CodingAgent {
      */
     execute(input: AgentInput): Promise<AgentOutput>;
     /**
+     * Parse AI response and execute any tool calls OR auto-extract code blocks
+     */
+    private parseAndExecuteTools;
+    /**
+     * Auto-extract code blocks from AI response and write to files
+     * Handles formats like:
+     * ```tsx:path/to/file.tsx
+     * // code here
+     * ```
+     * OR
+     * // path/to/file.tsx
+     * ```tsx
+     * // code here
+     * ```
+     */
+    private autoExtractAndWriteCode;
+    /**
      * Load tools.md documentation
      */
     private loadToolsDocumentation;
@@ -64,10 +81,6 @@ export declare class CodingAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
-    /**
-     * Parse AI response
-     */
-    private parseResponse;
 }
 export default CodingAgent;
 //# sourceMappingURL=index.d.ts.map

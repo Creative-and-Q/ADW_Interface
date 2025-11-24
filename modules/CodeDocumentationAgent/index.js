@@ -15,6 +15,8 @@ const execAsync = promisify(exec);
  * CodeDocumentationAgent
  */
 export class CodeDocumentationAgent {
+    model;
+    apiKey;
     constructor() {
         this.apiKey = process.env.OPENROUTER_API_KEY || '';
         this.model = process.env.OPENROUTER_MODEL_DOCS || 'anthropic/claude-3.5-haiku';

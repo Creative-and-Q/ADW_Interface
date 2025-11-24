@@ -121,24 +121,24 @@ export class CodingAgent {
 
         allResponses.push(aiResponse);
 
-        // Check if AI is done (no more tool calls)
-        if (aiResponse.toLowerCase().includes('task complete') || 
-            aiResponse.toLowerCase().includes('implementation complete') ||
-            aiResponse.toLowerCase().includes('all changes implemented') ||
-            !aiResponse.includes('./tools/')) {
-          // AI is done
-          console.log(`CodingAgent completed after ${iterations} iterations`);
-          toolResults.push(`Final response: ${aiResponse.substring(0, 500)}`);
-          break;
-        }
-
-        // Parse and execute tool calls
+        // Parse and execute tool calls OR auto-extract code
         const executed = await this.parseAndExecuteTools(aiResponse, input.workingDir);
         
         if (executed.length === 0) {
-          // No tools found to execute
-          console.log('No tools found in AI response, considering complete');
-          toolResults.push(`No executable tools found: ${aiResponse.substring(0, 200)}`);
+          // No tools found and no code extracted
+          console.log('No actions taken from response, considering complete');
+          toolResults.push(`No actions: ${aiResponse.substring(0, 200)}`);
+          break;
+        }
+        
+        // Check if AI is done (says complete or successful extractions made)
+        if (aiResponse.toLowerCase().includes('implementation complete') ||
+            aiResponse.toLowerCase().includes('all changes implemented') ||
+            executed.some(r => r.includes('Auto-wrote'))) {
+          // AI is done or files were auto-extracted
+          console.log(`CodingAgent completed after ${iterations} iterations (${executed.filter(r => r.includes('Auto-wrote')).length} files written)`);
+          toolResults.push(...executed);
+          toolResults.push(`Final: ${aiResponse.substring(0, 300)}`);
           break;
         }
 
@@ -185,16 +185,18 @@ export class CodingAgent {
   }
 
   /**
-   * Parse AI response and execute any tool calls
+   * Parse AI response and execute any tool calls OR auto-extract code blocks
    */
   private async parseAndExecuteTools(response: string, workingDir: string): Promise<string[]> {
     const results: string[] = [];
     
-    // Match tool calls in format: ./tools/tool-name.sh "arg1" "arg2"
+    // Strategy 1: Try to execute explicit tool calls
     const toolCallRegex = /\.\/tools\/([\w-]+)\.sh\s+([^\n]+)/g;
     let match;
+    let toolsFound = false;
 
     while ((match = toolCallRegex.exec(response)) !== null) {
+      toolsFound = true;
       const toolName = match[1];
       const argsString = match[2];
       
@@ -217,6 +219,100 @@ export class CodingAgent {
       }
     }
 
+    // Strategy 2: If no explicit tools, auto-extract code blocks and write files
+    if (!toolsFound) {
+      console.log('No explicit tool calls found, auto-extracting code blocks...');
+      const extracted = await this.autoExtractAndWriteCode(response, workingDir);
+      results.push(...extracted);
+    }
+
+    return results;
+  }
+
+  /**
+   * Auto-extract code blocks from AI response and write to files
+   * Handles formats like:
+   * ```tsx:path/to/file.tsx
+   * // code here
+   * ```
+   * OR
+   * // path/to/file.tsx
+   * ```tsx
+   * // code here
+   * ```
+   */
+  private async autoExtractAndWriteCode(response: string, workingDir: string): Promise<string[]> {
+    const results: string[] = [];
+    
+    // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
+    const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js):([^\n]+)\n([\s\S]*?)```/g;
+    let match;
+    
+    while ((match = pattern1.exec(response)) !== null) {
+      const filePath = match[1].trim();
+      const code = match[2].trim();
+      
+      try {
+        const fullPath = path.join(workingDir, filePath);
+        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.writeFile(fullPath, code, 'utf-8');
+        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        console.log(`Auto-wrote file: ${filePath}`);
+      } catch (error) {
+        results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
+      }
+    }
+    
+    // Pattern 2: Code block with comment on first line (most common AI format)
+    const pattern2 = /```(?:typescript|tsx|ts|javascript|jsx|js|json)?\n\/\/\s*([^\n]+\.(?:tsx|ts|jsx|js|json))[^\n]*\n([\s\S]*?)```/g;
+    
+    while ((match = pattern2.exec(response)) !== null) {
+      const filePath = match[1].trim();
+      const code = match[2].trim();
+      
+      // Skip if already written (from pattern1)
+      if (results.some(r => r.includes(filePath))) {
+        continue;
+      }
+      
+      try {
+        const fullPath = path.join(workingDir, filePath);
+        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.writeFile(fullPath, code, 'utf-8');
+        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        console.log(`Auto-wrote file: ${filePath}`);
+      } catch (error) {
+        results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
+      }
+    }
+    
+    // Pattern 3: Mentions specific file then shows code
+    const pattern3 = /(?:update|modify|create|write).*?`([^`]+\.(?:tsx|ts|jsx|js|json))`[\s\S]*?```(?:typescript|tsx|ts|javascript|jsx|js|json)?\n([\s\S]*?)```/gi;
+    
+    while ((match = pattern3.exec(response)) !== null) {
+      const filePath = match[1].trim();
+      const code = match[2].trim();
+      
+      // Skip if already written
+      if (results.some(r => r.includes(filePath))) {
+        continue;
+      }
+      
+      try {
+        const fullPath = path.join(workingDir, filePath);
+        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+        await fs.writeFile(fullPath, code, 'utf-8');
+        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        console.log(`Auto-wrote file: ${filePath}`);
+      } catch (error) {
+        results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
+      }
+    }
+    
+    if (results.length === 0) {
+      results.push('⚠️ No code blocks with file paths found in response');
+    }
+    
     return results;
   }
 
@@ -243,28 +339,34 @@ export class CodingAgent {
 
 ${toolsDoc}
 
-## CRITICAL: How to Use Tools
+## CRITICAL: How to Implement Changes
 
-You MUST use the tools to make changes. Simply describing changes is NOT enough.
+You MUST actually modify files. Use ONE of these methods:
 
-**Example - CORRECT way to implement:**
+**Method 1 - Direct Code (PREFERRED):**
+Show the complete file content with the file path in the code block header:
 
-1. Read existing file:
-\`\`\`bash
-./tools/read-file.sh "frontend/src/pages/Component.tsx"
-\`\`\`
-
-2. After seeing content, write the updated version:
-\`\`\`bash
-./tools/write-file.sh "frontend/src/pages/Component.tsx" "import { useState } from 'react';
+\`\`\`tsx:frontend/src/pages/Component.tsx
+import { useState } from 'react';
 
 export default function Component() {
   const [count, setCount] = useState(0);
-  return <div>{count}</div>;
-}"
+  return (
+    <div className="text-4xl">{count}</div>
+    <button onClick={() => setCount(count + 1)}>+</button>
+    <button onClick={() => setCount(count - 1)}>-</button>
+  );
+}
 \`\`\`
 
-3. When all changes made, say: "TASK COMPLETE"
+**Method 2 - Tool Commands:**
+\`\`\`bash
+./tools/write-file.sh "frontend/src/pages/Component.tsx" "full content here"
+\`\`\`
+
+**Both methods will write the files automatically!**
+
+After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 
 ## Your Responsibilities
 
@@ -301,30 +403,21 @@ Target Module: ${input.targetModule || 'none'}
 Task Description: ${input.taskDescription || 'none'}
 Working Directory: ${input.workingDir}
 
-CRITICAL INSTRUCTIONS:
-You MUST use the tools to implement changes. Do NOT just describe or show code - EXECUTE the tools!
+IMPLEMENT THE REQUESTED CHANGES:
 
-STEP 1: Read the existing file
-./tools/read-file.sh "frontend/src/pages/SimpleCalculator3.tsx"
+For each file you need to modify, show the COMPLETE file content in a code block with the file path:
 
-STEP 2: After seeing the content, write the NEW implementation
-./tools/write-file.sh "frontend/src/pages/SimpleCalculator3.tsx" "import { useState } from 'react';
+\`\`\`tsx:frontend/src/pages/ComponentName.tsx
+import { useState } from 'react';
+// ... complete implementation here
+export default function ComponentName() {
+  // full working code
+}
+\`\`\`
 
-export default function SimpleCalculator3() {
-  const [count, setCount] = useState(0);
-  
-  return (
-    <div className=\\"p-6\\">
-      <div className=\\"text-4xl\\">{count}</div>
-      <button onClick={() => setCount(count + 1)} className=\\"bg-green-500 px-4 py-2 rounded\\">+ Increment</button>
-      <button onClick={() => setCount(count - 1)} className=\\"bg-red-500 px-4 py-2 rounded\\">- Decrement</button>
-    </div>
-  );
-}"
+The system will automatically write these files for you.
 
-STEP 3: Say "TASK COMPLETE"
-
-Use EXACTLY this format. The system will execute your tool commands.
+When finished, say: "IMPLEMENTATION COMPLETE"
     `.trim();
   }
 

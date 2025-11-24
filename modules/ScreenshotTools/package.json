@@ -1,0 +1,28 @@
+{
+  "name": "screenshot-tools",
+  "version": "1.0.0",
+  "description": "Screenshot and image processing tools for AI agents",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "screenshot",
+    "puppeteer",
+    "image",
+    "ai-tools"
+  ],
+  "dependencies": {
+    "puppeteer": "^21.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.4",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
