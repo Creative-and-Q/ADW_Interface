@@ -32,14 +32,26 @@ export const workflowsAPI = {
   list: (params?: { limit?: number; offset?: number; status?: string }) =>
     api.get('/workflows', { params }),
   get: (id: number) => api.get(`/workflows/${id}`),
-  create: (data: { workflowType: string; targetModule: string; taskDescription: string }) =>
+  create: (data: { workflowType: string; targetModules: string[]; taskDescription: string }) =>
     api.post('/workflows/manual', data),
   cancel: (id: number) => api.delete(`/workflows/${id}`),
+  delete: (id: number) => api.delete(`/workflows/${id}`),
+  update: (id: number, data: any) => api.put(`/workflows/${id}`, data),
   getLogs: (id: number, agentExecutionId?: number) =>
     api.get(`/workflows/${id}/logs`, { params: { agentExecutionId } }),
   getResumeState: (id: number) => api.get(`/workflows/${id}/resume-state`),
   resumeWorkflow: (id: number, fromAgentIndex?: number) =>
     api.post(`/workflows/${id}/resume`, { fromAgentIndex }),
+  createNewModule: (moduleConfig: {
+    moduleName: string;
+    description: string;
+    moduleType?: 'service' | 'library';
+    port?: number;
+    hasFrontend?: boolean;
+    frontendPort?: number;
+    relatedModules?: string[];
+    taskDescription?: string;
+  }) => api.post('/workflows/new-module', moduleConfig),
 };
 
 export const statsAPI = {
@@ -87,6 +99,9 @@ export const modulesAPI = {
   getAutoLoad: (name: string) => api.get(`/modules/${name}/auto-load`),
   setAutoLoad: (name: string, autoLoad: boolean) =>
     api.put(`/modules/${name}/auto-load`, { autoLoad }),
+  // New package.json scripts API
+  getScripts: (name: string) => api.get<{ success: boolean; moduleName: string; scripts: Record<string, string> }>(`/modules/${name}/scripts`),
+  runScript: (name: string, scriptName: string) => api.post<{ success: boolean; operationId: string; message: string }>(`/modules/${name}/run-script`, { scriptName }),
 };
 
 export const deploymentsAPI = {
@@ -141,16 +156,39 @@ export interface DashboardWidget {
   };
 }
 
+// Types for per-module env management
+export interface ModuleEnvVar {
+  key: string;
+  value: string;
+  comment?: string;
+}
+
+export interface ModuleEnvStatus {
+  moduleName: string;
+  modulePath: string;
+  hasEnvFile: boolean;
+  hasEnvExample: boolean;
+  envVars: ModuleEnvVar[];
+  missingFromExample: string[];
+}
+
 export const modulePluginsAPI = {
   getManifests: () => api.get<{ success: boolean; data: Record<string, any> }>('/modules/manifests'),
   getManifest: (name: string) => api.get<{ success: boolean; data: any }>(`/modules/${name}/manifest`),
   getPages: () => api.get<{ success: boolean; data: ModulePage[] }>('/modules/pages'),
   getDashboardWidgets: () => api.get<{ success: boolean; data: DashboardWidget[] }>('/modules/dashboard-widgets'),
+  // Legacy env endpoints (deprecated)
   getEnvVars: () => api.get<{ success: boolean; data: Array<{ key: string; value: string | null; module: string; definition: any }> }>('/modules/env'),
   getModuleEnvVars: (name: string) => api.get<{ success: boolean; data: Array<any> }>(`/modules/${name}/env`),
   updateEnvVars: (updates: Record<string, string | null>) => api.put<{ success: boolean; message: string }>('/modules/env', updates),
   validateEnvVars: () => api.get<{ success: boolean; data: Array<{ module: string; key: string; missing: boolean }>; valid: boolean }>('/modules/env/validate'),
   getApiRoutes: () => api.get<{ success: boolean; data: Array<{ module: string; route: any }> }>('/modules/api-routes'),
+  // New per-module env endpoints
+  getAllEnvStatus: () => api.get<{ success: boolean; data: ModuleEnvStatus[] }>('/modules/env-status'),
+  getEnvStatus: (name: string) => api.get<{ success: boolean; data: ModuleEnvStatus }>(`/modules/${name}/env-status`),
+  updateModuleEnv: (name: string, updates: Record<string, string | null>) => api.put<{ success: boolean; message: string }>(`/modules/${name}/env`, updates),
+  copyEnvExample: (name: string) => api.post<{ success: boolean; message: string }>(`/modules/${name}/env/copy-example`),
+  syncEnvExample: (name: string) => api.post<{ success: boolean; message: string; addedKeys: string[] }>(`/modules/${name}/env/sync-example`),
 };
 
 // ============================================================================

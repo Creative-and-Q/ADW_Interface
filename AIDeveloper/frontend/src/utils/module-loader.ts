@@ -3,6 +3,8 @@
  * Handles loading React components from modules
  */
 
+import React from 'react';
+
 /**
  * Component loading strategy
  */
@@ -31,6 +33,22 @@ export function registerBundledComponent(name: string, component: React.Componen
   bundledComponents.set(name, component);
 }
 
+// Use import.meta.glob to pre-generate all module component imports at build time
+// This allows Vite to analyze and bundle all possible module components
+const moduleComponents = import.meta.glob<{ default: React.ComponentType<any> }>(
+  '@modules/*/frontend/src/pages/*.tsx'
+);
+
+// Also include local pages as fallback (this includes integrated module pages)
+const localPages = import.meta.glob<{ default: React.ComponentType<any> }>(
+  '../pages/*.tsx'
+);
+
+// Include local components (for module components that have been integrated)
+const localComponents = import.meta.glob<{ default: React.ComponentType<any> }>(
+  '../components/*.tsx'
+);
+
 /**
  * Load a module component
  */
@@ -44,33 +62,55 @@ export async function loadModuleComponent(
     return bundledComponents.get(componentName)!;
   }
 
-  // Try to load from module's frontend directory
-  try {
-    // Construct path to module's frontend pages directory
-    // Module name should match directory name (e.g., WorkflowOrchestrator -> modules/WorkflowOrchestrator)
-    const modulePath = `../../modules/${module}/frontend/pages/${componentName}.tsx`;
-    const component = await import(modulePath);
-    return component.default || component[componentName];
-  } catch (error) {
-    // If module path fails, try componentPath if provided
-    if (componentPath) {
+  // Try to load from module's frontend directory using pre-generated glob imports
+  const modulePath = `@modules/${module}/frontend/src/pages/${componentName}.tsx`;
+
+  // Also try alternative path formats that the glob might match
+  const possiblePaths = [
+    modulePath,
+    `../../modules/${module}/frontend/src/pages/${componentName}.tsx`,
+    `/home/kevin/Home/ex_nihilo/modules/${module}/frontend/src/pages/${componentName}.tsx`,
+  ];
+
+  // Find matching import from the glob
+  for (const [path, importFn] of Object.entries(moduleComponents)) {
+    // Check if this path matches our target module and component
+    if (path.includes(`/${module}/`) && path.endsWith(`/${componentName}.tsx`)) {
       try {
-        const component = await import(`../pages/${componentName}.tsx`);
-        return component.default || component[componentName];
-      } catch (err) {
-        console.warn(`Failed to load component ${componentName} from ${componentPath}:`, err);
+        const mod = await importFn();
+        return mod.default || (mod as any)[componentName];
+      } catch (error) {
+        console.warn(`Failed to load component ${componentName} from ${path}:`, error);
       }
     }
-    
-    // Fallback: try to import from pages directory (for backward compatibility)
-    try {
-      const component = await import(`../pages/${componentName}.tsx`);
-      return component.default || component[componentName];
-    } catch (err) {
-      console.error(`Failed to load component ${componentName} from module ${module}:`, error);
-      return null;
+  }
+
+  // Fallback: try to import from local pages directory
+  for (const [path, importFn] of Object.entries(localPages)) {
+    if (path.endsWith(`/${componentName}.tsx`)) {
+      try {
+        const mod = await importFn();
+        return mod.default || (mod as any)[componentName];
+      } catch (err) {
+        console.warn(`Failed to load component ${componentName} from local pages:`, err);
+      }
     }
   }
+
+  // Also try local components directory
+  for (const [path, importFn] of Object.entries(localComponents)) {
+    if (path.endsWith(`/${componentName}.tsx`)) {
+      try {
+        const mod = await importFn();
+        return mod.default || (mod as any)[componentName];
+      } catch (err) {
+        console.warn(`Failed to load component ${componentName} from local components:`, err);
+      }
+    }
+  }
+
+  console.error(`Failed to load component ${componentName} from module ${module}`);
+  return null;
 }
 
 /**
@@ -90,5 +130,3 @@ export function lazyLoadModuleComponent(
     })
   );
 }
-
-import React from 'react';
