@@ -133,6 +133,21 @@ export class WorkflowOrchestrator {
       throw new Error(`Working directory does not exist: ${input.workingDir}`);
     }
 
+    // Determine the actual code directory
+    // Workflow directories have structure: workflowDir/repo/ for the cloned repository
+    // Agents should work in the repo directory, not the workflow root
+    const repoDir = path.join(input.workingDir, 'repo');
+    let codeWorkingDir = input.workingDir;
+
+    try {
+      await fs.access(repoDir);
+      codeWorkingDir = repoDir;
+      console.log(`WorkflowOrchestrator: Using repo directory for agents: ${codeWorkingDir}`);
+    } catch (error) {
+      // No repo directory, use workingDir as-is
+      console.log(`WorkflowOrchestrator: No repo subdirectory found, using workingDir: ${codeWorkingDir}`);
+    }
+
     const allArtifacts: any[] = [];
     const allSummaries: string[] = [];
     let hasFailedAgent = false;
@@ -144,6 +159,7 @@ export class WorkflowOrchestrator {
       await this.logWorkflow(input.workflowId, 'info', 'workflow_started', `Starting workflow with ${agentSequence.length} agents`, {
         agentSequence,
         workflowType: input.workflowType,
+        codeWorkingDir,
       });
 
       // Execute agents in sequence
@@ -165,8 +181,10 @@ export class WorkflowOrchestrator {
           }
 
           // Prepare input with environment variables
+          // Use codeWorkingDir (repo/) for agents to work in the actual code directory
           const agentInput = {
             ...input,
+            workingDir: codeWorkingDir,
             env: {
               OPENROUTER_API_KEY: openRouterKey,
               OPENROUTER_MODEL_PLANNING: process.env.OPENROUTER_MODEL_PLANNING || process.env.WORKFLOW_OPENROUTER_MODEL_PLANNING || 'x-ai/grok-code-fast-1',
@@ -182,6 +200,16 @@ export class WorkflowOrchestrator {
           // Execute the agent
           const agentOutput = await this.executeAgent(agentType, agentInput, agentExecutionId);
 
+          // Check if agent returned success: false (e.g., 402 API errors)
+          if (!agentOutput.success) {
+            hasFailedAgent = true;
+            await this.updateAgentExecution(agentExecutionId, 'failed', agentOutput, agentOutput.summary);
+            await this.logWorkflow(input.workflowId, 'warn', `agent_${agentType}_returned_failure`, `${agentType} agent returned success=false: ${agentOutput.summary}`);
+            allSummaries.push(`${agentType}: FAILED - ${agentOutput.summary}`);
+            // Continue with next agent
+            continue;
+          }
+
           // Update agent execution as completed
           await this.updateAgentExecution(agentExecutionId, 'completed', agentOutput);
 
@@ -192,6 +220,52 @@ export class WorkflowOrchestrator {
           await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_completed`, `${agentType} agent completed successfully`, {
             artifactsCount: agentOutput.artifacts.length,
           });
+
+          // After code agent completes, verify build succeeds
+          if (agentType === 'code') {
+            const buildResult = await this.verifyBuild(codeWorkingDir, input.workflowId);
+            if (!buildResult.success) {
+              // Track retry attempts
+              const retryCount = (input.metadata?.buildRetryCount || 0);
+              const maxRetries = 3;
+
+              if (retryCount < maxRetries) {
+                // Create a bugfix sub-workflow to fix the build error
+                await this.logWorkflow(input.workflowId, 'warn', 'build_verification_failed_retry',
+                  `Build failed (attempt ${retryCount + 1}/${maxRetries}), creating fix sub-workflow: ${buildResult.error}`);
+
+                const fixWorkflowId = await this.createBuildFixSubWorkflow(
+                  input.workflowId,
+                  codeWorkingDir,
+                  buildResult.error!,
+                  retryCount + 1,
+                  input
+                );
+
+                if (fixWorkflowId) {
+                  allSummaries.push(`build_verification: FAILED - Created fix sub-workflow #${fixWorkflowId}`);
+                  // Mark as needing retry but not complete failure
+                  // The parent workflow will be marked as "pending_fix"
+                  await this.logWorkflow(input.workflowId, 'info', 'build_fix_workflow_created',
+                    `Created build fix sub-workflow #${fixWorkflowId}`, { fixWorkflowId, retryCount: retryCount + 1 });
+                } else {
+                  hasFailedAgent = true;
+                  allSummaries.push(`build_verification: FAILED - Could not create fix workflow: ${buildResult.error}`);
+                }
+              } else {
+                // Max retries reached
+                hasFailedAgent = true;
+                allSummaries.push(`build_verification: FAILED after ${maxRetries} attempts - ${buildResult.error}`);
+                await this.logWorkflow(input.workflowId, 'error', 'build_verification_failed',
+                  `Build verification failed after ${maxRetries} attempts: ${buildResult.error}`);
+              }
+              // Don't continue with review/test agents if build fails
+              break;
+            } else {
+              allSummaries.push(`build_verification: Build succeeded`);
+              await this.logWorkflow(input.workflowId, 'info', 'build_verification_passed', 'Build verification passed');
+            }
+          }
 
         } catch (agentError) {
           // Update agent execution as failed
@@ -253,6 +327,111 @@ export class WorkflowOrchestrator {
       return stdout;
     } catch (error) {
       throw new Error(`Failed to execute tool ${toolName}: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Verify that the project builds successfully
+   * Runs npm install first (to install any new dependencies), then npm run build if available,
+   * otherwise runs TypeScript check (npx tsc --noEmit)
+   */
+  private async verifyBuild(workingDir: string, _workflowId: number): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Check if package.json exists
+      const packageJsonPath = path.join(workingDir, 'package.json');
+      let hasBuildScript = false;
+      let hasTypeScript = false;
+      let hasPackageJson = false;
+
+      try {
+        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+        hasPackageJson = true;
+        hasBuildScript = !!packageJson.scripts?.build;
+        hasTypeScript = !!(packageJson.devDependencies?.typescript || packageJson.dependencies?.typescript);
+      } catch (error) {
+        // No package.json, check for tsconfig.json directly
+        console.log('WorkflowOrchestrator: No package.json found');
+      }
+
+      // Check for tsconfig.json to determine if this is a TypeScript project
+      const tsconfigPath = path.join(workingDir, 'tsconfig.json');
+      let hasTsconfig = false;
+      try {
+        await fs.access(tsconfigPath);
+        hasTsconfig = true;
+      } catch {
+        // No tsconfig.json
+      }
+
+      // Run npm install first if package.json exists
+      // This ensures any new dependencies added by the CodingAgent are installed
+      if (hasPackageJson) {
+        console.log('WorkflowOrchestrator: Running npm install to install dependencies...');
+        try {
+          await execAsync('npm install', {
+            cwd: workingDir,
+            timeout: 180000, // 3 minute timeout for npm install
+          });
+          console.log('WorkflowOrchestrator: npm install completed');
+        } catch (error: any) {
+          const errorOutput = error.stdout || error.stderr || error.message;
+          console.error('WorkflowOrchestrator: npm install failed:', errorOutput);
+          return {
+            success: false,
+            error: `npm install failed: ${errorOutput.slice(0, 500)}`
+          };
+        }
+      }
+
+      // If there's a build script, use it
+      if (hasBuildScript) {
+        console.log('WorkflowOrchestrator: Running npm run build...');
+        try {
+          await execAsync('npm run build', {
+            cwd: workingDir,
+            timeout: 120000, // 2 minute timeout
+          });
+          console.log('WorkflowOrchestrator: Build succeeded');
+          return { success: true };
+        } catch (error: any) {
+          const errorOutput = error.stdout || error.stderr || error.message;
+          const errorLines = errorOutput.split('\n').filter((line: string) =>
+            line.includes('error') || line.includes('Error') || line.includes('TS')
+          ).slice(0, 10).join('\n');
+          console.error('WorkflowOrchestrator: Build failed:', errorLines);
+          return { success: false, error: errorLines || 'Build failed with unknown error' };
+        }
+      }
+
+      // If it's a TypeScript project, run tsc --noEmit
+      if (hasTypeScript || hasTsconfig) {
+        console.log('WorkflowOrchestrator: No build script, running TypeScript check (npx tsc --noEmit)...');
+        try {
+          await execAsync('npx tsc --noEmit', {
+            cwd: workingDir,
+            timeout: 120000, // 2 minute timeout
+          });
+          console.log('WorkflowOrchestrator: TypeScript check passed');
+          return { success: true };
+        } catch (error: any) {
+          const errorOutput = error.stdout || error.stderr || error.message;
+          const errorLines = errorOutput.split('\n').filter((line: string) =>
+            line.includes('error') || line.includes('Error') || line.includes('TS')
+          ).slice(0, 10).join('\n');
+          console.error('WorkflowOrchestrator: TypeScript check failed:', errorLines);
+          return { success: false, error: errorLines || 'TypeScript check failed with unknown error' };
+        }
+      }
+
+      // No build script and not a TypeScript project - skip verification
+      console.log('WorkflowOrchestrator: No build script or TypeScript found, skipping verification');
+      return { success: true };
+    } catch (error: any) {
+      console.error('WorkflowOrchestrator: Build verification failed:', error.message);
+      return {
+        success: false,
+        error: error.message || 'Build verification failed with unknown error'
+      };
     }
   }
 
@@ -437,6 +616,344 @@ export class WorkflowOrchestrator {
       console.error('Failed to handle sub-workflow creation:', error);
       await this.logWorkflow(workflowId, 'error', 'sub_workflow_creation_failed', `Failed to create sub-workflows: ${(error as Error).message}`);
       // Don't throw - this is a non-critical enhancement
+    }
+  }
+
+  /**
+   * Create a sub-workflow to fix build errors
+   * This runs Plan -> Code -> (verify build) to fix the issue
+   */
+  private async createBuildFixSubWorkflow(
+    parentWorkflowId: number,
+    workingDir: string,
+    buildError: string,
+    retryAttempt: number,
+    parentInput: AgentInput
+  ): Promise<number | null> {
+    try {
+      const db = getDbPool();
+
+      // Get parent workflow info
+      const [parentRows] = await db.execute(
+        'SELECT branch_name, target_module, workflow_type FROM workflows WHERE id = ?',
+        [parentWorkflowId]
+      );
+      const parentWorkflow = (parentRows as any[])[0];
+
+      if (!parentWorkflow) {
+        console.error('Parent workflow not found for build fix sub-workflow');
+        return null;
+      }
+
+      // Create the fix sub-workflow
+      const taskDescription = `Fix build error (attempt ${retryAttempt}/3): ${buildError}`;
+
+      const [result] = await db.execute(
+        `INSERT INTO workflows (
+          workflow_type, status, branch_name, target_module,
+          parent_workflow_id, execution_order, task_description,
+          payload, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          'bugfix',
+          'pending',
+          parentWorkflow.branch_name,
+          parentWorkflow.target_module,
+          parentWorkflowId,
+          retryAttempt, // Use retry attempt as execution order
+          taskDescription,
+          JSON.stringify({
+            type: 'build_fix',
+            buildError,
+            retryAttempt,
+            parentWorkflowId,
+            workingDir,
+          }),
+        ]
+      );
+
+      const fixWorkflowId = (result as any).insertId;
+
+      // Update parent workflow to indicate it's waiting for fix
+      await db.execute(
+        `UPDATE workflows SET status = 'pending_fix', updated_at = NOW() WHERE id = ?`,
+        [parentWorkflowId]
+      );
+
+      // Execute the fix workflow asynchronously
+      // This will trigger Plan -> Code -> Build verification
+      setTimeout(async () => {
+        try {
+          await this.executeBuildFixWorkflow(
+            fixWorkflowId,
+            workingDir,
+            taskDescription,
+            buildError,
+            retryAttempt,
+            parentInput
+          );
+        } catch (error) {
+          console.error('Failed to execute build fix workflow:', error);
+          await this.logWorkflow(parentWorkflowId, 'error', 'build_fix_execution_failed',
+            `Failed to execute build fix workflow #${fixWorkflowId}: ${(error as Error).message}`);
+        }
+      }, 100);
+
+      return fixWorkflowId;
+    } catch (error) {
+      console.error('Failed to create build fix sub-workflow:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Execute a build fix sub-workflow
+   * Runs: Plan (analyze error) -> Code (fix it) -> Verify build
+   */
+  private async executeBuildFixWorkflow(
+    workflowId: number,
+    workingDir: string,
+    _taskDescription: string,
+    buildError: string,
+    retryAttempt: number,
+    parentInput: AgentInput
+  ): Promise<void> {
+    const db = getDbPool();
+
+    try {
+      // Mark as running
+      await db.execute(
+        `UPDATE workflows SET status = 'running', started_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [workflowId]
+      );
+
+      await this.logWorkflow(workflowId, 'info', 'build_fix_started',
+        `Starting build fix workflow (attempt ${retryAttempt})`, { buildError });
+
+      // Get the repo directory
+      const repoDir = workingDir.endsWith('/repo') ? workingDir : path.join(workingDir, 'repo');
+      let codeWorkingDir = workingDir;
+      try {
+        await fs.access(repoDir);
+        codeWorkingDir = repoDir;
+      } catch {
+        // Use workingDir as-is
+      }
+
+      // Create input for fix workflow
+      const fixInput: AgentInput = {
+        workflowId,
+        workflowType: 'bugfix',
+        targetModule: parentInput.targetModule,
+        taskDescription: `Fix the following build error:\n\n${buildError}\n\nAnalyze the error and make the necessary code changes to fix it.`,
+        workingDir: codeWorkingDir,
+        metadata: {
+          ...parentInput.metadata,
+          buildRetryCount: retryAttempt,
+          parentWorkflowId: parentInput.workflowId,
+          buildError,
+        },
+        env: parentInput.env,
+      };
+
+      // Execute Plan agent
+      await this.logWorkflow(workflowId, 'info', 'agent_plan_starting', 'Starting plan agent for build fix');
+      const planExecutionId = await this.createAgentExecution(workflowId, 'plan', fixInput);
+
+      try {
+        const planOutput = await this.executeAgent('plan', fixInput, planExecutionId);
+        await this.updateAgentExecution(planExecutionId, planOutput.success ? 'completed' : 'failed', planOutput);
+
+        if (!planOutput.success) {
+          throw new Error(`Plan agent failed: ${planOutput.summary}`);
+        }
+
+        await this.logWorkflow(workflowId, 'info', 'agent_plan_completed', 'Plan agent completed');
+      } catch (error) {
+        await this.updateAgentExecution(planExecutionId, 'failed', null, (error as Error).message);
+        throw error;
+      }
+
+      // Execute Code agent
+      await this.logWorkflow(workflowId, 'info', 'agent_code_starting', 'Starting code agent for build fix');
+      const codeExecutionId = await this.createAgentExecution(workflowId, 'code', fixInput);
+
+      try {
+        const codeOutput = await this.executeAgent('code', fixInput, codeExecutionId);
+        await this.updateAgentExecution(codeExecutionId, codeOutput.success ? 'completed' : 'failed', codeOutput);
+
+        if (!codeOutput.success) {
+          throw new Error(`Code agent failed: ${codeOutput.summary}`);
+        }
+
+        await this.logWorkflow(workflowId, 'info', 'agent_code_completed', 'Code agent completed');
+      } catch (error) {
+        await this.updateAgentExecution(codeExecutionId, 'failed', null, (error as Error).message);
+        throw error;
+      }
+
+      // Verify build
+      await this.logWorkflow(workflowId, 'info', 'build_verification_starting', 'Verifying build after fix');
+      const buildResult = await this.verifyBuild(codeWorkingDir, workflowId);
+
+      if (!buildResult.success) {
+        // Build still failing
+        await this.logWorkflow(workflowId, 'error', 'build_verification_failed',
+          `Build still failing after fix attempt: ${buildResult.error}`);
+
+        // Check if we can retry again
+        if (retryAttempt < 3) {
+          // Create another fix sub-workflow
+          await this.logWorkflow(workflowId, 'info', 'creating_another_fix',
+            `Creating another fix attempt (${retryAttempt + 1}/3)`);
+
+          const nextFixId = await this.createBuildFixSubWorkflow(
+            parentInput.workflowId,
+            workingDir,
+            buildResult.error!,
+            retryAttempt + 1,
+            parentInput
+          );
+
+          // Mark this fix workflow as completed (it tried)
+          await db.execute(
+            `UPDATE workflows SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+            [workflowId]
+          );
+
+          await this.logWorkflow(workflowId, 'info', 'build_fix_completed_with_retry',
+            `Build fix attempt completed, created next attempt #${nextFixId}`);
+        } else {
+          // Max retries reached
+          await db.execute(
+            `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+            [workflowId]
+          );
+
+          // Also fail the parent workflow
+          await db.execute(
+            `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+            [parentInput.workflowId]
+          );
+
+          await this.logWorkflow(workflowId, 'error', 'build_fix_max_retries',
+            'Build fix failed after maximum retry attempts');
+        }
+      } else {
+        // Build succeeded!
+        await this.logWorkflow(workflowId, 'info', 'build_verification_passed', 'Build succeeded after fix!');
+
+        // Mark fix workflow as completed
+        await db.execute(
+          `UPDATE workflows SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+          [workflowId]
+        );
+
+        // Continue the parent workflow from where it left off (review, test, document)
+        await this.continueParentWorkflow(parentInput.workflowId, workingDir, parentInput);
+      }
+    } catch (error) {
+      console.error('Build fix workflow failed:', error);
+
+      // Mark as failed
+      await db.execute(
+        `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [workflowId]
+      );
+
+      await this.logWorkflow(workflowId, 'error', 'build_fix_failed',
+        `Build fix workflow failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Continue parent workflow after successful build fix
+   * Runs the remaining agents (test, review, document)
+   */
+  private async continueParentWorkflow(
+    parentWorkflowId: number,
+    workingDir: string,
+    originalInput: AgentInput
+  ): Promise<void> {
+    const db = getDbPool();
+
+    try {
+      await this.logWorkflow(parentWorkflowId, 'info', 'workflow_continuing',
+        'Continuing workflow after successful build fix');
+
+      // Update parent status back to running
+      await db.execute(
+        `UPDATE workflows SET status = 'running', updated_at = NOW() WHERE id = ?`,
+        [parentWorkflowId]
+      );
+
+      // Get repo directory
+      const repoDir = workingDir.endsWith('/repo') ? workingDir : path.join(workingDir, 'repo');
+      let codeWorkingDir = workingDir;
+      try {
+        await fs.access(repoDir);
+        codeWorkingDir = repoDir;
+      } catch {
+        // Use workingDir as-is
+      }
+
+      // Continue with remaining agents: test, review, document
+      const remainingAgents = ['test', 'review', 'document'];
+      let hasFailedAgent = false;
+
+      for (const agentType of remainingAgents) {
+        await this.logWorkflow(parentWorkflowId, 'info', `agent_${agentType}_starting`,
+          `Starting ${agentType} agent (post-fix)`);
+
+        const agentExecutionId = await this.createAgentExecution(parentWorkflowId, agentType, originalInput);
+
+        try {
+          const agentInput = {
+            ...originalInput,
+            workflowId: parentWorkflowId,
+            workingDir: codeWorkingDir,
+          };
+
+          const agentOutput = await this.executeAgent(agentType, agentInput, agentExecutionId);
+
+          if (!agentOutput.success) {
+            hasFailedAgent = true;
+            await this.updateAgentExecution(agentExecutionId, 'failed', agentOutput, agentOutput.summary);
+            await this.logWorkflow(parentWorkflowId, 'warn', `agent_${agentType}_failed`,
+              `${agentType} agent returned failure: ${agentOutput.summary}`);
+            continue;
+          }
+
+          await this.updateAgentExecution(agentExecutionId, 'completed', agentOutput);
+          await this.logWorkflow(parentWorkflowId, 'info', `agent_${agentType}_completed`,
+            `${agentType} agent completed successfully`);
+        } catch (error) {
+          hasFailedAgent = true;
+          await this.updateAgentExecution(agentExecutionId, 'failed', null, (error as Error).message);
+          await this.logWorkflow(parentWorkflowId, 'error', `agent_${agentType}_error`,
+            `${agentType} agent error: ${(error as Error).message}`);
+        }
+      }
+
+      // Update parent workflow status
+      const finalStatus = hasFailedAgent ? 'completed_with_warnings' : 'completed';
+      await db.execute(
+        `UPDATE workflows SET status = ?, completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [finalStatus, parentWorkflowId]
+      );
+
+      await this.logWorkflow(parentWorkflowId, 'info', 'workflow_completed',
+        `Workflow completed (status: ${finalStatus})`);
+    } catch (error) {
+      console.error('Failed to continue parent workflow:', error);
+
+      await db.execute(
+        `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [parentWorkflowId]
+      );
+
+      await this.logWorkflow(parentWorkflowId, 'error', 'workflow_continuation_failed',
+        `Failed to continue workflow: ${(error as Error).message}`);
     }
   }
 

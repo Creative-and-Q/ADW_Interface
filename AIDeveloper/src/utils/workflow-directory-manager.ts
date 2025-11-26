@@ -4,6 +4,7 @@
  */
 
 import fs from 'fs/promises';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { config } from '../config.js';
@@ -15,10 +16,11 @@ import { getGit } from './git-helper.js';
  * Load SSH environment for git operations
  */
 function getSSHEnvironment(): NodeJS.ProcessEnv {
-  const sshEnvFile = path.join(process.env.HOME || '/root', '.ssh', 'agent-environment');
+  const homeDir = process.env.HOME || '/home/kevin';
+  const sshEnvFile = path.join(homeDir, '.ssh', 'agent-environment');
 
   try {
-    const envContent = require('fs').readFileSync(sshEnvFile, 'utf-8');
+    const envContent = readFileSync(sshEnvFile, 'utf-8');
     const env: NodeJS.ProcessEnv = { ...process.env };
 
     // Parse the environment file
@@ -37,9 +39,11 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
     return env;
   } catch (error) {
     logger.warn('Could not load SSH environment, using default', error as Error);
+    // Use home directory for SSH keys, not /root
+    const sshDir = path.join(homeDir, '.ssh');
     return {
       ...process.env,
-      GIT_SSH_COMMAND: 'ssh -i /root/.ssh/id_rsa -F /root/.ssh/config',
+      GIT_SSH_COMMAND: `ssh -i ${path.join(sshDir, 'id_rsa')} -F ${path.join(sshDir, 'config')}`,
     };
   }
 }

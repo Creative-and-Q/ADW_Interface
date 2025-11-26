@@ -462,16 +462,175 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       });
     }
 
-    // Forward to webhook handler
-    const response = await fetch('http://localhost:3000/webhooks/manual', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflowType, targetModule: resolvedModule, taskDescription }),
+    // Import dynamically to avoid circular dependencies
+    const { createWorkflow } = await import('./workflow-state.js');
+    const { WorkflowType } = await import('./types.js');
+
+    // Map workflowType string to enum
+    const workflowTypeLower = workflowType.toLowerCase();
+    let mappedType: typeof WorkflowType[keyof typeof WorkflowType];
+
+    switch (workflowTypeLower) {
+      case 'feature':
+        mappedType = WorkflowType.FEATURE;
+        break;
+      case 'bugfix':
+        mappedType = WorkflowType.BUGFIX;
+        break;
+      case 'documentation':
+        mappedType = WorkflowType.DOCUMENTATION;
+        break;
+      case 'refactor':
+        mappedType = WorkflowType.REFACTOR;
+        break;
+      case 'review':
+        mappedType = WorkflowType.REVIEW;
+        break;
+      case 'new_module':
+        mappedType = WorkflowType.NEW_MODULE;
+        break;
+      default:
+        return res.status(400).json({
+          error: `Invalid workflowType: ${workflowType}. Valid types: feature, bugfix, documentation, refactor, review, new_module`,
+        });
+    }
+
+    // Create payload
+    const payload = {
+      source: 'manual' as const,
+      workflowType: workflowType.toLowerCase(),
+      targetModule: resolvedModule,
+      taskDescription,
+    };
+
+    // Create workflow record with auto_execute_children enabled
+    const workflowId = await createWorkflow(mappedType, payload, resolvedModule, {
+      autoExecuteChildren: true,
     });
 
-    const data = await response.json();
+    logger.info('Manual workflow created', {
+      workflowId,
+      workflowType: mappedType,
+      targetModule: resolvedModule,
+      taskDescription,
+    });
 
-    return res.json(data);
+    // Execute the workflow asynchronously
+    (async () => {
+      try {
+        logger.info('Starting workflow execution', { workflowId, targetModule: resolvedModule });
+
+        const { createWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+
+        // Create a branch name for the workflow
+        const sanitizedDescription = taskDescription
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .substring(0, 30);
+        const branchName = `workflow-${workflowType.toLowerCase()}-${workflowId}-${sanitizedDescription}`;
+
+        // Create workflow directory (clones repo)
+        const workflowDir = await createWorkflowDirectory(workflowId, branchName, mappedType, resolvedModule);
+
+        logger.info('Workflow directory created', { workflowId, workflowDir, branchName });
+
+        // Update workflow status to running
+        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
+
+        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType });
+
+        // Execute WorkflowOrchestrator
+        const orchestrator = new WorkflowOrchestrator();
+        const result = await orchestrator.execute({
+          workflowId,
+          workflowType: workflowType.toLowerCase(),
+          targetModule: resolvedModule,
+          taskDescription,
+          workingDir: workflowDir,
+        });
+
+        // Save artifacts from the workflow result
+        if (result.artifacts && result.artifacts.length > 0) {
+          const { saveArtifact } = await import('./workflow-state.js');
+          for (const artifact of result.artifacts) {
+            try {
+              await saveArtifact(
+                workflowId,
+                null, // executionId - not available here
+                artifact.type as any,
+                artifact.content,
+                artifact.filePath,
+                artifact.metadata
+              );
+              logger.debug('Saved artifact', { workflowId, type: artifact.type });
+            } catch (artifactError) {
+              logger.error('Failed to save artifact', artifactError as Error, {
+                workflowId,
+                type: artifact.type,
+              });
+            }
+          }
+        }
+
+        // Update workflow status based on result
+        const finalStatus = result.success ? 'completed' : 'failed';
+        if (!result.success) {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const rawPayload = currentPayload[0]?.payload;
+          // Handle both string and object payloads (MySQL JSON columns may already be parsed)
+          const payloadData = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
+          payloadData.error = result.summary;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            finalStatus,
+            JSON.stringify(payloadData),
+            workflowId,
+          ]);
+        } else {
+          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+        }
+
+        logger.info('Workflow execution completed', { workflowId, status: finalStatus });
+      } catch (error) {
+        logger.error('Failed to execute manual workflow', error as Error, {
+          workflowId,
+          errorMessage: (error as Error).message,
+          errorStack: (error as Error).stack,
+        });
+        // Update workflow status to failed
+        try {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const rawPayload = currentPayload[0]?.payload;
+          // Handle both string and object payloads (MySQL JSON columns may already be parsed)
+          const payloadData = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
+          payloadData.error = (error as Error).message;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            'failed',
+            JSON.stringify(payloadData),
+            workflowId,
+          ]);
+        } catch (updateError) {
+          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+        }
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in workflow execution', error as Error, { workflowId });
+    });
+
+    return res.json({
+      success: true,
+      workflowId,
+      message: `Workflow started for ${resolvedModule}: ${taskDescription}`,
+    });
   } catch (error) {
     logger.error('Failed to submit workflow', error as Error);
     return res.status(500).json({ error: 'Failed to submit workflow' });
@@ -575,13 +734,42 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
             relatedModules,
           },
         });
-        
+
+        // Save artifacts from the workflow result
+        if (result.artifacts && result.artifacts.length > 0) {
+          const { saveArtifact } = await import('./workflow-state.js');
+          for (const artifact of result.artifacts) {
+            try {
+              await saveArtifact(
+                workflowId,
+                null, // executionId - not available here
+                artifact.type as any,
+                artifact.content,
+                artifact.filePath,
+                artifact.metadata
+              );
+              logger.debug('Saved artifact', { workflowId, type: artifact.type });
+            } catch (artifactError) {
+              logger.error('Failed to save artifact', artifactError as Error, {
+                workflowId,
+                type: artifact.type,
+              });
+            }
+          }
+        }
+
         // Update workflow status based on result
         const finalStatus = result.success ? 'completed' : 'failed';
         // Store error in payload if failed
         if (!result.success) {
           const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
-          const payload = currentPayload[0]?.payload ? JSON.parse(currentPayload[0].payload) : {};
+          const rawPayload = currentPayload[0]?.payload;
+          // Handle both string and object payloads (MySQL JSON columns may already be parsed)
+          const payload = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
           payload.error = result.summary;
           await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
             finalStatus,
@@ -602,7 +790,13 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
         // Update workflow status to failed and store error in payload
         try {
           const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
-          const payload = currentPayload[0]?.payload ? JSON.parse(currentPayload[0].payload) : {};
+          const rawPayload = currentPayload[0]?.payload;
+          // Handle both string and object payloads (MySQL JSON columns may already be parsed)
+          const payload = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
           payload.error = (error as Error).message;
           await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
             'failed',

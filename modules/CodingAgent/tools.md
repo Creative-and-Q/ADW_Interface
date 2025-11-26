@@ -4,6 +4,22 @@ This document describes the tools available to the CodingAgent. This agent has *
 
 ## Available Tools
 
+### list-directory.sh
+
+Lists the contents of a directory.
+
+**Parameters:**
+- `directory_path` - Path to the directory to list (relative to working directory, defaults to ".")
+
+**Example:**
+```bash
+./tools/list-directory.sh "src"
+./tools/list-directory.sh "."
+```
+
+**Description:**
+Lists all files and subdirectories in the specified directory. **Use this FIRST to explore the codebase structure before making changes.**
+
 ### read-file.sh
 
 Reads the contents of a file.
@@ -71,6 +87,7 @@ Copies a file from the source path to the destination path. The destination dire
 ## Tool Permissions
 
 **READ AND WRITE ACCESS**: CodingAgent can:
+- ✅ List directories
 - ✅ Read files
 - ✅ Write files
 - ✅ Modify files

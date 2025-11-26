@@ -63,6 +63,15 @@ export declare class CodingAgent {
      */
     private autoExtractAndWriteCode;
     /**
+     * Deep merge two JSON objects
+     * newObj properties override existingObj, but existingObj properties are preserved if not in newObj
+     */
+    private deepMergeJson;
+    /**
+     * Scan working directory to get file structure
+     */
+    private scanWorkingDirectory;
+    /**
      * Load tools.md documentation
      */
     private loadToolsDocumentation;

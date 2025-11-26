@@ -10,10 +10,15 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
 const execAsync = promisify(exec);
+
+// ES module equivalent of __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Agent Input Interface
@@ -101,8 +106,11 @@ export class CodingAgent {
       // Load system prompt with explicit tool usage instructions
       const systemPrompt = this.buildSystemPrompt(toolsDoc);
 
-      // Build user prompt
-      const userPrompt = this.buildUserPrompt(input);
+      // Scan working directory to include file structure in prompt
+      const fileStructure = await this.scanWorkingDirectory(input.workingDir);
+
+      // Build user prompt with file structure included
+      const userPrompt = this.buildUserPrompt(input, fileStructure);
 
       // Agentic loop: Call AI, execute tools, repeat until done
       const messages: AIMessage[] = [{
@@ -261,6 +269,38 @@ export class CodingAgent {
       return path.join(workingDir, filePath);
     };
 
+    /**
+     * Smart write for JSON files - merges changes instead of replacing
+     * This prevents the AI from accidentally wiping out existing package.json content
+     */
+    const smartWriteJson = async (fullPath: string, newContent: string, filePath: string): Promise<string> => {
+      try {
+        // Try to parse the new content as JSON
+        const newJson = JSON.parse(newContent);
+
+        // Check if file exists and read it
+        try {
+          const existingContent = await fs.readFile(fullPath, 'utf-8');
+          const existingJson = JSON.parse(existingContent);
+
+          // Deep merge: new content on top of existing content
+          // This preserves fields the AI didn't include
+          const mergedJson = this.deepMergeJson(existingJson, newJson);
+
+          await fs.writeFile(fullPath, JSON.stringify(mergedJson, null, 2), 'utf-8');
+          return `✅ Smart-merged JSON: ${filePath} (preserved existing fields)`;
+        } catch (readError) {
+          // File doesn't exist or isn't valid JSON, write as-is
+          await fs.writeFile(fullPath, JSON.stringify(newJson, null, 2), 'utf-8');
+          return `✅ Auto-wrote: ${filePath} (${newContent.length} bytes)`;
+        }
+      } catch (parseError) {
+        // New content isn't valid JSON, write as-is
+        await fs.writeFile(fullPath, newContent, 'utf-8');
+        return `✅ Auto-wrote: ${filePath} (${newContent.length} bytes)`;
+      }
+    };
+
     // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
     // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json
     const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json):([^\n]+)\n([\s\S]*?)```/g;
@@ -273,8 +313,15 @@ export class CodingAgent {
       try {
         const fullPath = resolveFilePath(filePath);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
-        await fs.writeFile(fullPath, code, 'utf-8');
-        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+
+        // Use smart JSON merge for package.json
+        if (filePath.endsWith('package.json')) {
+          const result = await smartWriteJson(fullPath, code, filePath);
+          results.push(result);
+        } else {
+          await fs.writeFile(fullPath, code, 'utf-8');
+          results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        }
         console.log(`Auto-wrote file: ${filePath}`);
       } catch (error) {
         results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
@@ -296,8 +343,15 @@ export class CodingAgent {
       try {
         const fullPath = resolveFilePath(filePath);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
-        await fs.writeFile(fullPath, code, 'utf-8');
-        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+
+        // Use smart JSON merge for package.json
+        if (filePath.endsWith('package.json')) {
+          const result = await smartWriteJson(fullPath, code, filePath);
+          results.push(result);
+        } else {
+          await fs.writeFile(fullPath, code, 'utf-8');
+          results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        }
         console.log(`Auto-wrote file: ${filePath}`);
       } catch (error) {
         results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
@@ -319,19 +373,72 @@ export class CodingAgent {
       try {
         const fullPath = resolveFilePath(filePath);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
-        await fs.writeFile(fullPath, code, 'utf-8');
-        results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+
+        // Use smart JSON merge for package.json
+        if (filePath.endsWith('package.json')) {
+          const result = await smartWriteJson(fullPath, code, filePath);
+          results.push(result);
+        } else {
+          await fs.writeFile(fullPath, code, 'utf-8');
+          results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
+        }
         console.log(`Auto-wrote file: ${filePath}`);
       } catch (error) {
         results.push(`❌ Failed to write ${filePath}: ${(error as Error).message}`);
       }
     }
-    
+
     if (results.length === 0) {
       results.push('⚠️ No code blocks with file paths found in response');
     }
-    
+
     return results;
+  }
+
+  /**
+   * Deep merge two JSON objects
+   * newObj properties override existingObj, but existingObj properties are preserved if not in newObj
+   */
+  private deepMergeJson(existingObj: any, newObj: any): any {
+    if (typeof newObj !== 'object' || newObj === null) {
+      return newObj;
+    }
+    if (typeof existingObj !== 'object' || existingObj === null) {
+      return newObj;
+    }
+    if (Array.isArray(newObj)) {
+      return newObj; // Arrays are replaced, not merged
+    }
+
+    const result = { ...existingObj };
+
+    for (const key of Object.keys(newObj)) {
+      if (key in existingObj && typeof existingObj[key] === 'object' && typeof newObj[key] === 'object') {
+        // Recursively merge objects
+        result[key] = this.deepMergeJson(existingObj[key], newObj[key]);
+      } else {
+        // New value overrides existing
+        result[key] = newObj[key];
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Scan working directory to get file structure
+   */
+  private async scanWorkingDirectory(workingDir: string): Promise<string> {
+    try {
+      const { stdout } = await execAsync(
+        `find . -type f -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.css" -o -name "*.json" | grep -v node_modules | grep -v dist | sort | head -50`,
+        { cwd: workingDir }
+      );
+      return stdout.trim() || 'No source files found';
+    } catch (error) {
+      console.warn('Failed to scan working directory:', (error as Error).message);
+      return 'Unable to scan directory';
+    }
   }
 
   /**
@@ -362,37 +469,39 @@ ${toolsDoc}
 You MUST actually modify files. Use ONE of these methods:
 
 **Method 1 - Direct Code (PREFERRED):**
-Show the complete file content with the file path in the code block header:
+Show the complete file content with the file path in the code block header.
+USE THE EXACT PATH from the file list provided - do NOT guess paths!
 
-\`\`\`tsx:frontend/src/pages/Component.tsx
-import { useState } from 'react';
-
-export default function Component() {
-  const [count, setCount] = useState(0);
-  return (
-    <div className="text-4xl">{count}</div>
-    <button onClick={() => setCount(count + 1)}>+</button>
-    <button onClick={() => setCount(count - 1)}>-</button>
-  );
-}
+Example for a file at "src/SlotMachine.js":
+\`\`\`javascript:src/SlotMachine.js
+// Full file content here
 \`\`\`
 
 **Method 2 - Tool Commands:**
 \`\`\`bash
-./tools/write-file.sh "frontend/src/pages/Component.tsx" "full content here"
+./tools/write-file.sh "src/SlotMachine.js" "full content here"
 \`\`\`
 
 **Both methods will write the files automatically!**
 
 After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 
+## CRITICAL RULE: Use Exact File Paths
+
+- **LOOK AT THE FILE LIST** provided in the user prompt - these are the actual files in the project
+- **USE THOSE EXACT PATHS** - don't assume or invent paths like "frontend/src/" or "pages/"
+- If you see "src/SlotMachine.js" in the file list, use "src/SlotMachine.js" (not "frontend/src/SlotMachine.js")
+- If you see "./src/App.tsx", use "src/App.tsx"
+- The file list shows the REAL project structure - use it!
+
 ## Your Responsibilities
 
-1. **ALWAYS** read existing files first using ./tools/read-file.sh
-2. **ALWAYS** write changes using ./tools/write-file.sh
-3. Create directories with ./tools/create-directory.sh when needed
-4. Make actual file changes - don't just describe what to do
-5. After making all changes, explicitly say "TASK COMPLETE"
+1. **ALWAYS** check the file list to find the correct file path
+2. **ALWAYS** read existing files first using ./tools/read-file.sh
+3. **ALWAYS** write changes using ./tools/write-file.sh with the CORRECT path
+4. Create directories with ./tools/create-directory.sh only if needed
+5. Make actual file changes - don't just describe what to do
+6. After making all changes, explicitly say "TASK COMPLETE"
 
 ## Permissions
 
@@ -405,15 +514,33 @@ After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 ## Important
 
 - NEVER just describe changes - EXECUTE them using tools
-- NEVER assume files exist - read them first
-- ALWAYS use full file paths relative to working directory
-- When writing files with content, put full content in quotes`;
+- NEVER assume file paths - use the EXACT paths from the file list
+- NEVER create files at paths that don't match the project structure
+- When writing files with content, put full content in quotes
+
+## CRITICAL: Modifying package.json
+
+When modifying package.json, you MUST:
+1. First read the existing package.json using ./tools/read-file.sh
+2. Show ONLY the fields you want to add/modify (system will merge automatically)
+3. Do NOT rewrite the entire file - just show the changes
+
+Example for adding a devDependency:
+\`\`\`json:package.json
+{
+  "devDependencies": {
+    "@types/cors": "^2.8.17"
+  }
+}
+\`\`\`
+
+This will ADD the field to existing package.json, preserving all other content!`;
   }
 
   /**
    * Build user prompt
    */
-  private buildUserPrompt(input: AgentInput): string {
+  private buildUserPrompt(input: AgentInput, fileStructure: string): string {
     return `
 Workflow ID: ${input.workflowId}
 Workflow Type: ${input.workflowType || 'unknown'}
@@ -421,19 +548,29 @@ Target Module: ${input.targetModule || 'none'}
 Task Description: ${input.taskDescription || 'none'}
 Working Directory: ${input.workingDir}
 
-IMPLEMENT THE REQUESTED CHANGES:
+## EXISTING FILES IN CODEBASE
 
-For each file you need to modify, show the COMPLETE file content in a code block with the file path:
-
-\`\`\`tsx:frontend/src/pages/ComponentName.tsx
-import { useState } from 'react';
-// ... complete implementation here
-export default function ComponentName() {
-  // full working code
-}
+\`\`\`
+${fileStructure}
 \`\`\`
 
-The system will automatically write these files for you.
+## YOUR TASK
+
+Based on the files listed above, implement the requested changes.
+
+**CRITICAL RULES:**
+1. You MUST use the EXACT file paths from the list above (not guessed paths)
+2. If the task mentions a module like "SlotMachineV5", look for similar names in the actual files (e.g., "SlotMachine.js")
+3. MODIFY existing files - do NOT create new files unless the file doesn't exist
+4. Use ./tools/read-file.sh to read the current content if needed
+
+## IMPLEMENT CHANGES
+
+Show your COMPLETE modified file with the EXACT path from the file list:
+
+\`\`\`javascript:src/SlotMachine.js
+// Your complete modified code here (must be the FULL file content)
+\`\`\`
 
 When finished, say: "IMPLEMENTATION COMPLETE"
     `.trim();
