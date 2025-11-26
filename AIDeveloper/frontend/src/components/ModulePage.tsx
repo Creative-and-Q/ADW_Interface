@@ -1,9 +1,10 @@
 /**
  * ModulePage Wrapper Component
  * Wraps module-provided pages with consistent layout and error handling
+ * Uses the module-loader to dynamically load components
  */
 
-import React, { Suspense, ComponentType } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
 import { loadModuleComponent } from '../utils/module-loader';
 
 interface ModulePageProps {
@@ -13,18 +14,26 @@ interface ModulePageProps {
 }
 
 export default function ModulePage({ module, componentName, componentPath }: ModulePageProps) {
-  const [Component, setComponent] = React.useState<ComponentType<any> | null>(null);
-  const [error, setError] = React.useState<Error | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [Component, setComponent] = useState<React.ComponentType<any> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+
     loadModuleComponent(module, componentName, componentPath)
       .then((comp) => {
-        setComponent(() => comp);
+        if (comp) {
+          setComponent(() => comp);
+        } else {
+          setError(`Component ${componentName} not found in module ${module}`);
+        }
         setLoading(false);
       })
       .catch((err) => {
-        setError(err);
+        console.error(`Failed to load component ${componentName} from ${module}:`, err);
+        setError(err.message || `Failed to load component ${componentName}`);
         setLoading(false);
       });
   }, [module, componentName, componentPath]);
@@ -37,24 +46,15 @@ export default function ModulePage({ module, componentName, componentPath }: Mod
     );
   }
 
-  if (error) {
+  if (error || !Component) {
     return (
       <div className="card p-6">
         <h2 className="text-xl font-bold text-red-600 mb-2">Failed to Load Module Page</h2>
         <p className="text-gray-600 mb-4">
-          Failed to load component <code>{componentName}</code> from module <code>{module}</code>
+          {error || `Component ${componentName} not found in module ${module}`}
         </p>
-        <p className="text-sm text-gray-500">{error.message}</p>
-      </div>
-    );
-  }
-
-  if (!Component) {
-    return (
-      <div className="card p-6">
-        <h2 className="text-xl font-bold text-yellow-600 mb-2">Component Not Found</h2>
-        <p className="text-gray-600">
-          Component <code>{componentName}</code> not found in module <code>{module}</code>
+        <p className="text-sm text-gray-500">
+          Component: <code>{componentName}</code> | Module: <code>{module}</code>
         </p>
       </div>
     );
@@ -72,4 +72,3 @@ export default function ModulePage({ module, componentName, componentPath }: Mod
     </Suspense>
   );
 }
-
