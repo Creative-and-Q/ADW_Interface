@@ -501,11 +501,12 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
     // Import dynamically to avoid circular dependencies
     const { createWorkflow } = await import('./workflow-state.js');
 
-    // Create workflow record
-    const workflowId = await createWorkflow({
-      type: 'new_module',
+    // Create payload in WebhookPayload format
+    const payload = {
+      source: 'manual' as const,
+      workflowType: 'new_module',
       targetModule: moduleName,
-      description: taskDescription || description,
+      taskDescription: taskDescription || description,
       metadata: {
         moduleType,
         port,
@@ -513,6 +514,14 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
         frontendPort,
         relatedModules,
       },
+    };
+
+    // Import workflow types
+    const { WorkflowType } = await import('./types.js');
+    
+    // Create workflow record with auto_execute_children enabled for new_module workflows
+    const workflowId = await createWorkflow(WorkflowType.NEW_MODULE, payload, moduleName, {
+      autoExecuteChildren: true,
     });
 
     logger.info('New module workflow created', {
@@ -520,6 +529,89 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
       moduleName,
       moduleType,
       hasFrontend,
+      description: taskDescription || description,
+    });
+
+    // Execute the workflow asynchronously
+    // For new_module workflows, we create a temporary workflow directory
+    // The ModuleScaffoldAgent will handle module creation
+    (async () => {
+      try {
+        logger.info('Starting workflow execution', { workflowId, moduleName });
+        
+        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        
+        // Create a temporary workflow directory for the scaffold agent
+        // For new_module, we don't need to clone a repo - ModuleScaffoldAgent creates it
+        const branchName = `new-module-${moduleName}-${workflowId}`;
+        const workflowDir = getWorkflowDirectory(workflowId, branchName);
+        
+        logger.info('Creating workflow directory', { workflowId, workflowDir });
+        await fs.mkdir(workflowDir, { recursive: true });
+        
+        // Update workflow status to running
+        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
+        
+        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType: 'new_module' });
+        
+        // Execute WorkflowOrchestrator
+        const orchestrator = new WorkflowOrchestrator();
+        const result = await orchestrator.execute({
+          workflowId,
+          workflowType: 'new_module',
+          targetModule: moduleName,
+          taskDescription: taskDescription || description,
+          workingDir: workflowDir,
+          metadata: {
+            moduleType,
+            port,
+            hasFrontend,
+            frontendPort,
+            relatedModules,
+          },
+        });
+        
+        // Update workflow status based on result
+        const finalStatus = result.success ? 'completed' : 'failed';
+        // Store error in payload if failed
+        if (!result.success) {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const payload = currentPayload[0]?.payload ? JSON.parse(currentPayload[0].payload) : {};
+          payload.error = result.summary;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            finalStatus,
+            JSON.stringify(payload),
+            workflowId,
+          ]);
+        } else {
+          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+        }
+        
+        logger.info('Workflow execution completed', { workflowId, status: finalStatus });
+      } catch (error) {
+        logger.error('Failed to execute new module workflow', error as Error, { 
+          workflowId,
+          errorMessage: (error as Error).message,
+          errorStack: (error as Error).stack,
+        });
+        // Update workflow status to failed and store error in payload
+        try {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const payload = currentPayload[0]?.payload ? JSON.parse(currentPayload[0].payload) : {};
+          payload.error = (error as Error).message;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            'failed',
+            JSON.stringify(payload),
+            workflowId,
+          ]);
+        } catch (updateError) {
+          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+        }
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in workflow execution', error as Error, { workflowId });
     });
 
     return res.json({
@@ -995,6 +1087,106 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
   } catch (error) {
     logger.error('Failed to fetch module deployments', error as Error);
     return res.status(500).json({ error: 'Failed to fetch deployments' });
+  }
+});
+
+/**
+ * GET /api/modules/:name/scripts
+ * Get available scripts from package.json
+ */
+router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const modulePath = path.join(process.cwd(), '..', 'modules', name);
+    const packageJsonPath = path.join(modulePath, 'package.json');
+
+    try {
+      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageJson = JSON.parse(packageContent);
+
+      const scripts = packageJson.scripts || {};
+
+      return res.json({
+        success: true,
+        moduleName: name,
+        scripts,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return res.status(404).json({
+          success: false,
+          error: 'package.json not found',
+          message: `Module ${name} does not have a package.json file`,
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    logger.error('Failed to get module scripts', error as Error);
+    return res.status(500).json({ error: 'Failed to get module scripts' });
+  }
+});
+
+/**
+ * POST /api/modules/:name/run-script
+ * Run a script from package.json or built-in npm commands
+ */
+router.post('/modules/:name/run-script', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { scriptName } = req.body;
+
+    if (!scriptName || typeof scriptName !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing scriptName',
+        message: 'scriptName is required in the request body',
+      });
+    }
+
+    // Built-in npm commands that don't need to be in package.json
+    const builtInCommands = ['install', 'ci', 'update', 'outdated', 'prune'];
+    const isBuiltIn = builtInCommands.includes(scriptName);
+
+    // Verify the module has package.json
+    const modulePath = path.join(process.cwd(), '..', 'modules', name);
+    const packageJsonPath = path.join(modulePath, 'package.json');
+
+    try {
+      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageJson = JSON.parse(packageContent);
+
+      // For non-built-in commands, verify the script exists in package.json
+      if (!isBuiltIn && (!packageJson.scripts || !packageJson.scripts[scriptName])) {
+        return res.status(404).json({
+          success: false,
+          error: 'Script not found',
+          message: `Script "${scriptName}" not found in package.json`,
+        });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return res.status(404).json({
+          success: false,
+          error: 'package.json not found',
+          message: `Module ${name} does not have a package.json file`,
+        });
+      }
+      throw error;
+    }
+
+    // Run the script using deployment manager
+    const operationId = await deploymentManager.runPackageScript(name, scriptName);
+    logger.info('Module script started', { module: name, script: scriptName, operationId });
+
+    return res.json({
+      success: true,
+      operationId,
+      message: `Script "${scriptName}" started`,
+    });
+  } catch (error) {
+    logger.error('Failed to run module script', error as Error);
+    return res.status(500).json({ error: 'Failed to run script' });
   }
 });
 

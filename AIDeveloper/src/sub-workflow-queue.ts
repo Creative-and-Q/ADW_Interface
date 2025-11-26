@@ -108,7 +108,7 @@ export async function getSubWorkflows(parentWorkflowId: number): Promise<Workflo
       payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
       branchName: row.branch_name,
       createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      updatedAt: row.updated_at || row.created_at, // Fallback to created_at if updated_at doesn't exist
       completedAt: row.completed_at,
       parentWorkflowId: row.parent_workflow_id,
       workflowDepth: row.workflow_depth,
@@ -224,7 +224,6 @@ export async function updateSubWorkflowStatus(
   try {
     const updateData: Record<string, any> = {
       status,
-      updated_at: new Date(),
     };
 
     if (status === 'in_progress') {

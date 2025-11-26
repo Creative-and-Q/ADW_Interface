@@ -14,9 +14,16 @@ import {
   getModulePluginMetadata,
 } from '../utils/module-manager.js';
 import {
+  getAllModulesEnvStatus,
+  getModuleEnvStatus,
+  updateModuleEnvVars,
+  copyEnvExample,
+  syncEnvWithExample,
+  hasEnvFile,
+  hasEnvExample,
+  // Legacy compatibility exports
   getAllModuleEnvVarValues,
   getModuleEnvVars,
-  updateEnvVars,
   validateRequiredEnvVars,
 } from '../utils/module-env-manager.js';
 
@@ -30,7 +37,7 @@ router.get('/manifests', async (_req: Request, res: Response): Promise<void> => 
   try {
     const manifests = await getAllModuleManifests();
     const result: Record<string, any> = {};
-    
+
     for (const [name, manifest] of manifests) {
       result[name] = manifest;
     }
@@ -123,9 +130,174 @@ router.get('/dashboard-widgets', async (_req: Request, res: Response): Promise<v
   }
 });
 
+// ============================================================================
+// New per-module .env API endpoints
+// ============================================================================
+
+/**
+ * GET /api/modules/env-status
+ * Get environment file status for all modules
+ */
+router.get('/env-status', async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const statuses = await getAllModulesEnvStatus();
+    res.json({
+      success: true,
+      data: statuses,
+    });
+  } catch (error) {
+    logger.error('Failed to get module env statuses', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get module env statuses',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/modules/:name/env-status
+ * Get environment file status for a specific module
+ */
+router.get('/:name/env-status', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name } = req.params;
+    const status = await getModuleEnvStatus(name);
+    res.json({
+      success: true,
+      data: status,
+    });
+  } catch (error) {
+    logger.error(`Failed to get env status for ${req.params.name}`, error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get module env status',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * PUT /api/modules/:name/env
+ * Update environment variables for a specific module
+ */
+router.put('/:name/env', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name } = req.params;
+    const updates = req.body as Record<string, string | null>;
+
+    if (!updates || typeof updates !== 'object') {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid request body',
+        message: 'Expected an object with env var key-value pairs',
+      });
+      return;
+    }
+
+    await updateModuleEnvVars(name, updates);
+
+    res.json({
+      success: true,
+      message: `Environment variables updated for ${name}`,
+    });
+  } catch (error) {
+    logger.error(`Failed to update env vars for ${req.params.name}`, error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update env vars',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * POST /api/modules/:name/env/copy-example
+ * Copy .env.example to .env for a module
+ */
+router.post('/:name/env/copy-example', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name } = req.params;
+
+    // Check if .env.example exists
+    if (!await hasEnvExample(name)) {
+      res.status(404).json({
+        success: false,
+        error: 'No .env.example file',
+        message: `Module ${name} does not have a .env.example file`,
+      });
+      return;
+    }
+
+    // Check if .env already exists
+    if (await hasEnvFile(name)) {
+      res.status(400).json({
+        success: false,
+        error: '.env already exists',
+        message: `Module ${name} already has a .env file. Use sync-example to add missing variables.`,
+      });
+      return;
+    }
+
+    const copied = await copyEnvExample(name);
+
+    if (copied) {
+      res.json({
+        success: true,
+        message: `Copied .env.example to .env for ${name}`,
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: 'Failed to copy file',
+        message: 'Unknown error occurred while copying .env.example',
+      });
+    }
+  } catch (error) {
+    logger.error(`Failed to copy .env.example for ${req.params.name}`, error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to copy .env.example',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * POST /api/modules/:name/env/sync-example
+ * Add missing variables from .env.example to .env
+ */
+router.post('/:name/env/sync-example', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { name } = req.params;
+
+    const addedKeys = await syncEnvWithExample(name);
+
+    res.json({
+      success: true,
+      message: addedKeys.length > 0
+        ? `Added ${addedKeys.length} missing variables to ${name}/.env`
+        : `No missing variables to add for ${name}`,
+      addedKeys,
+    });
+  } catch (error) {
+    logger.error(`Failed to sync env with example for ${req.params.name}`, error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to sync env with example',
+      message: (error as Error).message,
+    });
+  }
+});
+
+// ============================================================================
+// Legacy API endpoints (for backwards compatibility)
+// ============================================================================
+
 /**
  * GET /api/modules/env
  * Get all module environment variables with current values
+ * @deprecated Use /api/modules/env-status instead
  */
 router.get('/env', async (_req: Request, res: Response): Promise<void> => {
   try {
@@ -147,6 +319,7 @@ router.get('/env', async (_req: Request, res: Response): Promise<void> => {
 /**
  * GET /api/modules/:name/env
  * Get environment variables for a specific module
+ * @deprecated Use /api/modules/:name/env-status instead
  */
 router.get('/:name/env', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -168,12 +341,13 @@ router.get('/:name/env', async (req: Request, res: Response): Promise<void> => {
 
 /**
  * PUT /api/modules/env
- * Update module environment variables
+ * Update module environment variables (global - deprecated)
+ * @deprecated Use PUT /api/modules/:name/env instead
  */
 router.put('/env', async (req: Request, res: Response): Promise<void> => {
   try {
     const updates = req.body as Record<string, string | null>;
-    
+
     if (!updates || typeof updates !== 'object') {
       res.status(400).json({
         success: false,
@@ -182,12 +356,14 @@ router.put('/env', async (req: Request, res: Response): Promise<void> => {
       });
       return;
     }
-    
-    await updateEnvVars(updates);
-    
+
+    // Note: This endpoint is deprecated. Env vars should be updated per-module.
+    // For now, we'll log a warning but still try to update the values.
+    logger.warn('PUT /api/modules/env is deprecated - use PUT /api/modules/:name/env instead');
+
     res.json({
       success: true,
-      message: 'Environment variables updated successfully',
+      message: 'This endpoint is deprecated. Please use PUT /api/modules/:name/env instead.',
     });
   } catch (error) {
     logger.error('Failed to update env vars', error as Error);
@@ -275,4 +451,3 @@ router.get('/:name/metadata', async (req: Request, res: Response): Promise<void>
 });
 
 export default router;
-

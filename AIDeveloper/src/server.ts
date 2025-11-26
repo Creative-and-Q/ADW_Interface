@@ -18,6 +18,7 @@ import apiRoutes from './api-routes.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import { cleanupStuckAgents, getRunningAgentCount } from './workflow-state.js';
 import { discoverModules, readModuleManifest, getModulesPath } from './utils/module-manager.js';
+import { getAllModuleEnvVarValues, writeEnvFile } from './utils/module-env-manager.js';
 
 // ES Module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -108,8 +109,8 @@ function setupRoutes() {
   });
 
   // Serve static files from frontend/dist
-  // Note: Compiled code is in dist/AIDeveloper/src/, so we need to go up 3 levels to project root
-  const frontendDistPath = path.join(__dirname, '..', '..', '..', 'frontend', 'dist');
+  // Note: Compiled code is in dist/, so we need to go up 1 level to AIDeveloper root
+  const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
   app.use(express.static(frontendDistPath));
 
   // SPA fallback - serve index.html for all other routes
@@ -125,6 +126,42 @@ function setupRoutes() {
       message: config.nodeEnv === 'development' ? error.message : undefined,
     });
   });
+}
+
+/**
+ * Load environment variables from database into process.env and .env file
+ * This ensures agents can access database-stored environment variables
+ */
+async function loadDatabaseEnvVars() {
+  try {
+    logger.info('Loading environment variables from database...');
+
+    const envVars = await getAllModuleEnvVarValues();
+
+    // Create a map of environment variables
+    const envMap: Record<string, string> = {};
+    let loadedCount = 0;
+
+    for (const envVar of envVars) {
+      if (envVar.value) {
+        envMap[envVar.key] = envVar.value;
+        // Also set in process.env
+        process.env[envVar.key] = envVar.value;
+        loadedCount++;
+      }
+    }
+
+    // Write to .env file so agents can load them with dotenv.config()
+    if (loadedCount > 0) {
+      await writeEnvFile(envMap);
+      logger.info(`Loaded ${loadedCount} environment variables from database and wrote to .env file`);
+    } else {
+      logger.info('No environment variables to load from database');
+    }
+  } catch (error) {
+    logger.error('Failed to load database environment variables', error as Error);
+    // Don't throw - this shouldn't prevent server startup
+  }
 }
 
 /**
@@ -344,6 +381,9 @@ async function initialize() {
     }
 
     logger.info('Database connected successfully');
+
+    // Load environment variables from database into process.env
+    await loadDatabaseEnvVars();
 
     // Setup middleware and routes
     setupMiddleware();

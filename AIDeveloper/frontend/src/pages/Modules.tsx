@@ -22,6 +22,10 @@ import {
   Eye,
   EyeOff,
   Save,
+  Copy,
+  Pencil,
+  X,
+  Lock,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -76,6 +80,9 @@ export default function Modules() {
   const [visibleSecrets, setVisibleSecrets] = useState<Set<string>>(new Set());
   const [savingEnvVars, setSavingEnvVars] = useState(false);
   const [moduleManifest, setModuleManifest] = useState<any>(null);
+  const [packageScripts, setPackageScripts] = useState<Record<string, string> | null>(null);
+  const [moduleEnvStatus, setModuleEnvStatus] = useState<any>(null);
+  const [envEditMode, setEnvEditMode] = useState(false);
 
   // Deployment action modal state
   const [deploymentModalOpen, setDeploymentModalOpen] = useState(false);
@@ -145,12 +152,18 @@ export default function Modules() {
 
   const loadModuleDetails = async (module: Module) => {
     setSelectedModule(module);
+    // Reset env edit mode when switching modules
+    setEnvEditMode(false);
+    setEnvVarChanges({});
+    setVisibleSecrets(new Set());
     try {
-      const [statsRes, commitsRes, statusRes, manifestRes] = await Promise.all([
+      const [statsRes, commitsRes, statusRes, manifestRes, scriptsRes, envStatusRes] = await Promise.all([
         modulesAPI.getStats(module.name),
         modulesAPI.getCommits(module.name, 10),
         modulesAPI.getStatus(module.name),
         modulePluginsAPI.getManifest(module.name),
+        modulesAPI.getScripts(module.name).catch(() => ({ data: { success: false, scripts: null } })),
+        modulePluginsAPI.getEnvStatus(module.name).catch(() => ({ data: { success: false, data: null } })),
       ]);
       setModuleStats(statsRes.data.stats);
       setModuleCommits(commitsRes.data.commits);
@@ -159,18 +172,45 @@ export default function Modules() {
         [module.name]: statusRes.data.isRunning,
       }));
 
-      // Load module manifest for scripts
+      // Load module manifest (for other module.json info)
       if (manifestRes.data.success) {
         setModuleManifest(manifestRes.data.data);
       } else {
         setModuleManifest(null);
       }
 
-      // Load environment variables for the module
-      await loadModuleEnvVars(module.name);
+      // Load package.json scripts for deployment actions
+      if (scriptsRes.data.success && scriptsRes.data.scripts) {
+        setPackageScripts(scriptsRes.data.scripts);
+      } else {
+        setPackageScripts(null);
+      }
+
+      // Load module env status (new per-module env system)
+      if (envStatusRes.data.success && envStatusRes.data.data) {
+        setModuleEnvStatus(envStatusRes.data.data);
+        // Also populate legacy moduleEnvVars for backward compatibility
+        setModuleEnvVars(envStatusRes.data.data.envVars.map((ev: any) => ({
+          key: ev.key,
+          value: ev.value,
+          module: module.name,
+          definition: {
+            description: ev.comment || '',
+            required: false,
+            secret: ev.key.toLowerCase().includes('key') ||
+                    ev.key.toLowerCase().includes('secret') ||
+                    ev.key.toLowerCase().includes('password'),
+          },
+        })));
+      } else {
+        setModuleEnvStatus(null);
+        setModuleEnvVars([]);
+      }
     } catch (error) {
       console.error('Failed to load module details:', error);
       setModuleManifest(null);
+      setPackageScripts(null);
+      setModuleEnvStatus(null);
     }
   };
 
@@ -453,20 +493,6 @@ export default function Modules() {
     }
   };
 
-  const loadModuleEnvVars = async (moduleName: string) => {
-    try {
-      const response = await modulePluginsAPI.getModuleEnvVars(moduleName);
-      if (response.data.success) {
-        setModuleEnvVars(response.data.data);
-        setEnvVarChanges({});
-        setVisibleSecrets(new Set());
-      }
-    } catch (error: any) {
-      console.error('Failed to load env vars:', error);
-      setModuleEnvVars([]);
-    }
-  };
-
   const handleEnvVarChange = (key: string, value: string) => {
     setEnvVarChanges((prev) => ({ ...prev, [key]: value }));
   };
@@ -489,13 +515,33 @@ export default function Modules() {
       return;
     }
 
+    if (!selectedModule) {
+      toast.error('No module selected');
+      return;
+    }
+
     setSavingEnvVars(true);
     try {
-      await modulePluginsAPI.updateEnvVars(envVarChanges);
+      // Use the new per-module env API
+      await modulePluginsAPI.updateModuleEnv(selectedModule.name, envVarChanges);
       toast.success('Environment variables updated successfully');
       setEnvVarChanges({});
-      if (selectedModule) {
-        await loadModuleEnvVars(selectedModule.name);
+      // Reload env status
+      const envStatusRes = await modulePluginsAPI.getEnvStatus(selectedModule.name);
+      if (envStatusRes.data.success && envStatusRes.data.data) {
+        setModuleEnvStatus(envStatusRes.data.data);
+        setModuleEnvVars(envStatusRes.data.data.envVars.map((ev: any) => ({
+          key: ev.key,
+          value: ev.value,
+          module: selectedModule.name,
+          definition: {
+            description: ev.comment || '',
+            required: false,
+            secret: ev.key.toLowerCase().includes('key') ||
+                    ev.key.toLowerCase().includes('secret') ||
+                    ev.key.toLowerCase().includes('password'),
+          },
+        })));
       }
     } catch (error: any) {
       console.error('Failed to save env vars:', error);
@@ -983,12 +1029,26 @@ export default function Modules() {
                     )}
 
                     <div className="grid grid-cols-2 gap-3">
-                      {/* Dynamic script buttons */}
-                      {moduleManifest?.scripts ? (
+                      {/* Dynamic script buttons from package.json */}
+                      {packageScripts ? (
                         <>
-                          {/* Regular scripts */}
-                          {Object.entries(moduleManifest.scripts)
-                            .filter(([scriptName]) => !['start', 'stop', 'dev'].includes(scriptName))
+                          {/* Install button - always show for modules with package.json */}
+                          <button
+                            onClick={() => handleDeploymentAction('install', selectedModule.name)}
+                            disabled={deploymentLoading !== null}
+                            className="btn btn-secondary flex items-center justify-center"
+                          >
+                            {deploymentLoading === 'install' ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Package className="h-4 w-4 mr-2" />
+                            )}
+                            Install
+                          </button>
+
+                          {/* Regular scripts (exclude start, stop, dev, predev, prestart, install) */}
+                          {Object.entries(packageScripts)
+                            .filter(([scriptName]) => !['start', 'stop', 'dev', 'predev', 'prestart', 'install'].includes(scriptName))
                             .map(([scriptName]) => {
                               // Capitalize first letter of script name
                               const label = scriptName.charAt(0).toUpperCase() + scriptName.slice(1);
@@ -1011,7 +1071,7 @@ export default function Modules() {
                             })}
 
                           {/* Start/Stop/Restart buttons */}
-                          {moduleManifest.scripts.start && (
+                          {packageScripts.start && (
                             moduleStatus[selectedModule.name] ? (
                               <>
                                 <button
@@ -1056,15 +1116,15 @@ export default function Modules() {
                           )}
                         </>
                       ) : (
-                        /* Error message for modules without module.json */
-                        <div className="col-span-2 p-4 bg-red-50 border border-red-200 rounded-lg">
+                        /* Error message for modules without package.json */
+                        <div className="col-span-2 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                           <div className="flex items-start">
-                            <AlertCircle className="h-5 w-5 text-red-500 mt-0.5 mr-3 flex-shrink-0" />
+                            <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5 mr-3 flex-shrink-0" />
                             <div>
-                              <h4 className="text-sm font-semibold text-red-800 mb-1">Missing module.json</h4>
-                              <p className="text-sm text-red-700">
-                                This module is missing its <code className="px-1 py-0.5 bg-red-100 rounded">module.json</code> file.
-                                Deployment actions cannot be performed without a valid module configuration.
+                              <h4 className="text-sm font-semibold text-yellow-800 mb-1">No package.json scripts</h4>
+                              <p className="text-sm text-yellow-700">
+                                This module does not have a <code className="px-1 py-0.5 bg-yellow-100 rounded">package.json</code> file with scripts.
+                                Deployment actions are read from the package.json scripts section.
                               </p>
                             </div>
                           </div>
@@ -1204,94 +1264,208 @@ export default function Modules() {
                   isRunning={moduleStatus[selectedModule.name] || false}
                 />
 
-                {/* Environment Variables */}
-                {moduleEnvVars.length > 0 && (
-                  <div className="card">
-                    <div className="flex items-center justify-between mb-4">
+                {/* Environment Variables - Compact Secure View */}
+                <div className="card">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center space-x-2">
+                      <Lock className="h-4 w-4 text-gray-500" />
                       <h3 className="text-lg font-semibold text-gray-900">
                         Environment Variables
                       </h3>
-                      {Object.keys(envVarChanges).length > 0 && (
-                        <button
-                          onClick={handleSaveEnvVars}
-                          disabled={savingEnvVars}
-                          className="btn btn-primary flex items-center space-x-2"
-                        >
-                          {savingEnvVars ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Save className="h-4 w-4" />
-                          )}
-                          <span>{savingEnvVars ? 'Saving...' : 'Save Changes'}</span>
-                        </button>
+                      {moduleEnvVars.length > 0 && (
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                          {moduleEnvVars.length} var{moduleEnvVars.length !== 1 ? 's' : ''}
+                        </span>
                       )}
                     </div>
-
-                    <div className="space-y-4">
-                      {moduleEnvVars.map((envVar) => {
-                        const value = getEnvVarValue(envVar);
-                        const isSecret = envVar.definition.secret;
-                        const isVisible = !isSecret || visibleSecrets.has(envVar.key);
-                        const isRequired = envVar.definition.required;
-                        const hasChanged = envVar.key in envVarChanges;
-
-                        return (
-                          <div key={envVar.key} className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label
-                                htmlFor={envVar.key}
-                                className="block text-sm font-medium text-gray-700"
+                    <div className="flex items-center space-x-2">
+                      {/* Sync from example button */}
+                      {moduleEnvStatus?.missingFromExample?.length > 0 && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              const res = await modulePluginsAPI.syncEnvExample(selectedModule.name);
+                              if (res.data.success) {
+                                toast.success(res.data.message);
+                                const envStatusRes = await modulePluginsAPI.getEnvStatus(selectedModule.name);
+                                if (envStatusRes.data.success) {
+                                  setModuleEnvStatus(envStatusRes.data.data);
+                                  setModuleEnvVars(envStatusRes.data.data.envVars.map((ev: any) => ({
+                                    key: ev.key,
+                                    value: ev.value,
+                                    module: selectedModule.name,
+                                    definition: {
+                                      description: ev.comment || '',
+                                      required: false,
+                                      secret: ev.key.toLowerCase().includes('key') ||
+                                              ev.key.toLowerCase().includes('secret') ||
+                                              ev.key.toLowerCase().includes('password'),
+                                    },
+                                  })));
+                                }
+                              }
+                            } catch (error: any) {
+                              toast.error(error.response?.data?.message || 'Failed to sync');
+                            }
+                          }}
+                          className="text-xs px-2 py-1 text-orange-600 hover:bg-orange-50 rounded"
+                          title="Add missing variables from .env.example"
+                        >
+                          +{moduleEnvStatus.missingFromExample.length} missing
+                        </button>
+                      )}
+                      {/* Edit/Cancel button */}
+                      {moduleEnvVars.length > 0 && (
+                        envEditMode ? (
+                          <div className="flex items-center space-x-2">
+                            {Object.keys(envVarChanges).length > 0 && (
+                              <button
+                                onClick={handleSaveEnvVars}
+                                disabled={savingEnvVars}
+                                className="text-xs px-3 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 flex items-center"
                               >
-                                {envVar.key}
-                                {isRequired && (
-                                  <span className="text-red-500 ml-1" title="Required">
-                                    *
-                                  </span>
+                                {savingEnvVars ? (
+                                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                ) : (
+                                  <Save className="h-3 w-3 mr-1" />
                                 )}
-                                {hasChanged && (
-                                  <span className="text-blue-500 ml-2 text-xs">
-                                    (modified)
-                                  </span>
-                                )}
-                              </label>
-                              {isSecret && (
-                                <button
-                                  type="button"
-                                  onClick={() => toggleSecretVisibility(envVar.key)}
-                                  className="text-gray-500 hover:text-gray-700"
-                                >
-                                  {isVisible ? (
-                                    <EyeOff className="h-4 w-4" />
-                                  ) : (
-                                    <Eye className="h-4 w-4" />
-                                  )}
-                                </button>
-                              )}
-                            </div>
-                            <input
-                              id={envVar.key}
-                              type={isSecret && !isVisible ? 'password' : 'text'}
-                              value={value}
-                              onChange={(e) => handleEnvVarChange(envVar.key, e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:border-primary-500 focus:ring-primary-500"
-                              placeholder={envVar.definition.defaultValue || 'Enter value...'}
-                            />
-                            {envVar.definition.description && (
-                              <p className="text-xs text-gray-500">
-                                {envVar.definition.description}
-                              </p>
+                                Save
+                              </button>
                             )}
-                            {envVar.definition.defaultValue && !value && (
-                              <p className="text-xs text-gray-400">
-                                Default: <code>{envVar.definition.defaultValue}</code>
-                              </p>
-                            )}
+                            <button
+                              onClick={() => {
+                                setEnvEditMode(false);
+                                setEnvVarChanges({});
+                                setVisibleSecrets(new Set());
+                              }}
+                              className="text-xs px-2 py-1 text-gray-600 hover:bg-gray-100 rounded flex items-center"
+                            >
+                              <X className="h-3 w-3 mr-1" />
+                              Cancel
+                            </button>
                           </div>
-                        );
-                      })}
+                        ) : (
+                          <button
+                            onClick={() => setEnvEditMode(true)}
+                            className="text-xs px-2 py-1 text-gray-600 hover:bg-gray-100 rounded flex items-center"
+                          >
+                            <Pencil className="h-3 w-3 mr-1" />
+                            Edit
+                          </button>
+                        )
+                      )}
                     </div>
                   </div>
-                )}
+
+                  {/* Status bar */}
+                  {moduleEnvStatus && (
+                    <div className="mb-3 flex items-center space-x-3 text-xs text-gray-500">
+                      <span className={moduleEnvStatus.hasEnvFile ? 'text-green-600' : 'text-yellow-600'}>
+                        {moduleEnvStatus.hasEnvFile ? '● .env' : '○ no .env'}
+                      </span>
+                      {moduleEnvStatus.hasEnvExample && (
+                        <span className="text-gray-400">● .env.example</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Copy example prompt */}
+                  {moduleEnvStatus && !moduleEnvStatus.hasEnvFile && moduleEnvStatus.hasEnvExample && (
+                    <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-sm flex items-center justify-between">
+                      <span className="text-yellow-800">No .env file. Copy from example?</span>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const res = await modulePluginsAPI.copyEnvExample(selectedModule.name);
+                            if (res.data.success) {
+                              toast.success('Copied .env.example to .env');
+                              const envStatusRes = await modulePluginsAPI.getEnvStatus(selectedModule.name);
+                              if (envStatusRes.data.success) {
+                                setModuleEnvStatus(envStatusRes.data.data);
+                                setModuleEnvVars(envStatusRes.data.data.envVars.map((ev: any) => ({
+                                  key: ev.key,
+                                  value: ev.value,
+                                  module: selectedModule.name,
+                                  definition: {
+                                    description: ev.comment || '',
+                                    required: false,
+                                    secret: ev.key.toLowerCase().includes('key') ||
+                                            ev.key.toLowerCase().includes('secret') ||
+                                            ev.key.toLowerCase().includes('password'),
+                                  },
+                                })));
+                              }
+                            }
+                          } catch (error: any) {
+                            toast.error(error.response?.data?.message || 'Failed to copy');
+                          }
+                        }}
+                        className="text-xs px-2 py-1 bg-yellow-600 text-white rounded hover:bg-yellow-700 flex items-center"
+                      >
+                        <Copy className="h-3 w-3 mr-1" />
+                        Copy
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Compact variable list */}
+                  {moduleEnvVars.length > 0 ? (
+                    <div className="border rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-gray-100">
+                          {moduleEnvVars.map((envVar) => {
+                            const value = getEnvVarValue(envVar);
+                            const isSecret = envVar.definition.secret;
+                            const isVisible = visibleSecrets.has(envVar.key);
+                            const hasChanged = envVar.key in envVarChanges;
+
+                            // Mask the value for display
+                            const displayValue = isSecret && !isVisible
+                              ? (value ? '••••••••' : '')
+                              : value;
+
+                            return (
+                              <tr key={envVar.key} className={`${hasChanged ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+                                <td className="px-3 py-2 font-mono text-xs text-gray-700 whitespace-nowrap w-1/3">
+                                  {envVar.key}
+                                  {isSecret && <Lock className="h-3 w-3 inline ml-1 text-gray-400" />}
+                                </td>
+                                <td className="px-3 py-2 text-gray-600">
+                                  {envEditMode ? (
+                                    <div className="flex items-center space-x-2">
+                                      <input
+                                        type={isSecret && !isVisible ? 'password' : 'text'}
+                                        value={value}
+                                        onChange={(e) => handleEnvVarChange(envVar.key, e.target.value)}
+                                        className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+                                        placeholder="Enter value..."
+                                      />
+                                      {isSecret && (
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleSecretVisibility(envVar.key)}
+                                          className="text-gray-400 hover:text-gray-600 p-1"
+                                        >
+                                          {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <span className={`font-mono text-xs ${!value ? 'text-gray-400 italic' : ''}`}>
+                                      {displayValue || '(empty)'}
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="text-gray-500 text-xs py-2">No environment variables in .env file.</p>
+                  )}
+                </div>
 
                 {/* Quick Actions */}
                 <div className="card">

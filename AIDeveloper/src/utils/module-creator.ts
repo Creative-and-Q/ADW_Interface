@@ -752,7 +752,8 @@ export async function createNewModule(
       };
     }
 
-    // Step 5: Add remote and push
+    // Step 5: Add remote and push (optional - continue if fails)
+    let gitHubPushSuccess = false;
     try {
       execSync(`git remote add origin ${repoUrl}`, {
         cwd: workflowPath,
@@ -766,39 +767,41 @@ export async function createNewModule(
         env: getSSHEnvironment(),
       });
       logger.info('Pushed to GitHub', { repoUrl });
+      gitHubPushSuccess = true;
     } catch (pushError: any) {
-      logger.error('Failed to push to GitHub', pushError);
-      return {
-        success: false,
-        workflowPath,
-        repoUrl,
-        error: `Failed to push to GitHub: ${pushError.message}`,
-      };
+      logger.warn('Failed to push to GitHub - continuing with local copy', { error: pushError.message });
+      // Don't fail - we can still use the local copy
     }
 
-    // Step 6: Clone from remote into modules/ directory
+    // Step 6: Copy to modules/ directory (clone if GitHub push worked, copy if not)
     try {
-      execSync(`git clone ${repoUrl} ${moduleConfig.name}`, {
-        cwd: modulesPath,
-        encoding: 'utf-8',
-        env: getSSHEnvironment(),
-      });
+      if (gitHubPushSuccess) {
+        execSync(`git clone ${repoUrl} ${moduleConfig.name}`, {
+          cwd: modulesPath,
+          encoding: 'utf-8',
+          env: getSSHEnvironment(),
+        });
 
-      // Explicitly checkout master branch (fixes "remote HEAD refers to nonexistent ref" issue)
-      execSync('git checkout master', {
-        cwd: finalModulePath,
-        encoding: 'utf-8',
-        env: getSSHEnvironment(),
-      });
+        // Explicitly checkout master branch (fixes "remote HEAD refers to nonexistent ref" issue)
+        execSync('git checkout master', {
+          cwd: finalModulePath,
+          encoding: 'utf-8',
+          env: getSSHEnvironment(),
+        });
 
-      logger.info('Cloned to modules directory', { finalModulePath });
-    } catch (cloneError: any) {
-      logger.error('Failed to clone to modules directory', cloneError);
+        logger.info('Cloned to modules directory', { finalModulePath });
+      } else {
+        // Copy the local workflow directory to modules/
+        await fs.cp(workflowPath, finalModulePath, { recursive: true });
+        logger.info('Copied to modules directory (GitHub push failed)', { finalModulePath });
+      }
+    } catch (copyError: any) {
+      logger.error('Failed to copy to modules directory', copyError);
       return {
         success: false,
         workflowPath,
         repoUrl,
-        error: `Failed to clone to modules/: ${cloneError.message}. Repo exists at ${repoUrl}`,
+        error: `Failed to copy to modules/: ${copyError.message}`,
       };
     }
 

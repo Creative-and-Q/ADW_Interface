@@ -257,6 +257,7 @@ class DeploymentManager extends EventEmitter {
 
   /**
    * Run a generic script command from module.json
+   * @deprecated Use runPackageScript instead
    */
   async runScript(moduleName: string, scriptName: string): Promise<string> {
     const operationId = this.createOperation(moduleName, scriptName);
@@ -325,6 +326,88 @@ class DeploymentManager extends EventEmitter {
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
       const errorMarker = `========== Script "${scriptName}" Failed: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, errorMarker + '\n');
+      this.updateOperationStatus(operationId, 'failed', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Run a script from package.json (npm run <scriptName>) or built-in npm commands
+   */
+  async runPackageScript(moduleName: string, scriptName: string): Promise<string> {
+    const operationId = this.createOperation(moduleName, scriptName);
+    const modulePath = this.getModulePath(moduleName);
+
+    // Built-in npm commands that run directly (npm <command>) not as scripts
+    const builtInCommands = ['install', 'ci', 'update', 'outdated', 'prune'];
+    const isBuiltIn = builtInCommands.includes(scriptName);
+
+    // Determine the actual command to run
+    const command = isBuiltIn ? `npm ${scriptName}` : `npm run ${scriptName}`;
+
+    try {
+      this.updateOperationStatus(operationId, 'running');
+
+      // Clear in-memory logs for this operation (disk logs are preserved)
+      this.clearModuleLogs(moduleName);
+
+      // Add operation start marker
+      const startMarker = `\n========== ${command} Started: ${new Date().toISOString()} ==========`;
+      await this.addModuleLog(moduleName, startMarker);
+
+      // Verify package.json exists
+      const packageJsonPath = path.join(modulePath, 'package.json');
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+
+      // For non-built-in commands, verify the script exists in package.json
+      if (!isBuiltIn && (!packageJson.scripts || !packageJson.scripts[scriptName])) {
+        const message = `Script "${scriptName}" not found in package.json`;
+        this.addOperationOutput(operationId, message);
+        await this.addModuleLog(moduleName, message);
+        const errorMarker = `========== ${command} Failed: ${new Date().toISOString()} ==========\n`;
+        await this.addModuleLog(moduleName, errorMarker);
+        this.updateOperationStatus(operationId, 'failed', message);
+        throw new Error(message);
+      }
+
+      const logMessage = `Running: ${command}`;
+      this.addOperationOutput(operationId, logMessage);
+      await this.addModuleLog(moduleName, logMessage);
+
+      // Execute the command
+      const { stdout, stderr } = await execAsync(command, {
+        cwd: modulePath,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+
+      this.addOperationOutput(operationId, stdout);
+      await this.addModuleLog(moduleName, stdout);
+      if (stderr) {
+        this.addOperationOutput(operationId, stderr);
+        await this.addModuleLog(moduleName, stderr);
+      }
+
+      // Add operation end marker
+      const endMarker = `========== npm run ${scriptName} Completed: ${new Date().toISOString()} ==========\n`;
+      await this.addModuleLog(moduleName, endMarker);
+
+      this.updateOperationStatus(operationId, 'success');
+      return operationId;
+    } catch (error: any) {
+      // Capture stdout and stderr from the failed command
+      if (error.stdout) {
+        this.addOperationOutput(operationId, error.stdout);
+        await this.addModuleLog(moduleName, error.stdout);
+      }
+      if (error.stderr) {
+        this.addOperationOutput(operationId, error.stderr);
+        await this.addModuleLog(moduleName, error.stderr);
+      }
+      const errorMsg = `Error: ${error.message}`;
+      this.addOperationOutput(operationId, errorMsg);
+      await this.addModuleLog(moduleName, errorMsg);
+      const errorMarker = `========== npm run ${scriptName} Failed: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, errorMarker + '\n');
       this.updateOperationStatus(operationId, 'failed', error.message);
       throw error;
