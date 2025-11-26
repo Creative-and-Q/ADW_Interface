@@ -555,6 +555,17 @@ app.get('/health', async (_req: Request, res: Response) => {
 
     const allHealthy = dbHealth && Object.values(moduleHealth).every((h) => h);
 
+    // Log environment variable status for debugging
+    const envStatus = {
+      PORT: process.env.PORT || '(default: 3035)',
+      FRONTEND_URL: process.env.FRONTEND_URL ? '✓ set' : '(default)',
+      DB_HOST: process.env.DB_HOST ? '✓ set' : '✗ missing',
+      DB_USER: process.env.DB_USER ? '✓ set' : '✗ missing',
+      DB_NAME: process.env.DB_NAME ? '✓ set' : '✗ missing',
+      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+    };
+    console.log('[AIController] Health check - Environment variables:', envStatus);
+
     const response: ApiResponse = {
       success: allHealthy,
       data: {
@@ -562,6 +573,7 @@ app.get('/health', async (_req: Request, res: Response) => {
         modules: moduleHealth,
         uptime: process.uptime(),
         timestamp: new Date().toISOString(),
+        env: envStatus,
       },
       message: allHealthy ? 'All systems operational' : 'Some systems are down',
     };

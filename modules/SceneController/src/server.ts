@@ -446,7 +446,18 @@ app.get('/stats', async (req, res) => {
  * GET /health
  */
 app.get('/health', (req, res) => {
-  res.json({ success: true, status: 'healthy', service: 'SceneController' });
+  // Log environment variable status for debugging
+  const envStatus = {
+    PORT: process.env.PORT || '(default: 3033)',
+    DB_HOST: process.env.DB_HOST ? '✓ set' : '✗ missing',
+    DB_USER: process.env.DB_USER ? '✓ set' : '✗ missing',
+    DB_NAME: process.env.DB_NAME ? '✓ set' : '✗ missing',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '(default)',
+  };
+  console.log('[SceneController] Health check - Environment variables:', envStatus);
+
+  res.json({ success: true, status: 'healthy', service: 'SceneController', env: envStatus });
 });
 
 // Error handling middleware

@@ -230,14 +230,25 @@ app.get('/stats', async (_req, res) => {
 
 // Health check
 app.get('/health', async (_req, res) => {
+  // Log environment variable status for debugging
+  const envStatus = {
+    PORT: process.env.PORT || '(default: 3034)',
+    DB_HOST: process.env.DB_HOST ? '✓ set' : '✗ missing',
+    DB_USER: process.env.DB_USER ? '✓ set' : '✗ missing',
+    DB_NAME: process.env.DB_NAME ? '✓ set' : '✗ missing',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+  };
+  console.log('[ItemController] Health check - Environment variables:', envStatus);
+
   try {
     await storage.getStats();
-    res.json({ status: 'healthy', service: 'item-controller' });
+    res.json({ status: 'healthy', service: 'item-controller', env: envStatus });
   } catch (error) {
     res.status(500).json({
       status: 'unhealthy',
       service: 'item-controller',
       error: error instanceof Error ? error.message : String(error),
+      env: envStatus,
     });
   }
 });

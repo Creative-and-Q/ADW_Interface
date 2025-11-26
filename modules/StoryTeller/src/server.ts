@@ -60,6 +60,17 @@ const manager = new StoryTellerManager(storage);
  * GET /health - Health check
  */
 app.get('/health', async (_req: Request, res: Response) => {
+  // Log environment variable status for debugging
+  const envStatus = {
+    PORT: process.env.PORT || '(default: 3037)',
+    DB_HOST: process.env.DB_HOST ? '✓ set' : '✗ missing',
+    DB_USER: process.env.DB_USER ? '✓ set' : '✗ missing',
+    DB_NAME: process.env.DB_NAME ? '✓ set' : '✗ missing',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '(default)',
+  };
+  console.log('[StoryTeller] Health check - Environment variables:', envStatus);
+
   try {
     const health = await manager.healthCheck();
 
@@ -70,12 +81,14 @@ app.get('/health', async (_req: Request, res: Response) => {
         service: 'storyteller',
         components: health.components,
         timestamp: new Date().toISOString(),
+        env: envStatus,
       },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       error: 'Health check failed',
+      env: envStatus,
     });
   }
 });

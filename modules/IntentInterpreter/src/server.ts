@@ -151,11 +151,21 @@ app.delete('/cache', async (_req, res) => {
  * GET /health
  */
 app.get('/health', (_req, res) => {
+  // Log environment variable status for debugging
+  const envStatus = {
+    PORT: process.env.PORT || '(default: 3032)',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '(default)',
+    OPENROUTER_BASE_URL: process.env.OPENROUTER_BASE_URL || '(default)',
+  };
+  console.log('[IntentInterpreter] Health check - Environment variables:', envStatus);
+
   return res.json({
     success: true,
     status: 'healthy',
     service: 'IntentInterpreter',
     model: openRouterConfig.model,
+    env: envStatus,
   });
 });
 

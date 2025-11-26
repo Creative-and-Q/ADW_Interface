@@ -211,7 +211,24 @@ app.delete('/character/:userId/:name', async (req, res) => {
  * GET /health
  */
 app.get('/health', (_req, res) => {
-  return res.json({ success: true, status: 'healthy', service: 'CharacterController' });
+  // Log environment variable status for debugging
+  const envStatus = {
+    PORT: process.env.PORT || '(default: 3031)',
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? '✓ set' : '✗ missing',
+    OPENROUTER_MODEL: process.env.OPENROUTER_MODEL || '(default)',
+    DB_HOST: process.env.DB_HOST ? '✓ set' : '✗ missing',
+    DB_USER: process.env.DB_USER ? '✓ set' : '✗ missing',
+    DB_NAME: process.env.DB_NAME ? '✓ set' : '✗ missing',
+    SCENE_CONTROLLER_URL: process.env.SCENE_CONTROLLER_URL || '(default)',
+  };
+  console.log('[CharacterController] Health check - Environment variables:', envStatus);
+
+  return res.json({
+    success: true,
+    status: 'healthy',
+    service: 'CharacterController',
+    env: envStatus,
+  });
 });
 
 // Error handling middleware
