@@ -389,7 +389,7 @@ class DeploymentManager extends EventEmitter {
       }
 
       // Add operation end marker
-      const endMarker = `========== npm run ${scriptName} Completed: ${new Date().toISOString()} ==========\n`;
+      const endMarker = `========== ${command} Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
       this.updateOperationStatus(operationId, 'success');
@@ -407,7 +407,7 @@ class DeploymentManager extends EventEmitter {
       const errorMsg = `Error: ${error.message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
-      const errorMarker = `========== npm run ${scriptName} Failed: ${new Date().toISOString()} ==========`;
+      const errorMarker = `========== ${command} Failed: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, errorMarker + '\n');
       this.updateOperationStatus(operationId, 'failed', error.message);
       throw error;
