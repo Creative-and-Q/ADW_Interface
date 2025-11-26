@@ -18,7 +18,7 @@ import AgentExecutionChart from '../components/AgentExecutionChart';
 import AgentExecutionTimeline from '../components/AgentExecutionTimeline';
 import ArtifactsList from '../components/ArtifactsList';
 import ExecutionLogs from '../components/ExecutionLogs';
-import SubWorkflowList from '../components/SubWorkflowList';
+import WorkflowHierarchyTree from '../components/WorkflowHierarchyTree';
 
 type ViewMode = 'overview' | 'timeline';
 
@@ -298,6 +298,36 @@ export default function WorkflowDetail() {
         </button>
       </div>
 
+      {/* Sub-Workflows Hierarchy Tree - Always visible when present */}
+      {subWorkflows && subWorkflows.length > 0 && (
+        <WorkflowHierarchyTree
+          parentWorkflow={{
+            id: workflow.id,
+            type: workflow.workflow_type,
+            status: workflow.status,
+            createdAt: workflow.created_at,
+            completedAt: workflow.completed_at,
+            task_description: taskDescription,
+            target_module: workflow.target_module,
+          }}
+          subWorkflows={subWorkflows.map((sw: any) => ({
+            id: sw.id,
+            type: sw.type,
+            status: sw.status,
+            executionOrder: sw.executionOrder,
+            createdAt: sw.createdAt,
+            completedAt: sw.completedAt,
+            payload: sw.payload,
+            task_description: sw.task_description,
+            target_module: sw.target_module,
+            parentWorkflowId: sw.parentWorkflowId,
+            workflowDepth: sw.workflowDepth,
+          }))}
+          queueStatus={queueStatus}
+          className="mb-6"
+        />
+      )}
+
       {/* Content based on view mode */}
       {viewMode === 'overview' ? (
         <div className="space-y-6">
@@ -307,16 +337,7 @@ export default function WorkflowDetail() {
           {/* Artifacts and Logs in grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <ArtifactsList artifacts={artifacts} />
-            
-            {/* Sub-Workflows */}
-            {subWorkflows && subWorkflows.length > 0 && (
-              <SubWorkflowList 
-                parentWorkflowId={parseInt(id!)}
-                subWorkflows={subWorkflows}
-                queueStatus={queueStatus}
-              />
-            )}
-            
+
             <div className="bg-white rounded-lg border border-gray-200 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
               <div className="space-y-4">

@@ -11,6 +11,8 @@ interface SubWorkflow {
   createdAt: string;
   completedAt?: string;
   payload?: any;
+  task_description?: string;
+  target_module?: string;
 }
 
 interface SubWorkflowListProps {
@@ -150,8 +152,13 @@ export default function SubWorkflowList({
                     </div>
                     
                     <p className="text-sm font-medium truncate">
-                      {subWorkflow.payload?.taskDescription || subWorkflow.payload?.title || 'Sub-task'}
+                      {subWorkflow.task_description || subWorkflow.payload?.taskDescription || subWorkflow.payload?.title || 'Sub-task'}
                     </p>
+                    {subWorkflow.target_module && (
+                      <span className="text-xs text-gray-500">
+                        Module: {subWorkflow.target_module}
+                      </span>
+                    )}
                     
                     <div className="flex items-center space-x-3 mt-2 text-xs text-gray-600">
                       <span>

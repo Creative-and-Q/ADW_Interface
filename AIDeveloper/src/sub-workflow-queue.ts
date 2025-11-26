@@ -104,6 +104,7 @@ export async function getSubWorkflows(parentWorkflowId: number): Promise<Workflo
       webhookId: row.webhook_id,
       type: row.workflow_type as WorkflowType,
       target_module: row.target_module,
+      task_description: row.task_description,
       status: row.status as WorkflowStatus,
       payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
       branchName: row.branch_name,
