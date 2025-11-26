@@ -3,39 +3,19 @@
 
 echo "Checking required services..."
 
-# Check and start MySQL
-if ! sudo service mysql status > /dev/null 2>&1; then
-    echo "Starting MySQL..."
-    sudo service mysql start
-    if [ $? -eq 0 ]; then
-        echo "✓ MySQL started successfully"
-    else
-        echo "✗ Failed to start MySQL"
-        exit 1
-    fi
-else
+# Check MySQL by trying to connect
+if mysqladmin ping -h localhost --silent 2>/dev/null; then
     echo "✓ MySQL is already running"
+else
+    echo "⚠ MySQL is not running - please start it manually"
+    # Don't exit - we'll let the app fail if MySQL is really needed
 fi
 
 # Check and start Redis
-if ! redis-cli ping > /dev/null 2>&1; then
-    echo "Starting Redis..."
-    sudo service redis-server start
-    if [ $? -eq 0 ]; then
-        # Wait a moment for Redis to fully start
-        sleep 1
-        if redis-cli ping > /dev/null 2>&1; then
-            echo "✓ Redis started successfully"
-        else
-            echo "✗ Redis started but not responding"
-            exit 1
-        fi
-    else
-        echo "✗ Failed to start Redis"
-        exit 1
-    fi
-else
+if redis-cli ping > /dev/null 2>&1; then
     echo "✓ Redis is already running"
+else
+    echo "⚠ Redis is not running - please start it manually"
 fi
 
 # Check and kill any process using port 3000 (only if not called from a module)

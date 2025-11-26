@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Code2, AlertCircle, LayoutDashboard, Package } from 'lucide-react';
+import { Code2, AlertCircle, LayoutDashboard, Package, FileText } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 import { useEffect, useState } from 'react';
 import Dashboard from './pages/Dashboard';

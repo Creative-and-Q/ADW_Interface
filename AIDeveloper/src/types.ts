@@ -9,6 +9,7 @@ export enum WorkflowType {
   REFACTOR = 'refactor',
   DOCUMENTATION = 'documentation',
   REVIEW = 'review',
+  NEW_MODULE = 'new_module',
 }
 
 // Workflow statuses

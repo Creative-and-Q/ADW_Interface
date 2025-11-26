@@ -50,3 +50,4 @@ MODIFY COLUMN execution_order INT DEFAULT 0 COMMENT 'Order of execution within s
 MODIFY COLUMN plan_json JSON NULL COMMENT 'Structured plan for generating sub-workflows',
 MODIFY COLUMN auto_execute_children BOOLEAN DEFAULT TRUE COMMENT 'Auto-execute child workflows when created';
 
+
