@@ -49,6 +49,7 @@ export interface AgentInput {
   workingDir: string; // Required
   metadata?: Record<string, any>;
   context?: Record<string, any>;
+  env?: Record<string, string>; // Environment variables
 }
 
 /**
@@ -78,9 +79,48 @@ export class WorkflowOrchestrator {
   }
 
   /**
+   * Load environment variables from workspace root .env file
+   */
+  private async loadEnvironmentVariables(): Promise<void> {
+    try {
+      // Workspace root is 3 levels up from WorkflowOrchestrator module
+      const workspaceRoot = path.join(__dirname, '..', '..', '..');
+      const envPath = path.join(workspaceRoot, '.env');
+      
+      try {
+        const envContent = await fs.readFile(envPath, 'utf-8');
+        const parsedEnv = dotenv.parse(envContent);
+        
+        // Merge into process.env (don't overwrite existing values)
+        for (const [key, value] of Object.entries(parsedEnv)) {
+          if (!process.env[key]) {
+            process.env[key] = value;
+          }
+        }
+        
+        console.log('WorkflowOrchestrator: Loaded environment variables from .env file', {
+          loadedCount: Object.keys(parsedEnv).length,
+          hasOpenRouterKey: !!process.env.OPENROUTER_API_KEY,
+        });
+      } catch (error) {
+        // .env file doesn't exist or can't be read - that's okay, use process.env defaults
+        console.warn('WorkflowOrchestrator: Could not load .env file, using process.env defaults', {
+          error: (error as Error).message,
+        });
+      }
+    } catch (error) {
+      console.error('WorkflowOrchestrator: Failed to load environment variables', error);
+      // Don't throw - continue with existing process.env
+    }
+  }
+
+  /**
    * Execute the orchestrator agent
    */
   async execute(input: AgentInput): Promise<AgentOutput> {
+    // Load environment variables from workspace root .env file
+    await this.loadEnvironmentVariables();
+
     // Validate workingDir is provided
     if (!input.workingDir) {
       throw new Error('workingDir is required for WorkflowOrchestrator');
@@ -116,8 +156,31 @@ export class WorkflowOrchestrator {
         const agentExecutionId = await this.createAgentExecution(input.workflowId, agentType, input);
 
         try {
+          // Ensure environment variables are available in process.env before importing agent
+          // This ensures agents can access them via process.env even if their .env files don't have them
+          const openRouterKey = process.env.OPENROUTER_API_KEY;
+          if (!openRouterKey) {
+            console.error(`WorkflowOrchestrator: OPENROUTER_API_KEY not found in process.env for ${agentType} agent`);
+            throw new Error('OPENROUTER_API_KEY environment variable is required');
+          }
+
+          // Prepare input with environment variables
+          const agentInput = {
+            ...input,
+            env: {
+              OPENROUTER_API_KEY: openRouterKey,
+              OPENROUTER_MODEL_PLANNING: process.env.OPENROUTER_MODEL_PLANNING || process.env.WORKFLOW_OPENROUTER_MODEL_PLANNING || 'x-ai/grok-code-fast-1',
+              OPENROUTER_MODEL_CODING: process.env.OPENROUTER_MODEL_CODING || process.env.WORKFLOW_OPENROUTER_MODEL_CODING || 'x-ai/grok-code-fast-1',
+              OPENROUTER_MODEL_TESTING: process.env.OPENROUTER_MODEL_TESTING || process.env.WORKFLOW_OPENROUTER_MODEL_TESTING || 'x-ai/grok-code-fast-1',
+              OPENROUTER_MODEL_REVIEW: process.env.OPENROUTER_MODEL_REVIEW || process.env.WORKFLOW_OPENROUTER_MODEL_REVIEW || 'x-ai/grok-code-fast-1',
+              OPENROUTER_MODEL_DOCS: process.env.OPENROUTER_MODEL_DOCS || process.env.WORKFLOW_OPENROUTER_MODEL_DOCS || 'x-ai/grok-code-fast-1',
+            }
+          };
+
+          console.log(`WorkflowOrchestrator: Executing ${agentType} agent with API key available:`, !!agentInput.env.OPENROUTER_API_KEY);
+
           // Execute the agent
-          const agentOutput = await this.executeAgent(agentType, input, agentExecutionId);
+          const agentOutput = await this.executeAgent(agentType, agentInput, agentExecutionId);
 
           // Update agent execution as completed
           await this.updateAgentExecution(agentExecutionId, 'completed', agentOutput);
@@ -259,9 +322,21 @@ export class WorkflowOrchestrator {
       throw new Error(`Unknown agent type: ${agentType}`);
     }
 
+    // Environment variables will be passed to agents via input.env
+
     await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_executing`, `Executing ${moduleName}`);
 
     try {
+      // Ensure environment variables are set in process.env before importing agent
+      // This ensures agents can access them even if their .env files don't have them
+      if (input.env) {
+        for (const [key, value] of Object.entries(input.env)) {
+          if (value) {
+            process.env[key] = value;
+          }
+        }
+      }
+
       // Dynamically import the agent module
       // Modules are in /home/kevin/Home/ex_nihilo/modules/, not in AIDeveloper/dist
       const modulePath = `file:///home/kevin/Home/ex_nihilo/modules/${moduleName}/index.js`;

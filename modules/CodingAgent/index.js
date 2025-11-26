@@ -18,16 +18,21 @@ export class CodingAgent {
     model;
     apiKey;
     constructor() {
-        this.apiKey = process.env.OPENROUTER_API_KEY || '';
-        this.model = process.env.OPENROUTER_MODEL_CODING || 'anthropic/claude-3.5-sonnet';
-        if (!this.apiKey) {
-            throw new Error('OPENROUTER_API_KEY environment variable is required');
-        }
+        this.apiKey = '';
+        this.model = 'anthropic/claude-3.5-sonnet';
     }
     /**
      * Execute the coding agent
      */
     async execute(input) {
+        // Load environment variables from input.env or process.env
+        if (!this.apiKey) {
+            this.apiKey = input.env?.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || '';
+            this.model = input.env?.OPENROUTER_MODEL_CODING || process.env.OPENROUTER_MODEL_CODING || 'x-ai/grok-code-fast-1';
+        }
+        if (!this.apiKey) {
+            throw new Error('OPENROUTER_API_KEY environment variable is required');
+        }
         // Validate workingDir is provided
         if (!input.workingDir) {
             throw new Error('workingDir is required for CodingAgent');
@@ -130,9 +135,7 @@ export class CodingAgent {
         // Strategy 1: Try to execute explicit tool calls
         const toolCallRegex = /\.\/tools\/([\w-]+)\.sh\s+([^\n]+)/g;
         let match;
-        let toolsFound = false;
         while ((match = toolCallRegex.exec(response)) !== null) {
-            toolsFound = true;
             const toolName = match[1];
             const argsString = match[2];
             // Parse arguments (simple quoted string extraction)
@@ -153,12 +156,11 @@ export class CodingAgent {
                 results.push(`❌ ${toolName} failed: ${errorMsg}`);
             }
         }
-        // Strategy 2: If no explicit tools, auto-extract code blocks and write files
-        if (!toolsFound) {
-            console.log('No explicit tool calls found, auto-extracting code blocks...');
-            const extracted = await this.autoExtractAndWriteCode(response, workingDir);
-            results.push(...extracted);
-        }
+        // Strategy 2: ALWAYS try to auto-extract code blocks (regardless of tool calls)
+        // This ensures code gets written even if tools fail
+        console.log('Auto-extracting code blocks from response...');
+        const extracted = await this.autoExtractAndWriteCode(response, workingDir);
+        results.push(...extracted);
         return results;
     }
     /**
@@ -175,14 +177,27 @@ export class CodingAgent {
      */
     async autoExtractAndWriteCode(response, workingDir) {
         const results = [];
+        /**
+         * Resolve file path - handles both absolute and relative paths
+         * If path is absolute, use it directly; if relative, join with workingDir
+         */
+        const resolveFilePath = (filePath) => {
+            // If it's an absolute path, use it directly
+            if (path.isAbsolute(filePath)) {
+                return filePath;
+            }
+            // Otherwise, join with workingDir
+            return path.join(workingDir, filePath);
+        };
         // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
-        const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js):([^\n]+)\n([\s\S]*?)```/g;
+        // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json
+        const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json):([^\n]+)\n([\s\S]*?)```/g;
         let match;
         while ((match = pattern1.exec(response)) !== null) {
             const filePath = match[1].trim();
             const code = match[2].trim();
             try {
-                const fullPath = path.join(workingDir, filePath);
+                const fullPath = resolveFilePath(filePath);
                 await fs.mkdir(path.dirname(fullPath), { recursive: true });
                 await fs.writeFile(fullPath, code, 'utf-8');
                 results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
@@ -202,7 +217,7 @@ export class CodingAgent {
                 continue;
             }
             try {
-                const fullPath = path.join(workingDir, filePath);
+                const fullPath = resolveFilePath(filePath);
                 await fs.mkdir(path.dirname(fullPath), { recursive: true });
                 await fs.writeFile(fullPath, code, 'utf-8');
                 results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);
@@ -222,7 +237,7 @@ export class CodingAgent {
                 continue;
             }
             try {
-                const fullPath = path.join(workingDir, filePath);
+                const fullPath = resolveFilePath(filePath);
                 await fs.mkdir(path.dirname(fullPath), { recursive: true });
                 await fs.writeFile(fullPath, code, 'utf-8');
                 results.push(`✅ Auto-wrote: ${filePath} (${code.length} bytes)`);

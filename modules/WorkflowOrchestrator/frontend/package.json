@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5175",
+    "dev": "vite --port 5184",
     "build": "vite build",
-    "preview": "vite preview --port 5175"
+    "preview": "vite preview --port 5184"
   },
   "dependencies": {
     "axios": "^1.6.5",

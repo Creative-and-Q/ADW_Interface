@@ -2,6 +2,11 @@
  * CodeDocumentationAgent
  * Generates documentation for code
  * Read and write access - can read code and write documentation files
+ *
+ * Uses an agentic loop to:
+ * 1. Read source code files
+ * 2. Understand the codebase structure
+ * 3. Generate and write documentation files
  */
 /**
  * Agent Input Interface
@@ -15,6 +20,7 @@ export interface AgentInput {
     workingDir: string;
     metadata?: Record<string, any>;
     context?: Record<string, any>;
+    env?: Record<string, string>;
 }
 /**
  * Agent Output Interface
@@ -41,9 +47,17 @@ export declare class CodeDocumentationAgent {
     private apiKey;
     constructor();
     /**
-     * Execute the documentation agent
+     * Execute the documentation agent with agentic loop
      */
     execute(input: AgentInput): Promise<AgentOutput>;
+    /**
+     * Parse AI response and execute any tool calls OR auto-extract documentation files
+     */
+    private parseAndExecuteTools;
+    /**
+     * Auto-extract documentation from AI response and write to files
+     */
+    private autoExtractAndWriteDocs;
     /**
      * Load tools.md documentation
      */
@@ -64,10 +78,6 @@ export declare class CodeDocumentationAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
-    /**
-     * Parse AI response
-     */
-    private parseResponse;
 }
 export default CodeDocumentationAgent;
 //# sourceMappingURL=index.d.ts.map

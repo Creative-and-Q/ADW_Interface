@@ -69,8 +69,10 @@ export class ModuleScaffoldAgent {
     try {
       console.log(`[ModuleScaffoldAgent] Creating scaffold for ${input.targetModule}`);
 
-      // Dynamically import module-creator
-      const { createNewModule } = await import('file:///home/kevin/Home/ex_nihilo/AIDeveloper/dist/utils/module-creator.js');
+      // Dynamically import module-creator (from dist after AIDeveloper is built)
+      // @ts-ignore - Dynamic import path resolved at runtime
+      const moduleCreatorPath = 'file:///home/kevin/Home/ex_nihilo/AIDeveloper/dist/utils/module-creator.js';
+      const { createNewModule } = await import(moduleCreatorPath);
 
       // Configure module creation
       const moduleConfig = {

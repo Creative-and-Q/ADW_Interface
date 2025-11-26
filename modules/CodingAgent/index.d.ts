@@ -15,6 +15,7 @@ export interface AgentInput {
     workingDir: string;
     metadata?: Record<string, any>;
     context?: Record<string, any>;
+    env?: Record<string, string>;
 }
 /**
  * Agent Output Interface

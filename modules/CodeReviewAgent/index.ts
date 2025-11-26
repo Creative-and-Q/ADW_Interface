@@ -2,6 +2,11 @@
  * CodeReviewAgent
  * Reviews code and generates review reports
  * Read-only access - can read files and analyze code but not write
+ *
+ * Uses an agentic loop to:
+ * 1. Read source code files
+ * 2. Analyze code quality and security
+ * 3. Generate structured review report
  */
 
 import axios from 'axios';
@@ -27,6 +32,7 @@ export interface AgentInput {
   workingDir: string; // Required
   metadata?: Record<string, any>;
   context?: Record<string, any>;
+  env?: Record<string, string>; // Environment variables
 }
 
 /**
@@ -63,16 +69,13 @@ export class CodeReviewAgent {
   private apiKey: string;
 
   constructor() {
-    this.apiKey = process.env.OPENROUTER_API_KEY || '';
-    this.model = process.env.OPENROUTER_MODEL_REVIEW || 'anthropic/claude-3.5-sonnet';
-
-    if (!this.apiKey) {
-      throw new Error('OPENROUTER_API_KEY environment variable is required');
-    }
+    // Defer environment variable loading to execute() method
+    this.apiKey = '';
+    this.model = 'anthropic/claude-3.5-sonnet';
   }
 
   /**
-   * Execute the review agent
+   * Execute the review agent with agentic loop
    */
   async execute(input: AgentInput): Promise<AgentOutput> {
     // Validate workingDir is provided
@@ -87,6 +90,16 @@ export class CodeReviewAgent {
       throw new Error(`Working directory does not exist: ${input.workingDir}`);
     }
 
+    // Load environment variables from input.env or process.env
+    if (!this.apiKey) {
+      this.apiKey = input.env?.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || '';
+      this.model = input.env?.OPENROUTER_MODEL_REVIEW || process.env.OPENROUTER_MODEL_REVIEW || 'x-ai/grok-code-fast-1';
+    }
+
+    if (!this.apiKey) {
+      throw new Error('OPENROUTER_API_KEY environment variable is required');
+    }
+
     try {
       // Load tools.md to inform AI about available tools
       const toolsDoc = await this.loadToolsDocumentation();
@@ -97,20 +110,91 @@ export class CodeReviewAgent {
       // Build user prompt
       const userPrompt = this.buildUserPrompt(input);
 
-      // Call OpenRouter API
-      const aiResponse = await this.callOpenRouter([
-        {
-          role: 'user',
-          content: userPrompt,
-        },
-      ], {
-        systemPrompt,
-        maxTokens: 8192,
-        temperature: 0.7,
-      });
+      // Agentic loop: Call AI, execute tools, repeat until done
+      const messages: AIMessage[] = [{
+        role: 'user',
+        content: userPrompt,
+      }];
 
-      // Parse and return response
-      return this.parseResponse(aiResponse, input);
+      let iterations = 0;
+      const maxIterations = 5;
+      const toolResults: string[] = [];
+      let allResponses: string[] = [];
+      let filesReviewed: string[] = [];
+
+      while (iterations < maxIterations) {
+        iterations++;
+        console.log(`CodeReviewAgent iteration ${iterations}/${maxIterations}`);
+
+        // Call OpenRouter API
+        const aiResponse = await this.callOpenRouter(messages, {
+          systemPrompt,
+          maxTokens: 8192,
+          temperature: 0.7,
+        });
+
+        allResponses.push(aiResponse);
+
+        // Parse and execute tool calls
+        const executed = await this.parseAndExecuteTools(aiResponse, input.workingDir);
+
+        // Track files that were read
+        executed.forEach(r => {
+          const fileMatch = r.match(/read-file: (.+?)(?:\s|$)/);
+          if (fileMatch) filesReviewed.push(fileMatch[1]);
+        });
+
+        // Check if AI is done (has generated a final report)
+        if (aiResponse.toLowerCase().includes('review complete') ||
+            aiResponse.toLowerCase().includes('## summary') ||
+            aiResponse.includes('## Code Review Report')) {
+          console.log(`CodeReviewAgent completed after ${iterations} iterations`);
+          toolResults.push(...executed);
+          break;
+        }
+
+        if (executed.length === 0) {
+          console.log('No more tool calls, review complete');
+          break;
+        }
+
+        // Add AI response and tool results to conversation
+        messages.push({
+          role: 'assistant',
+          content: aiResponse,
+        });
+
+        messages.push({
+          role: 'user',
+          content: `Tool execution results:\n${executed.join('\n\n')}\n\nContinue analyzing or generate the final review report with "REVIEW COMPLETE".`,
+        });
+
+        toolResults.push(...executed);
+      }
+
+      // Extract structured review from final response
+      const finalResponse = allResponses[allResponses.length - 1];
+      const reviewReport = this.extractReviewReport(finalResponse);
+
+      return {
+        success: true,
+        artifacts: [{
+          type: 'review_report',
+          content: reviewReport,
+          metadata: {
+            workflowId: input.workflowId,
+            iterations,
+            filesReviewed: filesReviewed.length,
+          },
+        }],
+        summary: `Generated code review for workflow ${input.workflowId} (${iterations} iterations, ${filesReviewed.length} files reviewed)`,
+        suggestions: this.extractSuggestions(finalResponse),
+        metadata: {
+          workflowId: input.workflowId,
+          iterations,
+          filesReviewed,
+        },
+      };
     } catch (error) {
       return {
         success: false,
@@ -118,6 +202,90 @@ export class CodeReviewAgent {
         summary: `CodeReviewAgent failed: ${(error as Error).message}`,
       };
     }
+  }
+
+  /**
+   * Parse AI response and execute any tool calls
+   */
+  private async parseAndExecuteTools(response: string, workingDir: string): Promise<string[]> {
+    const results: string[] = [];
+
+    // Try to execute explicit tool calls
+    const toolCallRegex = /\.\/tools\/([\w-]+)\.sh\s+([^\n]+)/g;
+    let match;
+
+    while ((match = toolCallRegex.exec(response)) !== null) {
+      const toolName = match[1];
+      const argsString = match[2];
+
+      // Parse arguments (simple quoted string extraction)
+      const args: string[] = [];
+      const argRegex = /"([^"]*)"/g;
+      let argMatch;
+      while ((argMatch = argRegex.exec(argsString)) !== null) {
+        args.push(argMatch[1]);
+      }
+
+      try {
+        console.log(`Executing tool: ${toolName} with ${args.length} args`);
+        const output = await this.executeTool(toolName, args, workingDir);
+        results.push(`✅ ${toolName}: ${args[0] || ''}\n${output.substring(0, 2000)}`);
+      } catch (error) {
+        const errorMsg = (error as Error).message;
+        console.error(`Tool execution failed: ${toolName}`, errorMsg);
+        results.push(`❌ ${toolName} failed: ${errorMsg}`);
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Extract structured review report from AI response
+   */
+  private extractReviewReport(response: string): string {
+    // If response already has markdown structure, return as-is
+    if (response.includes('## ') || response.includes('# ')) {
+      return response;
+    }
+
+    // Otherwise wrap in a basic structure
+    return `# Code Review Report
+
+${response}
+
+---
+*Review generated by CodeReviewAgent*`;
+  }
+
+  /**
+   * Extract suggestions from review
+   */
+  private extractSuggestions(response: string): string[] {
+    const suggestions: string[] = [];
+
+    // Look for bullet points after common headers
+    const suggestionPatterns = [
+      /(?:suggestions?|recommendations?|improvements?):\s*\n((?:[-*]\s+[^\n]+\n?)+)/gi,
+      /(?:should|could|recommend|consider)(?:[^.]*)\./gi,
+    ];
+
+    for (const pattern of suggestionPatterns) {
+      let match;
+      while ((match = pattern.exec(response)) !== null) {
+        if (match[1]) {
+          // Extract bullet points
+          const bullets = match[1].match(/[-*]\s+([^\n]+)/g);
+          if (bullets) {
+            suggestions.push(...bullets.map(b => b.replace(/^[-*]\s+/, '')));
+          }
+        } else {
+          suggestions.push(match[0]);
+        }
+      }
+    }
+
+    return suggestions.slice(0, 10); // Limit to 10 suggestions
   }
 
   /**
@@ -143,18 +311,54 @@ export class CodeReviewAgent {
 
 ${toolsDoc}
 
+## CRITICAL: How to Review Code
+
+You MUST use tools to read files before reviewing. Use this workflow:
+
+1. First, list files to understand the structure:
+\`\`\`bash
+./tools/read-file.sh "package.json"
+./tools/analyze-code.sh "src"
+\`\`\`
+
+2. Read key source files:
+\`\`\`bash
+./tools/read-file.sh "src/index.ts"
+./tools/read-file.sh "src/main.tsx"
+\`\`\`
+
+3. After reading all relevant files, generate a structured report with:
+   - Code quality assessment
+   - Security concerns
+   - Performance issues
+   - Best practices violations
+   - Specific suggestions for improvement
+
+4. When done, include "REVIEW COMPLETE" and provide a summary.
+
 ## Your Responsibilities
 
-1. Read code files to understand the implementation
-2. Analyze code quality, security, and best practices
-3. Identify potential issues, bugs, and improvements
-4. Generate detailed review reports with recommendations
+1. **ALWAYS** read source code using ./tools/read-file.sh
+2. **ALWAYS** analyze code structure using ./tools/analyze-code.sh
+3. Identify bugs, security issues, and code smells
+4. Suggest improvements with specific file/line references
+5. Rate overall code quality
 
 ## Restrictions
 
-- You can ONLY read files - you cannot write, modify, or copy files
-- Use the read-only tools provided to gather information
-- Focus on analysis and review, not implementation`;
+- ⚠️ You can ONLY read files - you cannot write or modify
+- Focus on analysis and recommendations
+- Be specific about issues and fixes
+
+## Report Format
+
+Generate a structured markdown report:
+- ## Summary
+- ## Code Quality (score 1-10)
+- ## Security Concerns
+- ## Performance Issues
+- ## Recommendations
+- ## Files Reviewed`;
   }
 
   /**
@@ -168,7 +372,12 @@ Target Module: ${input.targetModule || 'none'}
 Task Description: ${input.taskDescription || 'none'}
 Working Directory: ${input.workingDir}
 
-Please review the code and generate a comprehensive review report.
+REVIEW THIS CODE:
+
+1. Start by reading key files using ./tools/read-file.sh
+2. Analyze the code for issues
+3. Generate a comprehensive review report
+4. End with "REVIEW COMPLETE"
     `.trim();
   }
 
@@ -226,7 +435,7 @@ Please review the code and generate a comprehensive review report.
       // Execute tool
       const { stdout, stderr } = await execAsync(
         `bash "${toolPath}" ${args.map(arg => `"${arg}"`).join(' ')}`,
-        { cwd: workingDir }
+        { cwd: workingDir, timeout: 30000 }
       );
 
       if (stderr) {
@@ -237,28 +446,6 @@ Please review the code and generate a comprehensive review report.
     } catch (error) {
       throw new Error(`Failed to execute tool ${toolName}: ${(error as Error).message}`);
     }
-  }
-
-  /**
-   * Parse AI response
-   */
-  private parseResponse(response: string, input: AgentInput): AgentOutput {
-    // Basic parsing - can be enhanced based on actual response format
-    return {
-      success: true,
-      artifacts: [{
-        type: 'review_report',
-        content: response,
-        metadata: {
-          workflowId: input.workflowId,
-        },
-      }],
-      summary: `Generated review report for workflow ${input.workflowId}`,
-      metadata: {
-        workflowId: input.workflowId,
-        responseLength: response.length,
-      },
-    };
   }
 }
 

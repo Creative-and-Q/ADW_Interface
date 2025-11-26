@@ -58,3 +58,4 @@ Returns the current status of a workflow, including which agents have completed 
 - The orchestrator manages coordination, not implementation
 
 
+

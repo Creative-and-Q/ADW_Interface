@@ -2,6 +2,13 @@
  * CodeTestingAgent
  * Generates and executes tests for code
  * Read, write, and execute access - can read code, write tests, and execute tests
+ *
+ * Uses an agentic loop to:
+ * 1. Read source code
+ * 2. Write test files
+ * 3. Execute tests
+ * 4. Fix failing tests
+ * 5. Repeat until tests pass
  */
 /**
  * Agent Input Interface
@@ -15,6 +22,7 @@ export interface AgentInput {
     workingDir: string;
     metadata?: Record<string, any>;
     context?: Record<string, any>;
+    env?: Record<string, string>;
 }
 /**
  * Agent Output Interface
@@ -41,9 +49,17 @@ export declare class CodeTestingAgent {
     private apiKey;
     constructor();
     /**
-     * Execute the testing agent
+     * Execute the testing agent with agentic loop
      */
     execute(input: AgentInput): Promise<AgentOutput>;
+    /**
+     * Parse AI response and execute any tool calls OR auto-extract test files
+     */
+    private parseAndExecuteTools;
+    /**
+     * Auto-extract test code blocks from AI response and write to files
+     */
+    private autoExtractAndWriteTests;
     /**
      * Load tools.md documentation
      */
@@ -64,10 +80,6 @@ export declare class CodeTestingAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
-    /**
-     * Parse AI response
-     */
-    private parseResponse;
 }
 export default CodeTestingAgent;
 //# sourceMappingURL=index.d.ts.map

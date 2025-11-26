@@ -2,6 +2,11 @@
  * CodeReviewAgent
  * Reviews code and generates review reports
  * Read-only access - can read files and analyze code but not write
+ *
+ * Uses an agentic loop to:
+ * 1. Read source code files
+ * 2. Analyze code quality and security
+ * 3. Generate structured review report
  */
 /**
  * Agent Input Interface
@@ -15,6 +20,7 @@ export interface AgentInput {
     workingDir: string;
     metadata?: Record<string, any>;
     context?: Record<string, any>;
+    env?: Record<string, string>;
 }
 /**
  * Agent Output Interface
@@ -41,9 +47,21 @@ export declare class CodeReviewAgent {
     private apiKey;
     constructor();
     /**
-     * Execute the review agent
+     * Execute the review agent with agentic loop
      */
     execute(input: AgentInput): Promise<AgentOutput>;
+    /**
+     * Parse AI response and execute any tool calls
+     */
+    private parseAndExecuteTools;
+    /**
+     * Extract structured review report from AI response
+     */
+    private extractReviewReport;
+    /**
+     * Extract suggestions from review
+     */
+    private extractSuggestions;
     /**
      * Load tools.md documentation
      */
@@ -64,10 +82,6 @@ export declare class CodeReviewAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
-    /**
-     * Parse AI response
-     */
-    private parseResponse;
 }
 export default CodeReviewAgent;
 //# sourceMappingURL=index.d.ts.map

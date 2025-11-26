@@ -3,7 +3,8 @@
   "description": "Agent for creating module scaffolds and generating implementation plans",
   "type": "library",
   "version": "1.0.0",
-  "category": "workflow-agents",
+  "category": "Workflow Management",
+  "project": "AIDeveloper",
   "relatedModules": ["WorkflowOrchestrator", "CodePlannerAgent"],
   "scripts": {
     "build": "tsc"

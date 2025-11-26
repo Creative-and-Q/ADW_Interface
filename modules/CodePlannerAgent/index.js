@@ -21,17 +21,27 @@ export class CodePlannerAgent {
     apiKey;
     screenshotManager;
     constructor() {
-        this.apiKey = process.env.OPENROUTER_API_KEY || '';
-        this.model = process.env.OPENROUTER_MODEL_PLANNING || 'anthropic/claude-sonnet-4-20250514';
-        if (!this.apiKey) {
-            throw new Error('OPENROUTER_API_KEY environment variable is required');
-        }
+        // Defer environment variable loading to execute() method
+        this.apiKey = '';
+        this.model = 'anthropic/claude-sonnet-4-20250514';
         this.screenshotManager = new ScreenshotManager();
     }
     /**
      * Execute the planner agent
      */
     async execute(input) {
+        // Load environment variables from input.env or process.env
+        if (!this.apiKey) {
+            console.log('CodePlannerAgent: input.env available:', !!input.env);
+            console.log('CodePlannerAgent: input.env.OPENROUTER_API_KEY available:', !!input.env?.OPENROUTER_API_KEY);
+            console.log('CodePlannerAgent: process.env.OPENROUTER_API_KEY available:', !!process.env.OPENROUTER_API_KEY);
+            this.apiKey = input.env?.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY || '';
+            this.model = input.env?.OPENROUTER_MODEL_PLANNING || process.env.OPENROUTER_MODEL_PLANNING || 'x-ai/grok-code-fast-1';
+            console.log('CodePlannerAgent: final apiKey available:', !!this.apiKey);
+        }
+        if (!this.apiKey) {
+            throw new Error('OPENROUTER_API_KEY environment variable is required');
+        }
         if (!input.workingDir) {
             throw new Error('workingDir is required for CodePlannerAgent');
         }
