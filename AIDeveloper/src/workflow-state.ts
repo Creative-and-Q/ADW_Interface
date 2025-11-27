@@ -422,6 +422,7 @@ export async function failRunningAgents(workflowId: number, reason: string): Pro
 /**
  * Clean up stuck agent executions that have been running for too long
  * Returns the number of agents cleaned up
+ * Also updates workflow and sub-workflow queue statuses to maintain consistency
  */
 export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<number> {
   try {
@@ -445,17 +446,48 @@ export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<n
 
     logger.warn(`Found ${stuckAgents.length} stuck agent(s) running longer than ${timeoutMinutes} minutes`);
 
+    // Track unique workflow IDs that need status updates
+    const affectedWorkflowIds = new Set<number>();
+
     for (const agent of stuckAgents) {
       const runningTime = Math.floor((Date.now() - new Date(agent.started_at).getTime()) / 1000 / 60);
+      const errorMessage = `Agent execution timeout: exceeded ${timeoutMinutes} minute limit (ran for ${runningTime} minutes)`;
 
       await updateAgentExecution(
         agent.id,
         AgentStatus.FAILED,
         undefined,
-        `Agent execution timeout: exceeded ${timeoutMinutes} minute limit (ran for ${runningTime} minutes)`
+        errorMessage
       );
 
+      affectedWorkflowIds.add(agent.workflow_id);
+
       logger.info(`Cleaned up stuck agent execution ${agent.id} (${agent.agent_type}) for workflow ${agent.workflow_id}`);
+    }
+
+    // Update workflow and sub-workflow queue statuses for affected workflows
+    for (const workflowId of affectedWorkflowIds) {
+      try {
+        // Update workflow status to FAILED
+        await updateWorkflowStatus(workflowId, WorkflowStatus.FAILED);
+        logger.info(`Updated workflow ${workflowId} status to FAILED due to agent timeout`);
+
+        // Update sub-workflow queue entry if this workflow is a child of another
+        await update(
+          'sub_workflow_queue',
+          {
+            status: 'failed',
+            completed_at: new Date(),
+            error_message: 'Agent execution timeout',
+          },
+          'child_workflow_id = ?',
+          [workflowId]
+        );
+        logger.debug(`Updated sub-workflow queue entry for workflow ${workflowId}`);
+      } catch (updateError) {
+        logger.error(`Failed to update workflow ${workflowId} status after agent cleanup`, updateError as Error);
+        // Continue with other workflows
+      }
     }
 
     return stuckAgents.length;

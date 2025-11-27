@@ -101,31 +101,58 @@ router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void>
 /**
  * GET /api/workflows
  * List all workflows with pagination and filtering
+ * By default excludes sub-workflows (those with parent_workflow_id)
+ * Use ?include_children=true to include sub-workflows
  */
 router.get('/workflows', async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
     const status = req.query.status as WorkflowStatus | undefined;
+    const includeChildren = req.query.include_children === 'true';
 
-    // Build query without using parameters for LIMIT/OFFSET (MySQL compatibility)
-    let sql = 'SELECT * FROM workflows';
+    // Build query - by default exclude sub-workflows (parent_workflow_id IS NULL)
+    let sql = `SELECT w.*,
+               (SELECT COUNT(*) FROM workflows sub WHERE sub.parent_workflow_id = w.id) as sub_workflow_count
+               FROM workflows w`;
     const params: any[] = [];
+    const conditions: string[] = [];
+
+    // Exclude sub-workflows by default
+    if (!includeChildren) {
+      conditions.push('w.parent_workflow_id IS NULL');
+    }
 
     if (status) {
-      sql += ' WHERE status = ?';
+      conditions.push('w.status = ?');
       params.push(status);
     }
 
-    sql += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    sql += ` ORDER BY w.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
     const workflows = await query(sql, params);
 
-    // Get count
-    const countSql = status
-      ? 'SELECT COUNT(*) as total FROM workflows WHERE status = ?'
-      : 'SELECT COUNT(*) as total FROM workflows';
-    const countParams = status ? [status] : [];
+    // Get count (only root workflows unless include_children is true)
+    let countSql = 'SELECT COUNT(*) as total FROM workflows';
+    const countConditions: string[] = [];
+    const countParams: any[] = [];
+
+    if (!includeChildren) {
+      countConditions.push('parent_workflow_id IS NULL');
+    }
+    if (status) {
+      countConditions.push('status = ?');
+      countParams.push(status);
+    }
+
+    if (countConditions.length > 0) {
+      countSql += ' WHERE ' + countConditions.join(' AND ');
+    }
+
     const [countResult] = await query<any>(countSql, countParams);
 
     return res.json({
@@ -142,7 +169,7 @@ router.get('/workflows', async (req: Request, res: Response) => {
 
 /**
  * GET /api/workflows/:id
- * Get workflow details with all related data
+ * Get workflow details with all related data including sub-workflows
  */
 router.get('/workflows/:id', async (req: Request, res: Response) => {
   try {
@@ -170,10 +197,22 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       [id]
     );
 
+    // Get sub-workflows (children of this workflow) ordered by execution_order and created_at
+    const subWorkflows = await query<any>(
+      `SELECT id, workflow_type, status, task_description, target_module,
+              execution_order, created_at, started_at, completed_at,
+              (SELECT COUNT(*) FROM workflows grandchild WHERE grandchild.parent_workflow_id = w.id) as sub_workflow_count
+       FROM workflows w
+       WHERE parent_workflow_id = ?
+       ORDER BY execution_order ASC, created_at ASC`,
+      [id]
+    );
+
     return res.json({
       workflow,
       agents,
       artifacts,
+      subWorkflows,
     });
   } catch (error) {
     logger.error('Failed to fetch workflow details', error as Error);
@@ -857,24 +896,446 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
 
 /**
  * POST /api/workflows/:id/resume
- * Resume a failed/cancelled workflow from its last checkpoint
- * Optional body: { fromAgentIndex?: number } to resume from specific agent
- * TODO: Re-implement with WorkflowOrchestrator module
+ * Resume a failed/cancelled/completed workflow from where it left off
+ * For workflows with sub-workflows: continues executing the sub-workflow queue
+ * For single workflows: re-runs the WorkflowOrchestrator (if available)
  */
 router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    
-    logger.warn('Workflow resume not implemented', { workflowId: id });
+
+    // Get workflow details
+    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
+    const { getQueueStatus, advanceSubWorkflowQueue, updateSubWorkflowStatus, getNextExecutableSubWorkflow, resetFailedSubWorkflows } = await import('./sub-workflow-queue.js');
+
+    const workflow = await getWorkflow(id);
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found',
+      });
+    }
+
+    // Check if workflow can be resumed (must be in failed, completed, or cancelled state)
+    if (!['failed', 'completed', 'cancelled'].includes(workflow.status)) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot resume workflow in '${workflow.status}' state`,
+        message: 'Only failed, completed, or cancelled workflows can be resumed',
+      });
+    }
+
+    // Check if this workflow has sub-workflows
+    const queueStatus = await getQueueStatus(id);
+
+    if (queueStatus.total > 0) {
+      // This workflow has sub-workflows - resume the queue
+      logger.info('Resuming workflow with sub-workflow queue', {
+        workflowId: id,
+        queueStatus,
+      });
+
+      // Reset all failed/in_progress sub-workflows back to pending
+      // This allows the pipeline to restart from the earliest failure point
+      const resetResult = await resetFailedSubWorkflows(id);
+      logger.info('Reset failed sub-workflows for resume', {
+        workflowId: id,
+        resetCount: resetResult.resetCount,
+        earliestResetOrder: resetResult.earliestResetOrder,
+      });
+
+      // Update workflow status to planning (re-started)
+      await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
+
+      // Get next workflow to execute (should now be the first pending one)
+      const nextWorkflowEntry = await getNextExecutableSubWorkflow(id);
+
+      // Send response immediately, continue execution asynchronously
+      res.json({
+        success: true,
+        message: `Workflow ${id} resumed`,
+        data: {
+          workflowId: id,
+          queueStatus: await getQueueStatus(id),
+          nextWorkflowId: nextWorkflowEntry?.childWorkflowId || null,
+        },
+      });
+
+      // Continue execution asynchronously (fire-and-forget)
+      if (nextWorkflowEntry) {
+        (async () => {
+          try {
+            // Mark next workflow as in_progress
+            await updateSubWorkflowStatus(nextWorkflowEntry.childWorkflowId, 'in_progress');
+
+            // Execute the sub-workflow queue
+            // @ts-ignore - Dynamic import path resolved at runtime
+            const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+            const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+
+            let currentWorkflowId: number | null = nextWorkflowEntry.childWorkflowId;
+
+            while (currentWorkflowId) {
+              const currentWorkflow = await getWorkflow(currentWorkflowId);
+              if (!currentWorkflow) break;
+
+              logger.info('Executing sub-workflow from resume', {
+                workflowId: currentWorkflowId,
+                type: currentWorkflow.type,
+              });
+
+              const targetModule = currentWorkflow.target_module;
+              const workflowDir = targetModule
+                ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+                : getWorkflowDirectory(currentWorkflowId, currentWorkflow.branchName || 'master');
+
+              await updateWorkflowStatus(currentWorkflowId, WorkflowStatus.PLANNING);
+
+              const orchestrator = new WorkflowOrchestrator();
+              const payload = typeof currentWorkflow.payload === 'string'
+                ? JSON.parse(currentWorkflow.payload)
+                : currentWorkflow.payload;
+
+              try {
+                const result = await orchestrator.execute({
+                  workflowId: currentWorkflowId,
+                  workflowType: currentWorkflow.type,
+                  targetModule: currentWorkflow.target_module,
+                  taskDescription: payload.taskDescription || payload.title || '',
+                  workingDir: workflowDir,
+                  metadata: payload.metadata || {},
+                });
+
+                const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+                await updateWorkflowStatus(currentWorkflowId, finalStatus);
+                await updateSubWorkflowStatus(currentWorkflowId, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+
+                logger.info('Sub-workflow completed', {
+                  workflowId: currentWorkflowId,
+                  status: finalStatus,
+                });
+
+                // Advance to next workflow
+                currentWorkflowId = await advanceSubWorkflowQueue(id);
+              } catch (execError) {
+                logger.error('Sub-workflow execution failed', execError as Error, {
+                  workflowId: currentWorkflowId,
+                });
+                if (currentWorkflowId !== null) {
+                  await updateWorkflowStatus(currentWorkflowId, WorkflowStatus.FAILED);
+                  await updateSubWorkflowStatus(currentWorkflowId, 'failed', (execError as Error).message);
+                }
+                break;
+              }
+            }
+
+            logger.info('Resume execution completed for workflow', { workflowId: id });
+          } catch (asyncError) {
+            logger.error('Resume async execution failed', asyncError as Error, { workflowId: id });
+          }
+        })().catch((error) => {
+          logger.error('Unhandled error in resume execution', error as Error);
+        });
+      }
+
+      return;
+    }
+
+    // No sub-workflows - this is a leaf workflow
+    // For now, we can't resume leaf workflows without more context
+    // In the future, this could re-run the WorkflowOrchestrator from a checkpoint
+    logger.warn('Workflow has no sub-workflows, resume not supported for leaf workflows yet', { workflowId: id });
 
     return res.status(501).json({
       success: false,
-      error: 'Workflow resume feature not yet implemented',
-      message: 'This feature will be re-implemented with the WorkflowOrchestrator module',
+      error: 'Resume not supported for this workflow type',
+      message: 'This workflow has no sub-workflows. Leaf workflow resume is not yet implemented.',
     });
   } catch (error) {
     logger.error('Failed to start workflow resume', error as Error);
     return res.status(500).json({ error: 'Failed to resume workflow' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/retry
+ * Retry a failed/stuck sub-workflow
+ * Resets the workflow and re-executes it
+ */
+router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    // Get workflow details
+    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
+    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+
+    const workflow = await getWorkflow(id);
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found',
+      });
+    }
+
+    // Get parent workflow ID to check if this is a sub-workflow
+    const parentId = workflow.parentWorkflowId;
+
+    logger.info('Retrying workflow', {
+      workflowId: id,
+      currentStatus: workflow.status,
+      parentWorkflowId: parentId,
+    });
+
+    // Reset workflow status to pending
+    await updateWorkflowStatus(id, WorkflowStatus.PENDING);
+
+    // If this is a sub-workflow, update queue entry status
+    if (parentId) {
+      await updateSubWorkflowStatus(id, 'pending');
+    }
+
+    // Send response immediately
+    res.json({
+      success: true,
+      message: `Workflow ${id} reset for retry`,
+      data: {
+        workflowId: id,
+        parentWorkflowId: parentId,
+      },
+    });
+
+    // Execute the workflow asynchronously
+    (async () => {
+      try {
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+
+        // Mark as in_progress
+        if (parentId) {
+          await updateSubWorkflowStatus(id, 'in_progress');
+        }
+
+        const targetModule = workflow.target_module;
+        const workflowDir = targetModule
+          ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+          : getWorkflowDirectory(id, workflow.branchName || 'master');
+
+        await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
+
+        const orchestrator = new WorkflowOrchestrator();
+        const payload = typeof workflow.payload === 'string'
+          ? JSON.parse(workflow.payload)
+          : workflow.payload;
+
+        const result = await orchestrator.execute({
+          workflowId: id,
+          workflowType: workflow.type,
+          targetModule: workflow.target_module,
+          taskDescription: payload.taskDescription || payload.title || '',
+          workingDir: workflowDir,
+          metadata: payload.metadata || {},
+        });
+
+        const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+        await updateWorkflowStatus(id, finalStatus);
+
+        if (parentId) {
+          await updateSubWorkflowStatus(id, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+
+          // If successful, advance parent queue to continue with remaining workflows
+          if (result.success) {
+            let nextWorkflowId = await advanceSubWorkflowQueue(parentId);
+            while (nextWorkflowId) {
+              const nextWorkflow = await getWorkflow(nextWorkflowId);
+              if (!nextWorkflow) break;
+
+              logger.info('Executing next sub-workflow after retry', {
+                workflowId: nextWorkflowId,
+                type: nextWorkflow.type,
+              });
+
+              const nextTargetModule = nextWorkflow.target_module;
+              const nextWorkflowDir = nextTargetModule
+                ? `/home/kevin/Home/ex_nihilo/modules/${nextTargetModule}`
+                : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
+
+              await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
+
+              const nextOrchestrator = new WorkflowOrchestrator();
+              const nextPayload = typeof nextWorkflow.payload === 'string'
+                ? JSON.parse(nextWorkflow.payload)
+                : nextWorkflow.payload;
+
+              try {
+                const nextResult = await nextOrchestrator.execute({
+                  workflowId: nextWorkflowId,
+                  workflowType: nextWorkflow.type,
+                  targetModule: nextWorkflow.target_module,
+                  taskDescription: nextPayload.taskDescription || nextPayload.title || '',
+                  workingDir: nextWorkflowDir,
+                  metadata: nextPayload.metadata || {},
+                });
+
+                const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+                await updateWorkflowStatus(nextWorkflowId, nextFinalStatus);
+                await updateSubWorkflowStatus(nextWorkflowId, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
+
+                if (!nextResult.success) break; // Stop on failure
+
+                nextWorkflowId = await advanceSubWorkflowQueue(parentId);
+              } catch (loopError) {
+                logger.error('Sub-workflow execution failed after retry', loopError as Error, {
+                  workflowId: nextWorkflowId,
+                });
+                if (nextWorkflowId !== null) {
+                  await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.FAILED);
+                  await updateSubWorkflowStatus(nextWorkflowId, 'failed', (loopError as Error).message);
+                }
+                break;
+              }
+            }
+          }
+        }
+
+        logger.info('Retry completed', { workflowId: id, status: finalStatus });
+      } catch (asyncError) {
+        logger.error('Retry execution failed', asyncError as Error, { workflowId: id });
+        await updateWorkflowStatus(id, WorkflowStatus.FAILED);
+        if (parentId) {
+          await updateSubWorkflowStatus(id, 'failed', (asyncError as Error).message);
+        }
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in retry execution', error as Error);
+    });
+
+    return;
+  } catch (error) {
+    logger.error('Failed to retry workflow', error as Error);
+    return res.status(500).json({ error: 'Failed to retry workflow' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/skip
+ * Skip a failed sub-workflow and continue with remaining workflows
+ */
+router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    // Get workflow details
+    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
+    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+
+    const workflow = await getWorkflow(id);
+    if (!workflow) {
+      return res.status(404).json({
+        success: false,
+        error: 'Workflow not found',
+      });
+    }
+
+    const parentId = workflow.parentWorkflowId;
+    if (!parentId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot skip a root workflow',
+        message: 'Only sub-workflows can be skipped',
+      });
+    }
+
+    logger.info('Skipping workflow', {
+      workflowId: id,
+      parentWorkflowId: parentId,
+    });
+
+    // Mark workflow as skipped
+    await updateWorkflowStatus(id, WorkflowStatus.COMPLETED); // Use COMPLETED since there's no SKIPPED status
+    await updateSubWorkflowStatus(id, 'skipped', 'Manually skipped by user');
+
+    // Send response
+    res.json({
+      success: true,
+      message: `Workflow ${id} skipped`,
+      data: {
+        workflowId: id,
+        parentWorkflowId: parentId,
+      },
+    });
+
+    // Continue with remaining workflows asynchronously
+    (async () => {
+      try {
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+
+        let nextWorkflowId = await advanceSubWorkflowQueue(parentId);
+        while (nextWorkflowId) {
+          const nextWorkflow = await getWorkflow(nextWorkflowId);
+          if (!nextWorkflow) break;
+
+          logger.info('Executing next sub-workflow after skip', {
+            workflowId: nextWorkflowId,
+            type: nextWorkflow.type,
+          });
+
+          const nextTargetModule = nextWorkflow.target_module;
+          const nextWorkflowDir = nextTargetModule
+            ? `/home/kevin/Home/ex_nihilo/modules/${nextTargetModule}`
+            : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
+
+          await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
+
+          const nextOrchestrator = new WorkflowOrchestrator();
+          const nextPayload = typeof nextWorkflow.payload === 'string'
+            ? JSON.parse(nextWorkflow.payload)
+            : nextWorkflow.payload;
+
+          try {
+            const nextResult = await nextOrchestrator.execute({
+              workflowId: nextWorkflowId,
+              workflowType: nextWorkflow.type,
+              targetModule: nextWorkflow.target_module,
+              taskDescription: nextPayload.taskDescription || nextPayload.title || '',
+              workingDir: nextWorkflowDir,
+              metadata: nextPayload.metadata || {},
+            });
+
+            const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+            await updateWorkflowStatus(nextWorkflowId, nextFinalStatus);
+            await updateSubWorkflowStatus(nextWorkflowId, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
+
+            if (!nextResult.success) break; // Stop on failure
+
+            nextWorkflowId = await advanceSubWorkflowQueue(parentId);
+          } catch (loopError) {
+            logger.error('Sub-workflow execution failed after skip', loopError as Error, {
+              workflowId: nextWorkflowId,
+            });
+            if (nextWorkflowId !== null) {
+              await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.FAILED);
+              await updateSubWorkflowStatus(nextWorkflowId, 'failed', (loopError as Error).message);
+            }
+            break;
+          }
+        }
+
+        logger.info('Continued execution after skip completed', { skippedWorkflowId: id });
+      } catch (asyncError) {
+        logger.error('Failed to continue after skip', asyncError as Error, { skippedWorkflowId: id });
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in skip continuation', error as Error);
+    });
+
+    return;
+  } catch (error) {
+    logger.error('Failed to skip workflow', error as Error);
+    return res.status(500).json({ error: 'Failed to skip workflow' });
   }
 });
 

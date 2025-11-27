@@ -10,6 +10,7 @@ import {
   List,
   GitBranch,
   Calendar,
+  RotateCcw,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { getStatusColor } from '../utils/workflowChartUtils';
@@ -35,6 +36,7 @@ export default function WorkflowDetail() {
   const [loading, setLoading] = useState(true);
   const [resumeState, setResumeState] = useState<any>(null);
   const [isResuming, setIsResuming] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
   const { socket, subscribe } = useWebSocket();
 
@@ -67,8 +69,12 @@ export default function WorkflowDetail() {
       setWorkflow(data.workflow);
       setAgents(data.agents);
       setArtifacts(data.artifacts);
+      // Sub-workflows are now included directly in the API response
+      if (data.subWorkflows && data.subWorkflows.length > 0) {
+        setSubWorkflows(data.subWorkflows);
+      }
       await loadLogs();
-      await loadSubWorkflows();
+      await loadQueueStatus();
       // Load resume state if workflow failed
       if (data.workflow.status === 'failed') {
         await loadResumeState();
@@ -80,16 +86,8 @@ export default function WorkflowDetail() {
     }
   };
 
-  const loadSubWorkflows = async () => {
+  const loadQueueStatus = async () => {
     try {
-      const response = await fetch(`/api/workflows/${id}/sub-workflows`);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.data) {
-          setSubWorkflows(data.data);
-        }
-      }
-      
       const queueResponse = await fetch(`/api/workflows/${id}/queue-status`);
       if (queueResponse.ok) {
         const queueData = await queueResponse.json();
@@ -98,8 +96,8 @@ export default function WorkflowDetail() {
         }
       }
     } catch (error) {
-      // Sub-workflows not available for this workflow (not hierarchical)
-      console.debug('No sub-workflows for this workflow');
+      // Queue status not available
+      console.debug('No queue status for this workflow');
     }
   };
 
@@ -125,6 +123,22 @@ export default function WorkflowDetail() {
     } catch (error: any) {
       toast.error(`Failed to resume workflow: ${error.message}`);
       setIsResuming(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    try {
+      setIsRestarting(true);
+      await workflowsAPI.retryWorkflow(parseInt(id!));
+      toast.success('Workflow restart initiated');
+      // Reload workflow after short delay
+      setTimeout(() => {
+        loadWorkflow();
+        setIsRestarting(false);
+      }, 1000);
+    } catch (error: any) {
+      toast.error(`Failed to restart workflow: ${error.message}`);
+      setIsRestarting(false);
     }
   };
 
@@ -230,6 +244,17 @@ export default function WorkflowDetail() {
               {isResuming ? 'Resuming...' : 'Resume Workflow'}
             </button>
           )}
+          {workflow.status === 'failed' && !resumeState?.canResume && (
+            <button
+              onClick={handleRestart}
+              disabled={isRestarting}
+              className="flex items-center px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Restart workflow from the beginning"
+            >
+              <RotateCcw className="h-4 w-4 mr-2" />
+              {isRestarting ? 'Restarting...' : 'Restart Workflow'}
+            </button>
+          )}
         </div>
 
         {/* Task Description */}
@@ -259,6 +284,31 @@ export default function WorkflowDetail() {
                   `${resumeState.failedAgent.agentType} (failed)` :
                   `Agent ${resumeState.resumeFromIndex + 1}`}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restart Info Banner for failed workflows that can't be resumed */}
+      {workflow.status === 'failed' && resumeState && !resumeState.canResume && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-6">
+          <div className="flex items-start space-x-3">
+            <RotateCcw className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-lg font-semibold text-orange-900 mb-2">
+                Workflow Failed - Restart Required
+              </h3>
+              <p className="text-sm text-orange-700 mb-3">
+                This workflow failed before completing any agents. Click "Restart Workflow" to try again from the beginning.
+              </p>
+              {resumeState.failedAgent && (
+                <div className="text-sm text-orange-600">
+                  <strong>Failed at:</strong> {resumeState.failedAgent.agentType}
+                  {resumeState.failedAgent.errorMessage && (
+                    <span className="block mt-1 text-red-600">{resumeState.failedAgent.errorMessage}</span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -312,16 +362,14 @@ export default function WorkflowDetail() {
           }}
           subWorkflows={subWorkflows.map((sw: any) => ({
             id: sw.id,
-            type: sw.type,
+            type: sw.workflow_type,
             status: sw.status,
-            executionOrder: sw.executionOrder,
-            createdAt: sw.createdAt,
-            completedAt: sw.completedAt,
-            payload: sw.payload,
+            executionOrder: sw.execution_order,
+            createdAt: sw.created_at,
+            completedAt: sw.completed_at,
             task_description: sw.task_description,
             target_module: sw.target_module,
-            parentWorkflowId: sw.parentWorkflowId,
-            workflowDepth: sw.workflowDepth,
+            sub_workflow_count: sw.sub_workflow_count,
           }))}
           queueStatus={queueStatus}
           className="mb-6"

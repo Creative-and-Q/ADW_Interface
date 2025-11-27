@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { format, formatDistanceToNow, parseISO, differenceInMilliseconds } from 'date-fns';
-import { CheckCircle, XCircle, Clock, Play, ExternalLink, GitBranch } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Play, ExternalLink, GitBranch, Layers } from 'lucide-react';
 import { getStatusColor, formatDuration } from '../utils/workflowChartUtils';
 import clsx from 'clsx';
 
@@ -109,15 +109,25 @@ export default function WorkflowCard({ workflow, className = '' }: WorkflowCardP
         {taskDescription}
       </p>
 
-      {/* Branch info */}
-      {workflow.branch_name && (
-        <div className="flex items-center text-sm text-gray-600 mb-4">
-          <GitBranch className="h-4 w-4 mr-2" />
-          <code className="text-xs bg-gray-100 px-2 py-1 rounded">
-            {workflow.branch_name}
-          </code>
-        </div>
-      )}
+      {/* Branch info and sub-workflow count */}
+      <div className="flex items-center flex-wrap gap-3 mb-4">
+        {workflow.branch_name && (
+          <div className="flex items-center text-sm text-gray-600">
+            <GitBranch className="h-4 w-4 mr-2" />
+            <code className="text-xs bg-gray-100 px-2 py-1 rounded">
+              {workflow.branch_name}
+            </code>
+          </div>
+        )}
+        {workflow.sub_workflow_count > 0 && (
+          <div className="flex items-center text-sm text-purple-600">
+            <Layers className="h-4 w-4 mr-1" />
+            <span className="text-xs font-medium">
+              {workflow.sub_workflow_count} sub-workflow{workflow.sub_workflow_count !== 1 ? 's' : ''}
+            </span>
+          </div>
+        )}
+      </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between text-sm text-gray-500 border-t border-gray-100 pt-4">
