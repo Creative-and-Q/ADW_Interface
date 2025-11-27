@@ -226,8 +226,8 @@ export class CodingAgent {
             }
         };
         // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
-        // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json
-        const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json):([^\n]+)\n([\s\S]*?)```/g;
+        // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json, svg, xml, scss, sass
+        const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json|svg|xml|scss|sass):([^\n]+)\n([\s\S]*?)```/g;
         let match;
         while ((match = pattern1.exec(response)) !== null) {
             const filePath = match[1].trim();
@@ -337,12 +337,64 @@ export class CodingAgent {
         return result;
     }
     /**
-     * Scan working directory to get file structure
+     * Scan working directory to get file structure with better context
      */
     async scanWorkingDirectory(workingDir) {
         try {
-            const { stdout } = await execAsync(`find . -type f -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.css" -o -name "*.json" | grep -v node_modules | grep -v dist | sort | head -50`, { cwd: workingDir });
-            return stdout.trim() || 'No source files found';
+            const results = [];
+            // First, get the directory tree structure (directories only, max depth 3)
+            try {
+                const { stdout: dirTree } = await execAsync(`find . -maxdepth 3 -type d ! -name "node_modules" ! -name ".git" ! -name "dist" ! -name "build" ! -name ".next" ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" | sort`, { cwd: workingDir });
+                if (dirTree.trim()) {
+                    results.push('## Directory Structure:\n' + dirTree.trim());
+                }
+            }
+            catch (e) {
+                // Ignore directory tree errors
+            }
+            // Check for frontend/backend split
+            try {
+                const { stdout: hasFrontend } = await execAsync(`test -d frontend && echo "yes" || echo "no"`, { cwd: workingDir });
+                if (hasFrontend.trim() === 'yes') {
+                    results.push('\n## Project Type: FULLSTACK (has frontend/ directory)');
+                    results.push('- Backend code is in: src/ or root directory');
+                    results.push('- Frontend code is in: frontend/src/');
+                    results.push('- Frontend assets should go in: frontend/src/assets/ or frontend/public/');
+                }
+            }
+            catch (e) {
+                // Ignore
+            }
+            // Get source files with better extensions (increased limit)
+            const { stdout: files } = await execAsync(`find . -type f \\( -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.css" -o -name "*.scss" -o -name "*.json" -o -name "*.svg" -o -name "*.html" -o -name "*.md" \\) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" | sort | head -100`, { cwd: workingDir });
+            if (files.trim()) {
+                results.push('\n## Source Files:\n' + files.trim());
+            }
+            // Check for package.json to understand project type
+            try {
+                const { stdout: pkgExists } = await execAsync(`test -f package.json && echo "yes" || echo "no"`, { cwd: workingDir });
+                if (pkgExists.trim() === 'yes') {
+                    // Read dependencies to understand project type
+                    const { stdout: deps } = await execAsync(`cat package.json | grep -E '"react"|"vue"|"angular"|"express"|"koa"|"fastify"' | head -5 || echo ""`, { cwd: workingDir });
+                    if (deps.trim()) {
+                        results.push('\n## Key Dependencies:\n' + deps.trim());
+                    }
+                }
+            }
+            catch (e) {
+                // Ignore
+            }
+            // Check for frontend package.json too
+            try {
+                const { stdout: frontendPkg } = await execAsync(`test -f frontend/package.json && cat frontend/package.json | grep -E '"react"|"vue"|"vite"' | head -3 || echo ""`, { cwd: workingDir });
+                if (frontendPkg.trim()) {
+                    results.push('\n## Frontend Dependencies:\n' + frontendPkg.trim());
+                }
+            }
+            catch (e) {
+                // Ignore
+            }
+            return results.join('\n') || 'No source files found';
         }
         catch (error) {
             console.warn('Failed to scan working directory:', error.message);
@@ -402,14 +454,38 @@ After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 - If you see "./src/App.tsx", use "src/App.tsx"
 - The file list shows the REAL project structure - use it!
 
+## CRITICAL: Fullstack Project Structure
+
+Many modules have SEPARATE frontend and backend code:
+
+**If you see "Project Type: FULLSTACK" in the file list:**
+- Backend/server code lives in: \`src/\` (e.g., src/server.ts)
+- Frontend React/Vue code lives in: \`frontend/src/\` (e.g., frontend/src/pages/MyComponent.tsx)
+- Frontend assets (images, SVGs, CSS) go in: \`frontend/src/assets/\` or \`frontend/public/\`
+- DO NOT put frontend components in \`src/\` - that's for backend!
+- DO NOT put backend code in \`frontend/src/\` - that's for UI!
+
+**Look at the Directory Structure section** to understand where files should go.
+
+## Creating New Files (SVGs, Images, Assets)
+
+When creating NEW files that don't exist yet:
+1. Check the Directory Structure to find the appropriate location
+2. For frontend assets (SVGs, images, icons):
+   - If \`frontend/src/assets/\` exists, put them there
+   - If \`frontend/public/\` exists, put them there for static assets
+   - Create subdirectories as needed (e.g., \`frontend/src/assets/icons/\`)
+3. ALWAYS use the file path format: \`\`\`svg:frontend/src/assets/icons/myicon.svg
+
 ## Your Responsibilities
 
-1. **ALWAYS** check the file list to find the correct file path
-2. **ALWAYS** read existing files first using ./tools/read-file.sh
+1. **ALWAYS** check the file list AND directory structure to find the correct file path
+2. **ALWAYS** read existing files first using ./tools/read-file.sh before modifying
 3. **ALWAYS** write changes using ./tools/write-file.sh with the CORRECT path
-4. Create directories with ./tools/create-directory.sh only if needed
-5. Make actual file changes - don't just describe what to do
-6. After making all changes, explicitly say "TASK COMPLETE"
+4. **ALWAYS** respect the frontend/backend separation in fullstack projects
+5. Create directories with ./tools/create-directory.sh only if needed
+6. Make actual file changes - don't just describe what to do
+7. After making all changes, explicitly say "TASK COMPLETE"
 
 ## Permissions
 
@@ -424,6 +500,7 @@ After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 - NEVER just describe changes - EXECUTE them using tools
 - NEVER assume file paths - use the EXACT paths from the file list
 - NEVER create files at paths that don't match the project structure
+- NEVER put frontend code in backend directories or vice versa
 - When writing files with content, put full content in quotes
 
 ## CRITICAL: Modifying package.json

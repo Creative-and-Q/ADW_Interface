@@ -68,7 +68,7 @@ export declare class CodingAgent {
      */
     private deepMergeJson;
     /**
-     * Scan working directory to get file structure
+     * Scan working directory to get file structure with better context
      */
     private scanWorkingDirectory;
     /**

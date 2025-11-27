@@ -171,6 +171,39 @@ export class CodingAgent {
         toolResults.push(...executed);
       }
 
+      // BUILD VERIFICATION: Run TypeScript type-check after code changes
+      console.log('CodingAgent: Running build verification...');
+      const buildVerification = await this.verifyBuild(input.workingDir);
+
+      if (!buildVerification.success) {
+        console.error('CodingAgent: Build verification FAILED');
+        return {
+          success: false,
+          artifacts: [{
+            type: 'code',
+            content: allResponses.join('\n\n---\n\n'),
+            metadata: {
+              workflowId: input.workflowId,
+              iterations,
+              toolsExecuted: toolResults.length,
+              buildError: buildVerification.error,
+            },
+          }],
+          summary: `CodingAgent wrote files but BUILD FAILED: ${buildVerification.error}`,
+          requiresRetry: true,
+          retryReason: `Build verification failed: ${buildVerification.error}`,
+          metadata: {
+            workflowId: input.workflowId,
+            iterations,
+            toolsExecuted: toolResults.length,
+            buildVerification: 'FAILED',
+            buildError: buildVerification.error,
+          },
+        };
+      }
+
+      console.log('CodingAgent: Build verification PASSED');
+
       // Parse and return response
       return {
         success: true,
@@ -181,13 +214,15 @@ export class CodingAgent {
             workflowId: input.workflowId,
             iterations,
             toolsExecuted: toolResults.length,
+            buildVerification: 'PASSED',
           },
         }],
-        summary: `Implemented code changes for workflow ${input.workflowId} (${iterations} iterations, ${toolResults.length} tools executed)`,
+        summary: `Implemented code changes for workflow ${input.workflowId} (${iterations} iterations, ${toolResults.length} tools executed) - Build verified`,
         metadata: {
           workflowId: input.workflowId,
           iterations,
           toolsExecuted: toolResults.length,
+          buildVerification: 'PASSED',
         },
       };
     } catch (error) {
@@ -302,8 +337,8 @@ export class CodingAgent {
     };
 
     // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
-    // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json
-    const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json):([^\n]+)\n([\s\S]*?)```/g;
+    // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json, svg, xml, scss, sass
+    const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json|svg|xml|scss|sass):([^\n]+)\n([\s\S]*?)```/g;
     let match;
 
     while ((match = pattern1.exec(response)) !== null) {
@@ -426,15 +461,85 @@ export class CodingAgent {
   }
 
   /**
-   * Scan working directory to get file structure
+   * Scan working directory to get file structure with better context
    */
   private async scanWorkingDirectory(workingDir: string): Promise<string> {
     try {
-      const { stdout } = await execAsync(
-        `find . -type f -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.css" -o -name "*.json" | grep -v node_modules | grep -v dist | sort | head -50`,
+      const results: string[] = [];
+
+      // First, get the directory tree structure (directories only, max depth 3)
+      try {
+        const { stdout: dirTree } = await execAsync(
+          `find . -maxdepth 3 -type d ! -name "node_modules" ! -name ".git" ! -name "dist" ! -name "build" ! -name ".next" ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" | sort`,
+          { cwd: workingDir }
+        );
+        if (dirTree.trim()) {
+          results.push('## Directory Structure:\n' + dirTree.trim());
+        }
+      } catch (e) {
+        // Ignore directory tree errors
+      }
+
+      // Check for frontend/backend split
+      try {
+        const { stdout: hasFrontend } = await execAsync(
+          `test -d frontend && echo "yes" || echo "no"`,
+          { cwd: workingDir }
+        );
+        if (hasFrontend.trim() === 'yes') {
+          results.push('\n## Project Type: FULLSTACK (has frontend/ directory)');
+          results.push('- Backend code is in: src/ or root directory');
+          results.push('- Frontend code is in: frontend/src/');
+          results.push('- Frontend assets should go in: frontend/src/assets/ or frontend/public/');
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      // Get source files with better extensions (increased limit)
+      const { stdout: files } = await execAsync(
+        `find . -type f \\( -name "*.js" -o -name "*.ts" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.css" -o -name "*.scss" -o -name "*.json" -o -name "*.svg" -o -name "*.html" -o -name "*.md" \\) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" | sort | head -100`,
         { cwd: workingDir }
       );
-      return stdout.trim() || 'No source files found';
+
+      if (files.trim()) {
+        results.push('\n## Source Files:\n' + files.trim());
+      }
+
+      // Check for package.json to understand project type
+      try {
+        const { stdout: pkgExists } = await execAsync(
+          `test -f package.json && echo "yes" || echo "no"`,
+          { cwd: workingDir }
+        );
+        if (pkgExists.trim() === 'yes') {
+          // Read dependencies to understand project type
+          const { stdout: deps } = await execAsync(
+            `cat package.json | grep -E '"react"|"vue"|"angular"|"express"|"koa"|"fastify"' | head -5 || echo ""`,
+            { cwd: workingDir }
+          );
+          if (deps.trim()) {
+            results.push('\n## Key Dependencies:\n' + deps.trim());
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      // Check for frontend package.json too
+      try {
+        const { stdout: frontendPkg } = await execAsync(
+          `test -f frontend/package.json && cat frontend/package.json | grep -E '"react"|"vue"|"vite"' | head -3 || echo ""`,
+          { cwd: workingDir }
+        );
+        if (frontendPkg.trim()) {
+          results.push('\n## Frontend Dependencies:\n' + frontendPkg.trim());
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      return results.join('\n') || 'No source files found';
     } catch (error) {
       console.warn('Failed to scan working directory:', (error as Error).message);
       return 'Unable to scan directory';
@@ -494,14 +599,38 @@ After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 - If you see "./src/App.tsx", use "src/App.tsx"
 - The file list shows the REAL project structure - use it!
 
+## CRITICAL: Fullstack Project Structure
+
+Many modules have SEPARATE frontend and backend code:
+
+**If you see "Project Type: FULLSTACK" in the file list:**
+- Backend/server code lives in: \`src/\` (e.g., src/server.ts)
+- Frontend React/Vue code lives in: \`frontend/src/\` (e.g., frontend/src/pages/MyComponent.tsx)
+- Frontend assets (images, SVGs, CSS) go in: \`frontend/src/assets/\` or \`frontend/public/\`
+- DO NOT put frontend components in \`src/\` - that's for backend!
+- DO NOT put backend code in \`frontend/src/\` - that's for UI!
+
+**Look at the Directory Structure section** to understand where files should go.
+
+## Creating New Files (SVGs, Images, Assets)
+
+When creating NEW files that don't exist yet:
+1. Check the Directory Structure to find the appropriate location
+2. For frontend assets (SVGs, images, icons):
+   - If \`frontend/src/assets/\` exists, put them there
+   - If \`frontend/public/\` exists, put them there for static assets
+   - Create subdirectories as needed (e.g., \`frontend/src/assets/icons/\`)
+3. ALWAYS use the file path format: \`\`\`svg:frontend/src/assets/icons/myicon.svg
+
 ## Your Responsibilities
 
-1. **ALWAYS** check the file list to find the correct file path
-2. **ALWAYS** read existing files first using ./tools/read-file.sh
+1. **ALWAYS** check the file list AND directory structure to find the correct file path
+2. **ALWAYS** read existing files first using ./tools/read-file.sh before modifying
 3. **ALWAYS** write changes using ./tools/write-file.sh with the CORRECT path
-4. Create directories with ./tools/create-directory.sh only if needed
-5. Make actual file changes - don't just describe what to do
-6. After making all changes, explicitly say "TASK COMPLETE"
+4. **ALWAYS** respect the frontend/backend separation in fullstack projects
+5. Create directories with ./tools/create-directory.sh only if needed
+6. Make actual file changes - don't just describe what to do
+7. After making all changes, explicitly say "TASK COMPLETE"
 
 ## Permissions
 
@@ -516,6 +645,7 @@ After implementing all changes, say: "IMPLEMENTATION COMPLETE"
 - NEVER just describe changes - EXECUTE them using tools
 - NEVER assume file paths - use the EXACT paths from the file list
 - NEVER create files at paths that don't match the project structure
+- NEVER put frontend code in backend directories or vice versa
 - When writing files with content, put full content in quotes
 
 ## CRITICAL: Modifying package.json
@@ -641,6 +771,99 @@ When finished, say: "IMPLEMENTATION COMPLETE"
     } catch (error) {
       throw new Error(`Failed to execute tool ${toolName}: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Verify build by running TypeScript compilation check
+   * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
+   */
+  private async verifyBuild(workingDir: string): Promise<{ success: boolean; error?: string }> {
+    const results: string[] = [];
+    let hasError = false;
+
+    // Check 1: Root tsconfig.json (backend code)
+    try {
+      const rootTsconfig = path.join(workingDir, 'tsconfig.json');
+      await fs.access(rootTsconfig);
+      console.log('CodingAgent: Found root tsconfig.json, running tsc --noEmit...');
+
+      try {
+        const { stdout } = await execAsync('npx tsc --noEmit', {
+          cwd: workingDir,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        results.push('Root TypeScript: OK');
+        if (stdout) console.log('tsc stdout:', stdout.substring(0, 500));
+      } catch (tscError: any) {
+        hasError = true;
+        const errorOutput = tscError.stdout || tscError.stderr || tscError.message;
+        results.push(`Root TypeScript FAILED:\n${errorOutput}`);
+        console.error('Root tsc error:', errorOutput.substring(0, 1000));
+      }
+    } catch {
+      // No root tsconfig.json - skip
+      console.log('CodingAgent: No root tsconfig.json found, skipping root check');
+    }
+
+    // Check 2: Frontend tsconfig.json (if exists)
+    try {
+      const frontendTsconfig = path.join(workingDir, 'frontend', 'tsconfig.json');
+      await fs.access(frontendTsconfig);
+      console.log('CodingAgent: Found frontend/tsconfig.json, running tsc --noEmit...');
+
+      try {
+        const { stdout } = await execAsync('npx tsc --noEmit', {
+          cwd: path.join(workingDir, 'frontend'),
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        results.push('Frontend TypeScript: OK');
+        if (stdout) console.log('frontend tsc stdout:', stdout.substring(0, 500));
+      } catch (tscError: any) {
+        hasError = true;
+        const errorOutput = tscError.stdout || tscError.stderr || tscError.message;
+        results.push(`Frontend TypeScript FAILED:\n${errorOutput}`);
+        console.error('Frontend tsc error:', errorOutput.substring(0, 1000));
+      }
+    } catch {
+      // No frontend tsconfig.json - skip
+      console.log('CodingAgent: No frontend/tsconfig.json found, skipping frontend check');
+    }
+
+    // Check 3: Try npm run build if package.json has build script
+    try {
+      const packageJsonPath = path.join(workingDir, 'package.json');
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+
+      if (packageJson.scripts?.build) {
+        console.log('CodingAgent: Found build script, running npm run build...');
+        try {
+          const { stdout } = await execAsync('npm run build', {
+            cwd: workingDir,
+            maxBuffer: 10 * 1024 * 1024,
+          });
+          results.push('npm run build: OK');
+          if (stdout) console.log('npm build stdout:', stdout.substring(0, 500));
+        } catch (buildError: any) {
+          hasError = true;
+          const errorOutput = buildError.stdout || buildError.stderr || buildError.message;
+          results.push(`npm run build FAILED:\n${errorOutput}`);
+          console.error('npm build error:', errorOutput.substring(0, 1000));
+        }
+      }
+    } catch {
+      // No package.json or can't parse - skip
+    }
+
+    // If no checks were performed (no tsconfig files), assume success
+    if (results.length === 0) {
+      console.log('CodingAgent: No TypeScript config found, skipping build verification');
+      return { success: true };
+    }
+
+    return {
+      success: !hasError,
+      error: hasError ? results.join('\n\n') : undefined,
+    };
   }
 
 }

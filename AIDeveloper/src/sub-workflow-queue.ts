@@ -350,15 +350,137 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
 }
 
 /**
- * Check if parent workflow has completed all sub-workflows
+ * Check if parent workflow has completed all sub-workflows (including grandchildren)
+ * A workflow is only complete when:
+ * 1. All immediate children are in terminal state (completed, failed, or skipped)
+ * 2. All children that are "completed" have no pending/in-progress grandchildren
  */
 export async function checkParentWorkflowCompletion(
   parentWorkflowId: number
 ): Promise<boolean> {
   const status = await getQueueStatus(parentWorkflowId);
-  
-  // All workflows must be in terminal state (completed, failed, or skipped)
-  return status.total > 0 && status.pending === 0 && status.inProgress === 0;
+
+  // First check: immediate children must all be in terminal state
+  if (status.total === 0 || status.pending > 0 || status.inProgress > 0) {
+    return false;
+  }
+
+  // Second check: verify that "completed" children don't have incomplete grandchildren
+  // Get all completed child workflow IDs
+  const completedChildren = await query<any[]>(
+    `SELECT child_workflow_id FROM sub_workflow_queue
+     WHERE parent_workflow_id = ? AND status = 'completed'`,
+    [parentWorkflowId]
+  );
+
+  // For each completed child, check if it has any incomplete sub-workflows
+  for (const child of completedChildren) {
+    const childStatus = await getQueueStatus(child.child_workflow_id);
+
+    // If child has sub-workflows and they're not all complete, parent isn't complete
+    if (childStatus.total > 0 && (childStatus.pending > 0 || childStatus.inProgress > 0)) {
+      logger.debug(`Parent ${parentWorkflowId} not complete: child ${child.child_workflow_id} has incomplete sub-workflows`, {
+        childPending: childStatus.pending,
+        childInProgress: childStatus.inProgress,
+      });
+      return false;
+    }
+
+    // Recursively check deeper levels
+    if (childStatus.total > 0) {
+      const childComplete = await checkParentWorkflowCompletion(child.child_workflow_id);
+      if (!childComplete) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Reset all failed/in_progress sub-workflows back to pending state
+ * This allows the workflow to be resumed from the earliest failure point
+ * Also resets any failed agents for those workflows
+ */
+export async function resetFailedSubWorkflows(
+  parentWorkflowId: number
+): Promise<{ resetCount: number; earliestResetOrder: number | null }> {
+  try {
+    // Get all failed or in_progress queue entries for this parent
+    const failedEntries = await query<any[]>(
+      `SELECT swq.*, w.id as workflow_id
+       FROM sub_workflow_queue swq
+       JOIN workflows w ON w.id = swq.child_workflow_id
+       WHERE swq.parent_workflow_id = ?
+       AND (swq.status IN ('failed', 'in_progress') OR w.status IN ('failed', 'planning', 'coding', 'testing', 'reviewing', 'documenting'))
+       ORDER BY swq.execution_order ASC`,
+      [parentWorkflowId]
+    );
+
+    if (failedEntries.length === 0) {
+      logger.info('No failed sub-workflows to reset', { parentWorkflowId });
+      return { resetCount: 0, earliestResetOrder: null };
+    }
+
+    let earliestResetOrder: number | null = null;
+
+    for (const entry of failedEntries) {
+      const childWorkflowId = entry.child_workflow_id;
+
+      // Track earliest reset order
+      if (earliestResetOrder === null || entry.execution_order < earliestResetOrder) {
+        earliestResetOrder = entry.execution_order;
+      }
+
+      // Reset queue entry to pending
+      await update(
+        'sub_workflow_queue',
+        {
+          status: 'pending',
+          started_at: null,
+          completed_at: null,
+          error_message: null,
+        },
+        'child_workflow_id = ?',
+        [childWorkflowId]
+      );
+
+      // Reset workflow status to pending
+      await updateWorkflowStatus(childWorkflowId, WorkflowStatus.PENDING);
+
+      // Reset any failed agents for this workflow
+      await query(
+        `UPDATE agent_executions
+         SET status = 'pending', error_message = NULL, completed_at = NULL
+         WHERE workflow_id = ? AND status = 'failed'`,
+        [childWorkflowId]
+      );
+
+      // Also recursively reset any failed grandchildren
+      const grandchildStatus = await getQueueStatus(childWorkflowId);
+      if (grandchildStatus.total > 0 && (grandchildStatus.failed > 0 || grandchildStatus.inProgress > 0)) {
+        await resetFailedSubWorkflows(childWorkflowId);
+      }
+
+      logger.info('Reset failed sub-workflow', {
+        childWorkflowId,
+        executionOrder: entry.execution_order,
+        parentWorkflowId,
+      });
+    }
+
+    logger.info('Reset all failed sub-workflows', {
+      parentWorkflowId,
+      resetCount: failedEntries.length,
+      earliestResetOrder,
+    });
+
+    return { resetCount: failedEntries.length, earliestResetOrder };
+  } catch (error) {
+    logger.error('Failed to reset failed sub-workflows', error as Error);
+    throw error;
+  }
 }
 
 /**
