@@ -14,6 +14,7 @@ import {
 } from '../sub-workflow-queue.js';
 import { saveWorkflowPlan, updateWorkflowStatus } from '../workflow-state.js';
 import { WorkflowStatus } from '../types.js';
+import { query } from '../database.js';
 
 const router = Router();
 
@@ -354,6 +355,330 @@ router.get('/:id/next-executable', async (req: Request, res: Response): Promise<
     res.status(500).json({
       success: false,
       error: 'Failed to get next executable workflow',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/tree-stats
+ * Get aggregate statistics for the entire workflow tree without loading all data
+ * Supports deep hierarchies (21+ levels) efficiently
+ */
+router.get('/:id/tree-stats', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const workflowId = parseInt(req.params.id, 10);
+
+    // Get total descendants using recursive CTE
+    const descendantsResult = await query<any>(`
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, workflow_type, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.status, w.workflow_type, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT
+        COUNT(*) as total_workflows,
+        MAX(depth) as max_depth,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+        SUM(CASE WHEN status IN ('planning', 'coding', 'testing', 'reviewing', 'documenting', 'running') THEN 1 ELSE 0 END) as in_progress_count
+      FROM workflow_tree
+      WHERE id != ?
+    `, [workflowId, workflowId]);
+
+    // Get level-by-level breakdown
+    const levelBreakdownResult = await query<any>(`
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, workflow_type, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.status, w.workflow_type, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT
+        depth as level,
+        COUNT(*) as count,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+      FROM workflow_tree
+      WHERE depth > 0
+      GROUP BY depth
+      ORDER BY depth
+    `, [workflowId]);
+
+    // Get workflow type distribution
+    const typeDistributionResult = await query<any>(`
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, workflow_type, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.status, w.workflow_type, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT
+        workflow_type as type,
+        COUNT(*) as count
+      FROM workflow_tree
+      WHERE id != ?
+      GROUP BY workflow_type
+      ORDER BY count DESC
+    `, [workflowId, workflowId]);
+
+    const stats = descendantsResult[0] || {
+      total_workflows: 0,
+      max_depth: 0,
+      completed_count: 0,
+      failed_count: 0,
+      pending_count: 0,
+      in_progress_count: 0,
+    };
+
+    const completionPercentage = stats.total_workflows > 0
+      ? Math.round((stats.completed_count / stats.total_workflows) * 100)
+      : 0;
+
+    res.json({
+      success: true,
+      data: {
+        workflowId,
+        totalDescendants: stats.total_workflows,
+        maxDepth: stats.max_depth,
+        statusCounts: {
+          completed: stats.completed_count,
+          failed: stats.failed_count,
+          pending: stats.pending_count,
+          inProgress: stats.in_progress_count,
+        },
+        completionPercentage,
+        levelBreakdown: levelBreakdownResult,
+        typeDistribution: typeDistributionResult,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get tree stats', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get tree stats',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/children
+ * Get paginated direct children of a workflow with hasChildren flag
+ * For lazy loading in tree view
+ */
+router.get('/:id/children', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const parentWorkflowId = parseInt(req.params.id, 10);
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const status = req.query.status as string | undefined;
+
+    let sql = `
+      SELECT
+        w.id,
+        w.workflow_type,
+        w.status,
+        w.task_description,
+        w.target_module,
+        w.execution_order,
+        w.created_at,
+        w.started_at,
+        w.completed_at,
+        (SELECT COUNT(*) FROM workflows c WHERE c.parent_workflow_id = w.id) as child_count
+      FROM workflows w
+      WHERE w.parent_workflow_id = ?
+    `;
+    const params: any[] = [parentWorkflowId];
+
+    if (status) {
+      sql += ' AND w.status = ?';
+      params.push(status);
+    }
+
+    sql += ' ORDER BY w.execution_order ASC, w.created_at ASC';
+    sql += ` LIMIT ${limit} OFFSET ${offset}`;
+
+    const children = await query<any>(sql, params);
+
+    // Get total count
+    let countSql = 'SELECT COUNT(*) as total FROM workflows WHERE parent_workflow_id = ?';
+    const countParams: any[] = [parentWorkflowId];
+    if (status) {
+      countSql += ' AND status = ?';
+      countParams.push(status);
+    }
+    const [countResult] = await query<any>(countSql, countParams);
+
+    // Map results to include hasChildren flag
+    const childrenWithFlags = children.map((child: any) => ({
+      ...child,
+      hasChildren: child.child_count > 0,
+      childCount: child.child_count,
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        children: childrenWithFlags,
+        total: countResult.total,
+        limit,
+        offset,
+        hasMore: offset + limit < countResult.total,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get workflow children', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get workflow children',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/ancestors
+ * Get the ancestor chain (breadcrumb path) from root to this workflow
+ */
+router.get('/:id/ancestors', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const workflowId = parseInt(req.params.id, 10);
+
+    // Use recursive CTE to get all ancestors
+    const ancestorsResult = await query<any>(`
+      WITH RECURSIVE ancestor_tree AS (
+        SELECT id, parent_workflow_id, workflow_type, status, task_description, target_module, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.workflow_type, w.status, w.task_description, w.target_module, at.depth + 1
+        FROM workflows w
+        INNER JOIN ancestor_tree at ON w.id = at.parent_workflow_id
+      )
+      SELECT id, parent_workflow_id, workflow_type, status, task_description, target_module, depth
+      FROM ancestor_tree
+      ORDER BY depth DESC
+    `, [workflowId]);
+
+    res.json({
+      success: true,
+      data: {
+        ancestors: ancestorsResult,
+        depth: ancestorsResult.length > 0 ? ancestorsResult.length - 1 : 0,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get workflow ancestors', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get workflow ancestors',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/search
+ * Search within a workflow tree by workflow ID, status, or module name
+ */
+router.get('/:id/search', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rootWorkflowId = parseInt(req.params.id, 10);
+    const searchQuery = req.query.q as string;
+    const statusFilter = req.query.status as string | undefined;
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    if (!searchQuery && !statusFilter) {
+      res.status(400).json({
+        success: false,
+        error: 'Either q (search query) or status filter is required',
+      });
+      return;
+    }
+
+    // Search within the tree using recursive CTE
+    let sql = `
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, workflow_type, status, task_description, target_module, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.workflow_type, w.status, w.task_description, w.target_module, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT id, parent_workflow_id, workflow_type, status, task_description, target_module, depth
+      FROM workflow_tree
+      WHERE id != ?
+    `;
+    const params: any[] = [rootWorkflowId, rootWorkflowId];
+
+    const conditions: string[] = [];
+
+    if (searchQuery) {
+      // Check if it's a numeric ID search
+      const numericQuery = parseInt(searchQuery, 10);
+      if (!isNaN(numericQuery)) {
+        conditions.push('id = ?');
+        params.push(numericQuery);
+      } else {
+        // Search by module name or task description
+        conditions.push('(target_module LIKE ? OR task_description LIKE ?)');
+        params.push(`%${searchQuery}%`, `%${searchQuery}%`);
+      }
+    }
+
+    if (statusFilter) {
+      conditions.push('status = ?');
+      params.push(statusFilter);
+    }
+
+    if (conditions.length > 0) {
+      sql += ' AND (' + conditions.join(' OR ') + ')';
+    }
+
+    sql += ' ORDER BY depth ASC, id ASC';
+    sql += ` LIMIT ${limit}`;
+
+    const results = await query<any>(sql, params);
+
+    res.json({
+      success: true,
+      data: {
+        results,
+        count: results.length,
+        query: searchQuery,
+        statusFilter,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to search workflow tree', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to search workflow tree',
       message: (error as Error).message,
     });
   }

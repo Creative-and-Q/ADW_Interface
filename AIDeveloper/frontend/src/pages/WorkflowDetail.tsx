@@ -20,6 +20,7 @@ import AgentExecutionTimeline from '../components/AgentExecutionTimeline';
 import ArtifactsList from '../components/ArtifactsList';
 import ExecutionLogs from '../components/ExecutionLogs';
 import WorkflowHierarchyTree from '../components/WorkflowHierarchyTree';
+import WorkflowTreeExplorer from '../components/WorkflowTreeExplorer';
 
 type ViewMode = 'overview' | 'timeline';
 
@@ -348,32 +349,42 @@ export default function WorkflowDetail() {
         </button>
       </div>
 
-      {/* Sub-Workflows Hierarchy Tree - Always visible when present */}
+      {/* Sub-Workflows Hierarchy - Use Tree Explorer for large/deep hierarchies */}
       {subWorkflows && subWorkflows.length > 0 && (
-        <WorkflowHierarchyTree
-          parentWorkflow={{
-            id: workflow.id,
-            type: workflow.workflow_type,
-            status: workflow.status,
-            createdAt: workflow.created_at,
-            completedAt: workflow.completed_at,
-            task_description: taskDescription,
-            target_module: workflow.target_module,
-          }}
-          subWorkflows={subWorkflows.map((sw: any) => ({
-            id: sw.id,
-            type: sw.workflow_type,
-            status: sw.status,
-            executionOrder: sw.execution_order,
-            createdAt: sw.created_at,
-            completedAt: sw.completed_at,
-            task_description: sw.task_description,
-            target_module: sw.target_module,
-            sub_workflow_count: sw.sub_workflow_count,
-          }))}
-          queueStatus={queueStatus}
-          className="mb-6"
-        />
+        <>
+          {/* Use WorkflowTreeExplorer for workflows with many children or deep hierarchies */}
+          {(subWorkflows.length > 50 || subWorkflows.some((sw: any) => sw.sub_workflow_count > 0)) ? (
+            <WorkflowTreeExplorer
+              workflowId={workflow.id}
+              className="mb-6"
+            />
+          ) : (
+            <WorkflowHierarchyTree
+              parentWorkflow={{
+                id: workflow.id,
+                type: workflow.workflow_type,
+                status: workflow.status,
+                createdAt: workflow.created_at,
+                completedAt: workflow.completed_at,
+                task_description: taskDescription,
+                target_module: workflow.target_module,
+              }}
+              subWorkflows={subWorkflows.map((sw: any) => ({
+                id: sw.id,
+                type: sw.workflow_type,
+                status: sw.status,
+                executionOrder: sw.execution_order,
+                createdAt: sw.created_at,
+                completedAt: sw.completed_at,
+                task_description: sw.task_description,
+                target_module: sw.target_module,
+                sub_workflow_count: sw.sub_workflow_count,
+              }))}
+              queueStatus={queueStatus}
+              className="mb-6"
+            />
+          )}
+        </>
       )}
 
       {/* Content based on view mode */}
