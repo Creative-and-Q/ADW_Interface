@@ -10,11 +10,12 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
-dotenv.config();
 const execAsync = promisify(exec);
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Load .env from the agent's own directory (not cwd)
+dotenv.config({ path: path.join(__dirname, '.env') });
 /**
  * CodingAgent
  */
@@ -105,6 +106,36 @@ export class CodingAgent {
                 });
                 toolResults.push(...executed);
             }
+            // BUILD VERIFICATION: Run TypeScript type-check after code changes
+            console.log('CodingAgent: Running build verification...');
+            const buildVerification = await this.verifyBuild(input.workingDir);
+            if (!buildVerification.success) {
+                console.error('CodingAgent: Build verification FAILED');
+                return {
+                    success: false,
+                    artifacts: [{
+                            type: 'code',
+                            content: allResponses.join('\n\n---\n\n'),
+                            metadata: {
+                                workflowId: input.workflowId,
+                                iterations,
+                                toolsExecuted: toolResults.length,
+                                buildError: buildVerification.error,
+                            },
+                        }],
+                    summary: `CodingAgent wrote files but BUILD FAILED: ${buildVerification.error}`,
+                    requiresRetry: true,
+                    retryReason: `Build verification failed: ${buildVerification.error}`,
+                    metadata: {
+                        workflowId: input.workflowId,
+                        iterations,
+                        toolsExecuted: toolResults.length,
+                        buildVerification: 'FAILED',
+                        buildError: buildVerification.error,
+                    },
+                };
+            }
+            console.log('CodingAgent: Build verification PASSED');
             // Parse and return response
             return {
                 success: true,
@@ -115,13 +146,15 @@ export class CodingAgent {
                             workflowId: input.workflowId,
                             iterations,
                             toolsExecuted: toolResults.length,
+                            buildVerification: 'PASSED',
                         },
                     }],
-                summary: `Implemented code changes for workflow ${input.workflowId} (${iterations} iterations, ${toolResults.length} tools executed)`,
+                summary: `Implemented code changes for workflow ${input.workflowId} (${iterations} iterations, ${toolResults.length} tools executed) - Build verified`,
                 metadata: {
                     workflowId: input.workflowId,
                     iterations,
                     toolsExecuted: toolResults.length,
+                    buildVerification: 'PASSED',
                 },
             };
         }
@@ -603,6 +636,99 @@ When finished, say: "IMPLEMENTATION COMPLETE"
         catch (error) {
             throw new Error(`Failed to execute tool ${toolName}: ${error.message}`);
         }
+    }
+    /**
+     * Verify build by running TypeScript compilation check
+     * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
+     */
+    async verifyBuild(workingDir) {
+        const results = [];
+        let hasError = false;
+        // Check 1: Root tsconfig.json (backend code)
+        try {
+            const rootTsconfig = path.join(workingDir, 'tsconfig.json');
+            await fs.access(rootTsconfig);
+            console.log('CodingAgent: Found root tsconfig.json, running tsc --noEmit...');
+            try {
+                const { stdout } = await execAsync('npx tsc --noEmit', {
+                    cwd: workingDir,
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+                results.push('Root TypeScript: OK');
+                if (stdout)
+                    console.log('tsc stdout:', stdout.substring(0, 500));
+            }
+            catch (tscError) {
+                hasError = true;
+                const errorOutput = tscError.stdout || tscError.stderr || tscError.message;
+                results.push(`Root TypeScript FAILED:\n${errorOutput}`);
+                console.error('Root tsc error:', errorOutput.substring(0, 1000));
+            }
+        }
+        catch {
+            // No root tsconfig.json - skip
+            console.log('CodingAgent: No root tsconfig.json found, skipping root check');
+        }
+        // Check 2: Frontend tsconfig.json (if exists)
+        try {
+            const frontendTsconfig = path.join(workingDir, 'frontend', 'tsconfig.json');
+            await fs.access(frontendTsconfig);
+            console.log('CodingAgent: Found frontend/tsconfig.json, running tsc --noEmit...');
+            try {
+                const { stdout } = await execAsync('npx tsc --noEmit', {
+                    cwd: path.join(workingDir, 'frontend'),
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+                results.push('Frontend TypeScript: OK');
+                if (stdout)
+                    console.log('frontend tsc stdout:', stdout.substring(0, 500));
+            }
+            catch (tscError) {
+                hasError = true;
+                const errorOutput = tscError.stdout || tscError.stderr || tscError.message;
+                results.push(`Frontend TypeScript FAILED:\n${errorOutput}`);
+                console.error('Frontend tsc error:', errorOutput.substring(0, 1000));
+            }
+        }
+        catch {
+            // No frontend tsconfig.json - skip
+            console.log('CodingAgent: No frontend/tsconfig.json found, skipping frontend check');
+        }
+        // Check 3: Try npm run build if package.json has build script
+        try {
+            const packageJsonPath = path.join(workingDir, 'package.json');
+            const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+            if (packageJson.scripts?.build) {
+                console.log('CodingAgent: Found build script, running npm run build...');
+                try {
+                    const { stdout } = await execAsync('npm run build', {
+                        cwd: workingDir,
+                        maxBuffer: 10 * 1024 * 1024,
+                    });
+                    results.push('npm run build: OK');
+                    if (stdout)
+                        console.log('npm build stdout:', stdout.substring(0, 500));
+                }
+                catch (buildError) {
+                    hasError = true;
+                    const errorOutput = buildError.stdout || buildError.stderr || buildError.message;
+                    results.push(`npm run build FAILED:\n${errorOutput}`);
+                    console.error('npm build error:', errorOutput.substring(0, 1000));
+                }
+            }
+        }
+        catch {
+            // No package.json or can't parse - skip
+        }
+        // If no checks were performed (no tsconfig files), assume success
+        if (results.length === 0) {
+            console.log('CodingAgent: No TypeScript config found, skipping build verification');
+            return { success: true };
+        }
+        return {
+            success: !hasError,
+            error: hasError ? results.join('\n\n') : undefined,
+        };
     }
 }
 export default CodingAgent;

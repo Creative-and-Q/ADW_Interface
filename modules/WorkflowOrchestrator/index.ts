@@ -221,9 +221,23 @@ export class WorkflowOrchestrator {
             artifactsCount: agentOutput.artifacts.length,
           });
 
-          // After code agent completes, verify build succeeds
+          // After code agent completes, verify build succeeds and auto-commit
           if (agentType === 'code') {
             const buildResult = await this.verifyBuild(codeWorkingDir, input.workflowId);
+
+            // Auto-commit changes if build succeeds
+            if (buildResult.success) {
+              const commitResult = await this.autoCommitChanges(
+                codeWorkingDir,
+                input.workflowId,
+                input.taskDescription || `Workflow #${input.workflowId} changes`
+              );
+              if (commitResult.committed) {
+                allSummaries.push(`auto_commit: Committed changes (${commitResult.hash})`);
+                await this.logWorkflow(input.workflowId, 'info', 'auto_commit_success',
+                  `Auto-committed changes: ${commitResult.hash}`, { commitHash: commitResult.hash });
+              }
+            }
             if (!buildResult.success) {
               // Track retry attempts
               const retryCount = (input.metadata?.buildRetryCount || 0);
@@ -287,6 +301,14 @@ export class WorkflowOrchestrator {
 
       // Check for structured plan and create sub-workflows if present
       await this.handleSubWorkflowCreation(input.workflowId, allArtifacts);
+
+      // Auto-push if this is a root workflow (no parent) and workflow succeeded
+      if (!hasFailedAgent && !input.metadata?.parentWorkflowId) {
+        const pushResult = await this.autoPushChanges(codeWorkingDir, input.workflowId, input.branchName);
+        if (pushResult.pushed) {
+          allSummaries.push('auto_push: Pushed changes to remote');
+        }
+      }
 
       return {
         success: !hasFailedAgent,
@@ -954,6 +976,90 @@ export class WorkflowOrchestrator {
 
       await this.logWorkflow(parentWorkflowId, 'error', 'workflow_continuation_failed',
         `Failed to continue workflow: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Auto-commit changes after CodingAgent completes
+   */
+  private async autoCommitChanges(
+    workingDir: string,
+    workflowId: number,
+    taskDescription: string
+  ): Promise<{ committed: boolean; hash?: string; error?: string }> {
+    try {
+      // Check if there are changes to commit
+      const { stdout: statusOutput } = await execAsync('git status --porcelain', { cwd: workingDir });
+
+      if (!statusOutput.trim()) {
+        console.log('WorkflowOrchestrator: No changes to commit');
+        return { committed: false };
+      }
+
+      // Stage all changes
+      await execAsync('git add -A', { cwd: workingDir });
+
+      // Create commit message
+      const shortDesc = taskDescription.length > 50
+        ? taskDescription.substring(0, 47) + '...'
+        : taskDescription;
+      const commitMessage = `Workflow #${workflowId}: ${shortDesc}\n\nAuto-committed by WorkflowOrchestrator`;
+
+      // Commit changes
+      await execAsync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { cwd: workingDir });
+
+      // Get commit hash
+      const { stdout: hashOutput } = await execAsync('git rev-parse --short HEAD', { cwd: workingDir });
+      const hash = hashOutput.trim();
+
+      console.log(`WorkflowOrchestrator: Auto-committed changes: ${hash}`);
+      return { committed: true, hash };
+    } catch (error: any) {
+      console.error('WorkflowOrchestrator: Auto-commit failed:', error.message);
+      return { committed: false, error: error.message };
+    }
+  }
+
+  /**
+   * Auto-push changes to remote (called when root workflow completes)
+   */
+  private async autoPushChanges(
+    workingDir: string,
+    workflowId: number,
+    branchName?: string
+  ): Promise<{ pushed: boolean; error?: string }> {
+    try {
+      // Get current branch if not specified
+      const branch = branchName || (await execAsync('git branch --show-current', { cwd: workingDir })).stdout.trim();
+
+      if (!branch) {
+        return { pushed: false, error: 'Could not determine current branch' };
+      }
+
+      // Check if there are commits to push
+      try {
+        const { stdout: localRef } = await execAsync('git rev-parse HEAD', { cwd: workingDir });
+        const { stdout: remoteRef } = await execAsync(`git rev-parse origin/${branch}`, { cwd: workingDir });
+
+        if (localRef.trim() === remoteRef.trim()) {
+          console.log('WorkflowOrchestrator: Already up to date with remote');
+          return { pushed: false };
+        }
+      } catch {
+        // Remote branch may not exist yet, which is fine
+      }
+
+      // Push to remote
+      await execAsync(`git push origin ${branch}`, { cwd: workingDir, timeout: 60000 });
+
+      console.log(`WorkflowOrchestrator: Pushed to origin/${branch}`);
+      await this.logWorkflow(workflowId, 'info', 'auto_push_success', `Pushed to origin/${branch}`);
+
+      return { pushed: true };
+    } catch (error: any) {
+      console.error('WorkflowOrchestrator: Auto-push failed:', error.message);
+      await this.logWorkflow(workflowId, 'warn', 'auto_push_failed', `Push failed: ${error.message}`);
+      return { pushed: false, error: error.message };
     }
   }
 

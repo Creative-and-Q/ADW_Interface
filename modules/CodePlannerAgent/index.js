@@ -12,11 +12,12 @@ import path from 'path';
 import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { ScreenshotManager, formatImageForVision, createScreenshotArtifact, } from 'screenshot-tools';
-dotenv.config();
 const execAsync = promisify(exec);
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Load .env from the agent's own directory (not cwd)
+dotenv.config({ path: path.join(__dirname, '.env') });
 /**
  * CodePlannerAgent
  */

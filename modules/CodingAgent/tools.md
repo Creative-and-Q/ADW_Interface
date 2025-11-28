@@ -99,5 +99,93 @@ Copies a file from the source path to the destination path. The destination dire
 - Cannot access files outside the working directory
 - Cannot delete files (use write-file.sh to overwrite with empty content if needed)
 
+## Git Tools
+
+### git-status.sh
+
+Shows the current git status of the working directory.
+
+**Parameters:** None
+
+**Example:**
+```bash
+./tools/git-status.sh
+```
+
+**Description:**
+Returns modified, staged, and untracked files in porcelain format. Use this to check what has changed before committing.
+
+### git-add.sh
+
+Stages files for commit.
+
+**Parameters:**
+- `file_pattern` - (Optional) File or pattern to stage. Defaults to "." (all changes)
+
+**Example:**
+```bash
+./tools/git-add.sh "src/components/Button.tsx"
+./tools/git-add.sh "."
+```
+
+**Description:**
+Stages files for the next commit. Use "." to stage all changes.
+
+### git-commit.sh
+
+Commits staged changes.
+
+**Parameters:**
+- `message` - Commit message (required)
+
+**Example:**
+```bash
+./tools/git-commit.sh "feat: add new Button component"
+```
+
+**Description:**
+Creates a commit with the staged changes. Returns the commit hash on success.
+
+### git-diff.sh
+
+Shows changes in the working directory.
+
+**Parameters:**
+- `file_path` - (Optional) Specific file to show diff for
+
+**Example:**
+```bash
+./tools/git-diff.sh
+./tools/git-diff.sh "src/components/Button.tsx"
+```
+
+**Description:**
+Shows a summary of unstaged and staged changes. Useful for reviewing changes before committing.
+
+### git-push.sh
+
+Pushes commits to remote repository.
+
+**Parameters:**
+- `remote` - (Optional) Remote name, defaults to "origin"
+- `branch` - (Optional) Branch name, defaults to current branch
+
+**Example:**
+```bash
+./tools/git-push.sh
+./tools/git-push.sh "origin" "feature-branch"
+```
+
+**Description:**
+Pushes local commits to the remote repository.
+
+## Git Permissions
+
+- ✅ Check git status
+- ✅ Stage files
+- ✅ Commit changes
+- ✅ View diffs
+- ✅ Push to remote
+
 
 

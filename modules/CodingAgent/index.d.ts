@@ -91,6 +91,11 @@ export declare class CodingAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
+    /**
+     * Verify build by running TypeScript compilation check
+     * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
+     */
+    private verifyBuild;
 }
 export default CodingAgent;
 //# sourceMappingURL=index.d.ts.map
