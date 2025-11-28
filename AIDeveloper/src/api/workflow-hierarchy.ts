@@ -684,5 +684,115 @@ router.get('/:id/search', async (req: Request, res: Response): Promise<void> => 
   }
 });
 
+/**
+ * GET /api/workflows/:id/full-tree
+ * Get the complete workflow tree structure recursively (limited to prevent memory issues)
+ * This endpoint fetches all descendants in a nested structure for visualization
+ */
+router.get('/:id/full-tree', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const rootWorkflowId = parseInt(req.params.id, 10);
+    const maxDepth = parseInt(req.query.maxDepth as string) || 10;
+    const maxNodes = parseInt(req.query.maxNodes as string) || 5000;
+
+    // First, get total count to check if we should proceed
+    const countResult = await query<any>(`
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+        WHERE wt.depth < ?
+      )
+      SELECT COUNT(*) as total FROM workflow_tree
+    `, [rootWorkflowId, maxDepth]);
+
+    const totalCount = countResult[0]?.total || 0;
+
+    if (totalCount > maxNodes) {
+      res.json({
+        success: false,
+        error: `Tree too large (${totalCount} nodes). Use lazy loading instead or increase maxNodes parameter.`,
+        data: {
+          totalNodes: totalCount,
+          maxNodes,
+          suggestion: 'Use /children endpoint with pagination for large trees',
+        },
+      });
+      return;
+    }
+
+    // Fetch all workflows in the tree
+    const allWorkflows = await query<any>(`
+      WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, workflow_type, status, task_description, target_module,
+               execution_order, created_at, started_at, completed_at, 0 as depth
+        FROM workflows
+        WHERE id = ?
+
+        UNION ALL
+
+        SELECT w.id, w.parent_workflow_id, w.workflow_type, w.status, w.task_description, w.target_module,
+               w.execution_order, w.created_at, w.started_at, w.completed_at, wt.depth + 1
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+        WHERE wt.depth < ?
+      )
+      SELECT * FROM workflow_tree
+      ORDER BY depth ASC, execution_order ASC, created_at ASC
+    `, [rootWorkflowId, maxDepth]);
+
+    // Build nested tree structure
+    const workflowMap = new Map<number, any>();
+
+    // First pass: create map and initialize children arrays
+    for (const workflow of allWorkflows) {
+      workflowMap.set(workflow.id, {
+        ...workflow,
+        children: [],
+      });
+    }
+
+    // Second pass: build tree structure
+    let root: any = null;
+    for (const workflow of allWorkflows) {
+      const node = workflowMap.get(workflow.id);
+      if (workflow.id === rootWorkflowId) {
+        root = node;
+      } else if (workflow.parent_workflow_id && workflowMap.has(workflow.parent_workflow_id)) {
+        const parent = workflowMap.get(workflow.parent_workflow_id);
+        parent.children.push(node);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        tree: root,
+        totalNodes: totalCount,
+        maxDepth: Math.max(...allWorkflows.map((w: any) => w.depth)),
+        statusSummary: {
+          completed: allWorkflows.filter((w: any) => w.status === 'completed').length,
+          failed: allWorkflows.filter((w: any) => w.status === 'failed').length,
+          pending: allWorkflows.filter((w: any) => w.status === 'pending').length,
+          inProgress: allWorkflows.filter((w: any) => ['planning', 'coding', 'testing', 'running'].includes(w.status)).length,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get full workflow tree', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get full workflow tree',
+      message: (error as Error).message,
+    });
+  }
+});
+
 export default router;
 

@@ -16,8 +16,13 @@ import {
   FolderTree,
   Home,
   RefreshCw,
+  Expand,
+  List,
+  TreePine,
 } from 'lucide-react';
 import clsx from 'clsx';
+
+type ViewMode = 'lazy' | 'full';
 
 interface TreeStats {
   workflowId: number;
@@ -65,6 +70,21 @@ interface Ancestor {
   task_description?: string;
   target_module?: string;
   depth: number;
+}
+
+interface FullTreeNode {
+  id: number;
+  parent_workflow_id: number | null;
+  workflow_type: string;
+  status: string;
+  task_description?: string;
+  target_module?: string;
+  execution_order: number;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  depth: number;
+  children: FullTreeNode[];
 }
 
 interface WorkflowTreeExplorerProps {
@@ -454,6 +474,136 @@ function BreadcrumbNav({
   );
 }
 
+// Recursive full tree node component (shows all at once)
+function FullTreeNodeView({
+  node,
+  depth = 0,
+  isLast = false,
+  collapsedNodes,
+  toggleCollapse,
+}: {
+  node: FullTreeNode;
+  depth?: number;
+  isLast?: boolean;
+  collapsedNodes: Set<number>;
+  toggleCollapse: (id: number) => void;
+}) {
+  const config = getStatusConfig(node.status);
+  const StatusIcon = config.icon;
+  const isRunning = node.status === 'running' || node.status === 'in_progress' || node.status === 'planning';
+  const hasChildren = node.children && node.children.length > 0;
+  const isCollapsed = collapsedNodes.has(node.id);
+
+  return (
+    <div className="relative">
+      {/* Vertical line from parent */}
+      {depth > 0 && (
+        <div
+          className={clsx(
+            'absolute left-4 w-0.5 bg-gray-300',
+            isLast ? 'h-5' : 'h-full'
+          )}
+          style={{ top: '-8px' }}
+        />
+      )}
+
+      {/* Horizontal connector line */}
+      {depth > 0 && (
+        <div className="absolute left-4 top-5 w-3 h-0.5 bg-gray-300" />
+      )}
+
+      {/* Node content - compact version */}
+      <div className={clsx('relative', depth > 0 && 'ml-7')}>
+        <div
+          className={clsx(
+            'rounded border p-2 transition-all hover:shadow-sm flex items-center gap-2',
+            config.borderColor,
+            config.lightBg,
+            isRunning && 'ring-1 ring-blue-300'
+          )}
+        >
+          {/* Expand/collapse button for nodes with children */}
+          {hasChildren ? (
+            <button
+              onClick={() => toggleCollapse(node.id)}
+              className="flex-shrink-0 p-0.5 hover:bg-white rounded"
+            >
+              {isCollapsed ? (
+                <ChevronRight className="h-3 w-3 text-gray-400" />
+              ) : (
+                <ChevronDown className="h-3 w-3 text-gray-400" />
+              )}
+            </button>
+          ) : (
+            <div className="w-4" />
+          )}
+
+          {/* Status indicator */}
+          <div
+            className={clsx(
+              'w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0',
+              config.bgColor,
+              isRunning && 'animate-pulse'
+            )}
+          >
+            <StatusIcon className="h-3 w-3 text-white" />
+          </div>
+
+          {/* Content */}
+          <Link
+            to={`/workflows/${node.id}`}
+            className="flex-1 min-w-0 hover:underline flex items-center gap-2 flex-wrap"
+          >
+            <span className="text-xs font-mono bg-white px-1 py-0.5 rounded border border-gray-200">
+              #{node.id}
+            </span>
+            <span
+              className={clsx(
+                'text-xs font-semibold uppercase px-1 py-0.5 rounded',
+                config.lightBg,
+                config.color
+              )}
+            >
+              {node.workflow_type}
+            </span>
+            {node.target_module && (
+              <span className="text-xs text-gray-500 bg-gray-100 px-1 py-0.5 rounded truncate max-w-[120px]">
+                {node.target_module}
+              </span>
+            )}
+            {hasChildren && (
+              <span className="text-xs text-purple-600 bg-purple-50 px-1 py-0.5 rounded">
+                {node.children.length}
+              </span>
+            )}
+          </Link>
+
+          {/* Depth indicator */}
+          <span className="text-xs text-gray-400 flex-shrink-0">
+            L{node.depth}
+          </span>
+        </div>
+
+        {/* Children - recursively render */}
+        {hasChildren && !isCollapsed && (
+          <div className="mt-1 space-y-1">
+            {node.children.map((child, index) => (
+              <FullTreeNodeView
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                isLast={index === node.children.length - 1}
+                collapsedNodes={collapsedNodes}
+                toggleCollapse={toggleCollapse}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function WorkflowTreeExplorer({
   workflowId,
   className = '',
@@ -467,6 +617,42 @@ export default function WorkflowTreeExplorer({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
+
+  // Full tree view mode
+  const [viewMode, setViewMode] = useState<ViewMode>('lazy');
+  const [fullTree, setFullTree] = useState<FullTreeNode | null>(null);
+  const [loadingFullTree, setLoadingFullTree] = useState(false);
+  const [fullTreeError, setFullTreeError] = useState<string | null>(null);
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(new Set());
+
+  const toggleCollapse = useCallback((id: number) => {
+    setCollapsedNodes(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const collapseAll = useCallback(() => {
+    if (!fullTree) return;
+    const allIds = new Set<number>();
+    const collectIds = (node: FullTreeNode) => {
+      if (node.children && node.children.length > 0) {
+        allIds.add(node.id);
+        node.children.forEach(collectIds);
+      }
+    };
+    collectIds(fullTree);
+    setCollapsedNodes(allIds);
+  }, [fullTree]);
+
+  const expandAll = useCallback(() => {
+    setCollapsedNodes(new Set());
+  }, []);
 
   const loadStats = useCallback(async () => {
     try {
@@ -508,6 +694,26 @@ export default function WorkflowTreeExplorer({
       }
     } catch (error) {
       console.error('Failed to load ancestors:', error);
+    }
+  }, [workflowId]);
+
+  const loadFullTree = useCallback(async () => {
+    setLoadingFullTree(true);
+    setFullTreeError(null);
+    try {
+      const response = await fetch(`/api/workflows/${workflowId}/full-tree?maxDepth=25&maxNodes=10000`);
+      const result = await response.json();
+      if (result.success) {
+        setFullTree(result.data.tree);
+        setViewMode('full');
+      } else {
+        setFullTreeError(result.error || 'Failed to load full tree');
+      }
+    } catch (error) {
+      console.error('Failed to load full tree:', error);
+      setFullTreeError('Failed to load full tree');
+    } finally {
+      setLoadingFullTree(false);
     }
   }, [workflowId]);
 
@@ -571,12 +777,53 @@ export default function WorkflowTreeExplorer({
             </div>
           </div>
 
-          {stats && (
-            <div className="text-right">
-              <div className="text-2xl font-bold text-white">{stats.completionPercentage}%</div>
-              <div className="text-xs text-indigo-200">Complete</div>
+          <div className="flex items-center gap-4">
+            {/* View Mode Toggle */}
+            <div className="flex bg-white/10 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode('lazy')}
+                className={clsx(
+                  'px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1',
+                  viewMode === 'lazy'
+                    ? 'bg-white text-indigo-600'
+                    : 'text-white/80 hover:text-white'
+                )}
+              >
+                <List className="h-4 w-4" />
+                Lazy
+              </button>
+              <button
+                onClick={() => {
+                  if (!fullTree && !loadingFullTree) {
+                    loadFullTree();
+                  } else {
+                    setViewMode('full');
+                  }
+                }}
+                disabled={loadingFullTree}
+                className={clsx(
+                  'px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1',
+                  viewMode === 'full'
+                    ? 'bg-white text-indigo-600'
+                    : 'text-white/80 hover:text-white'
+                )}
+              >
+                {loadingFullTree ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <TreePine className="h-4 w-4" />
+                )}
+                Full Tree
+              </button>
             </div>
-          )}
+
+            {stats && (
+              <div className="text-right">
+                <div className="text-2xl font-bold text-white">{stats.completionPercentage}%</div>
+                <div className="text-xs text-indigo-200">Complete</div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -644,28 +891,96 @@ export default function WorkflowTreeExplorer({
               </div>
             )}
 
-            {/* Tree */}
-            <div className="space-y-2">
-              {children.map((child, index) => (
-                <LazyTreeNode
-                  key={child.id}
-                  workflowId={workflowId}
-                  child={child}
-                  depth={0}
-                  isLast={index === children.length - 1 && !hasMore}
-                />
-              ))}
+            {/* Tree - conditional rendering based on view mode */}
+            {viewMode === 'lazy' ? (
+              <div className="space-y-2">
+                {children.map((child, index) => (
+                  <LazyTreeNode
+                    key={child.id}
+                    workflowId={workflowId}
+                    child={child}
+                    depth={0}
+                    isLast={index === children.length - 1 && !hasMore}
+                  />
+                ))}
 
-              {hasMore && (
-                <button
-                  onClick={() => loadChildren(false)}
-                  className="w-full py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-600 flex items-center justify-center gap-2"
-                >
-                  <ChevronDown className="h-4 w-4" />
-                  Load more workflows
-                </button>
-              )}
-            </div>
+                {hasMore && (
+                  <button
+                    onClick={() => loadChildren(false)}
+                    className="w-full py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-600 flex items-center justify-center gap-2"
+                  >
+                    <ChevronDown className="h-4 w-4" />
+                    Load more workflows
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div>
+                {/* Full tree controls */}
+                {fullTree && (
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      onClick={expandAll}
+                      className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center gap-1"
+                    >
+                      <Expand className="h-3 w-3" />
+                      Expand All
+                    </button>
+                    <button
+                      onClick={collapseAll}
+                      className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center gap-1"
+                    >
+                      <ChevronRight className="h-3 w-3" />
+                      Collapse All
+                    </button>
+                    <button
+                      onClick={loadFullTree}
+                      disabled={loadingFullTree}
+                      className="px-3 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center gap-1"
+                    >
+                      <RefreshCw className={clsx('h-3 w-3', loadingFullTree && 'animate-spin')} />
+                      Refresh
+                    </button>
+                  </div>
+                )}
+
+                {/* Error state */}
+                {fullTreeError && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-700">{fullTreeError}</p>
+                    <p className="text-xs text-red-500 mt-1">Try using Lazy mode for large trees.</p>
+                  </div>
+                )}
+
+                {/* Loading state */}
+                {loadingFullTree && (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-8 w-8 text-indigo-500 animate-spin" />
+                    <span className="ml-3 text-gray-500">Loading full tree...</span>
+                  </div>
+                )}
+
+                {/* Full tree view */}
+                {fullTree && !loadingFullTree && (
+                  <div className="space-y-1 max-h-[600px] overflow-y-auto pr-2">
+                    {fullTree.children && fullTree.children.length > 0 ? (
+                      fullTree.children.map((child, index) => (
+                        <FullTreeNodeView
+                          key={child.id}
+                          node={child}
+                          depth={0}
+                          isLast={index === fullTree.children.length - 1}
+                          collapsedNodes={collapsedNodes}
+                          toggleCollapse={toggleCollapse}
+                        />
+                      ))
+                    ) : (
+                      <p className="text-gray-500 text-sm py-4 text-center">No sub-workflows found</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Stats sidebar */}
@@ -679,7 +994,9 @@ export default function WorkflowTreeExplorer({
       <div className="bg-gray-50 px-6 py-3 border-t border-gray-200">
         <p className="text-xs text-gray-500 flex items-center gap-2">
           <GitBranch className="h-4 w-4" />
-          Click expand arrows to lazy-load children. Click workflow IDs to navigate.
+          {viewMode === 'lazy'
+            ? 'Click expand arrows to lazy-load children. Click workflow IDs to navigate.'
+            : 'Full tree view loaded. Use Expand/Collapse All to navigate. Click workflow IDs to view details.'}
         </p>
       </div>
     </div>
