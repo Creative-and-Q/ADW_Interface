@@ -1042,15 +1042,104 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
     }
 
     // No sub-workflows - this is a leaf workflow
-    // For now, we can't resume leaf workflows without more context
-    // In the future, this could re-run the WorkflowOrchestrator from a checkpoint
-    logger.warn('Workflow has no sub-workflows, resume not supported for leaf workflows yet', { workflowId: id });
+    // Re-run the WorkflowOrchestrator for this workflow
+    logger.info('Resuming leaf workflow by re-executing', { workflowId: id, type: workflow.type });
 
-    return res.status(501).json({
-      success: false,
-      error: 'Resume not supported for this workflow type',
-      message: 'This workflow has no sub-workflows. Leaf workflow resume is not yet implemented.',
+    // Reset workflow status to pending
+    await updateWorkflowStatus(id, WorkflowStatus.PENDING);
+
+    // Reset any failed agents for this workflow
+    await query(
+      `UPDATE agent_executions
+       SET status = 'pending', error_message = NULL, completed_at = NULL
+       WHERE workflow_id = ? AND status = 'failed'`,
+      [id]
+    );
+
+    // If this is a sub-workflow, update its queue entry status
+    if (workflow.parentWorkflowId) {
+      const { updateSubWorkflowStatus } = await import('./sub-workflow-queue.js');
+      await updateSubWorkflowStatus(id, 'pending');
+    }
+
+    // Send response immediately
+    res.json({
+      success: true,
+      message: `Leaf workflow ${id} resumed`,
+      data: {
+        workflowId: id,
+        type: workflow.type,
+        targetModule: workflow.target_module,
+      },
     });
+
+    // Execute asynchronously
+    (async () => {
+      try {
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+
+        const targetModule = workflow.target_module;
+        const workflowDir = targetModule
+          ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+          : getWorkflowDirectory(id, workflow.branchName || 'master');
+
+        await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
+
+        const orchestrator = new WorkflowOrchestrator();
+        const payload = typeof workflow.payload === 'string'
+          ? JSON.parse(workflow.payload)
+          : workflow.payload;
+
+        const result = await orchestrator.execute({
+          workflowId: id,
+          workflowType: workflow.type,
+          targetModule: workflow.target_module,
+          taskDescription: payload?.taskDescription || payload?.title || '',
+          workingDir: workflowDir,
+          metadata: payload?.metadata || {},
+        });
+
+        const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+        await updateWorkflowStatus(id, finalStatus);
+
+        // If this is a sub-workflow, update its queue entry status and advance the parent queue
+        if (workflow.parentWorkflowId) {
+          const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+          await updateSubWorkflowStatus(id, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+
+          // If successful, try to advance the parent queue to continue execution
+          if (result.success) {
+            const nextWorkflowId = await advanceSubWorkflowQueue(workflow.parentWorkflowId);
+            if (nextWorkflowId) {
+              logger.info('Advanced parent queue after leaf workflow resume', {
+                parentWorkflowId: workflow.parentWorkflowId,
+                nextWorkflowId,
+              });
+            }
+          }
+        }
+
+        logger.info('Leaf workflow resume completed', {
+          workflowId: id,
+          status: finalStatus,
+          success: result.success,
+        });
+      } catch (asyncError) {
+        logger.error('Leaf workflow resume execution failed', asyncError as Error, { workflowId: id });
+        await updateWorkflowStatus(id, WorkflowStatus.FAILED);
+
+        if (workflow.parentWorkflowId) {
+          const { updateSubWorkflowStatus } = await import('./sub-workflow-queue.js');
+          await updateSubWorkflowStatus(id, 'failed', (asyncError as Error).message);
+        }
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in leaf workflow resume', error as Error);
+    });
+
+    return;
   } catch (error) {
     logger.error('Failed to start workflow resume', error as Error);
     return res.status(500).json({ error: 'Failed to resume workflow' });
