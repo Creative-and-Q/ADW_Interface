@@ -134,7 +134,25 @@ router.get('/workflows', async (req: Request, res: Response) => {
 
     sql += ` ORDER BY w.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
-    const workflows = await query(sql, params);
+    const workflowsRaw = await query<any>(sql, params);
+
+    // Helper to extract description from payload or task_description
+    const extractDescription = (wf: any): string | null => {
+      if (wf.task_description) return wf.task_description;
+      if (wf.payload) {
+        try {
+          const payload = typeof wf.payload === 'string' ? JSON.parse(wf.payload) : wf.payload;
+          return payload.taskDescription || payload.title || payload.description || null;
+        } catch { return null; }
+      }
+      return null;
+    };
+
+    // Map workflows to include extracted description
+    const workflows = workflowsRaw.map((wf: any) => ({
+      ...wf,
+      task_description: extractDescription(wf),
+    }));
 
     // Get count (only root workflows unless include_children is true)
     let countSql = 'SELECT COUNT(*) as total FROM workflows';
@@ -191,22 +209,40 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       [id]
     );
 
-    // Get artifacts
+    // Get artifacts from artifacts table
     const artifacts = await query<any>(
-      'SELECT * FROM artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
+      'SELECT id, workflow_id, agent_execution_id, artifact_type, content, file_path, metadata, created_at FROM artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
       [id]
     );
 
     // Get sub-workflows (children of this workflow) ordered by execution_order and created_at
-    const subWorkflows = await query<any>(
+    const subWorkflowsRaw = await query<any>(
       `SELECT id, workflow_type, status, task_description, target_module,
-              execution_order, created_at, started_at, completed_at,
+              execution_order, created_at, started_at, completed_at, payload,
               (SELECT COUNT(*) FROM workflows grandchild WHERE grandchild.parent_workflow_id = w.id) as sub_workflow_count
        FROM workflows w
        WHERE parent_workflow_id = ?
        ORDER BY execution_order ASC, created_at ASC`,
       [id]
     );
+
+    // Helper to extract description from payload or task_description
+    const extractDescription = (wf: any): string | null => {
+      if (wf.task_description) return wf.task_description;
+      if (wf.payload) {
+        try {
+          const payload = typeof wf.payload === 'string' ? JSON.parse(wf.payload) : wf.payload;
+          return payload.taskDescription || payload.title || payload.description || null;
+        } catch { return null; }
+      }
+      return null;
+    };
+
+    // Map sub-workflows to include extracted description
+    const subWorkflows = subWorkflowsRaw.map((sw: any) => ({
+      ...sw,
+      task_description: extractDescription(sw),
+    }));
 
     return res.json({
       workflow,
@@ -894,6 +930,150 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// Workflow Conversation Thread Endpoints
+// ============================================================================
+
+/**
+ * GET /api/workflows/:id/messages
+ * Get all messages in the workflow conversation thread (includes sub-workflow messages)
+ */
+router.get('/workflows/:id/messages', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { getMessages, getRootWorkflowId } = await import('./workflow-messages.js');
+
+    // Get root workflow ID to determine if this is a sub-workflow
+    const rootWorkflowId = await getRootWorkflowId(id);
+    const isSubWorkflow = rootWorkflowId !== id;
+
+    // Always get messages from the root workflow's tree
+    const messages = await getMessages(rootWorkflowId, true);
+
+    return res.json({
+      success: true,
+      data: {
+        messages,
+        rootWorkflowId,
+        isSubWorkflow,
+        requestedWorkflowId: id,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get workflow messages', error as Error);
+    return res.status(500).json({ error: 'Failed to get workflow messages' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/messages
+ * Send a message to the workflow conversation thread
+ */
+router.post('/workflows/:id/messages', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { content, action_type = 'comment', metadata } = req.body;
+
+    if (!content || typeof content !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'Message content is required',
+      });
+    }
+
+    const { addMessage, pauseWorkflow, unpauseWorkflow } = await import('./workflow-messages.js');
+
+    // Handle special action types
+    let actionTaken: string | undefined;
+
+    if (action_type === 'pause') {
+      await pauseWorkflow(id, content);
+      actionTaken = 'Workflow pause requested';
+    } else if (action_type === 'resume') {
+      await unpauseWorkflow(id);
+      actionTaken = 'Workflow resumed';
+    } else if (action_type === 'cancel') {
+      // Cancel the workflow
+      await query('UPDATE workflows SET status = ? WHERE id = ?', ['failed', id]);
+      await query(
+        `UPDATE agent_executions SET status = 'failed', error_message = ? WHERE workflow_id = ? AND status IN ('pending', 'running')`,
+        ['Cancelled by user', id]
+      );
+      actionTaken = 'Workflow cancelled';
+    }
+
+    // Add the user message
+    const messageId = await addMessage(id, 'user', content, {
+      actionType: action_type,
+      metadata,
+    });
+
+    logger.info('User message added to workflow', {
+      workflowId: id,
+      messageId,
+      actionType: action_type,
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        messageId,
+        actionTaken,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to add workflow message', error as Error);
+    return res.status(500).json({ error: 'Failed to add workflow message' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/pause
+ * Pause a running workflow
+ */
+router.post('/workflows/:id/pause', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { reason } = req.body;
+
+    const { pauseWorkflow } = await import('./workflow-messages.js');
+    await pauseWorkflow(id, reason || 'User requested pause');
+
+    logger.info('Workflow pause requested', { workflowId: id, reason });
+
+    return res.json({
+      success: true,
+      message: 'Workflow pause requested',
+    });
+  } catch (error) {
+    logger.error('Failed to pause workflow', error as Error);
+    return res.status(500).json({ error: 'Failed to pause workflow' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/unpause
+ * Resume a paused workflow
+ */
+router.post('/workflows/:id/unpause', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    const { unpauseWorkflow } = await import('./workflow-messages.js');
+    await unpauseWorkflow(id);
+
+    logger.info('Workflow unpaused', { workflowId: id });
+
+    return res.json({
+      success: true,
+      message: 'Workflow resumed',
+    });
+  } catch (error) {
+    logger.error('Failed to unpause workflow', error as Error);
+    return res.status(500).json({ error: 'Failed to unpause workflow' });
+  }
+});
+
 /**
  * POST /api/workflows/:id/resume
  * Resume a failed/cancelled/completed workflow from where it left off
@@ -905,7 +1085,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
     const id = parseInt(req.params.id);
 
     // Get workflow details
-    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
+    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import('./workflow-state.js');
     const { getQueueStatus, advanceSubWorkflowQueue, updateSubWorkflowStatus, getNextExecutableSubWorkflow, resetFailedSubWorkflows } = await import('./sub-workflow-queue.js');
 
     const workflow = await getWorkflow(id);
@@ -946,6 +1126,16 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
       // Update workflow status to planning (re-started)
       await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
+
+      // IMPORTANT: If this workflow has a parent, mark this workflow's entry in the parent's queue as in_progress
+      // This prevents sibling workflows from running concurrently
+      if (workflow.parentWorkflowId) {
+        await updateSubWorkflowStatus(id, 'in_progress');
+        logger.info('Marked workflow as in_progress in parent queue', {
+          workflowId: id,
+          parentWorkflowId: workflow.parentWorkflowId,
+        });
+      }
 
       // Get next workflow to execute (should now be the first pending one)
       const nextWorkflowEntry = await getNextExecutableSubWorkflow(id);
@@ -1005,6 +1195,28 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
                   workingDir: workflowDir,
                   metadata: payload.metadata || {},
                 });
+
+                // Save artifacts from the workflow result
+                if (result.artifacts && result.artifacts.length > 0) {
+                  for (const artifact of result.artifacts) {
+                    try {
+                      await saveArtifact(
+                        currentWorkflowId,
+                        null,
+                        artifact.type as any,
+                        artifact.content,
+                        artifact.filePath,
+                        artifact.metadata
+                      );
+                      logger.debug('Saved artifact', { workflowId: currentWorkflowId, type: artifact.type });
+                    } catch (artifactError) {
+                      logger.error('Failed to save artifact', artifactError as Error, {
+                        workflowId: currentWorkflowId,
+                        type: artifact.type,
+                      });
+                    }
+                  }
+                }
 
                 const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
                 await updateWorkflowStatus(currentWorkflowId, finalStatus);
@@ -1101,6 +1313,28 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
           metadata: payload?.metadata || {},
         });
 
+        // Save artifacts from the workflow result
+        if (result.artifacts && result.artifacts.length > 0) {
+          for (const artifact of result.artifacts) {
+            try {
+              await saveArtifact(
+                id,
+                null,
+                artifact.type as any,
+                artifact.content,
+                artifact.filePath,
+                artifact.metadata
+              );
+              logger.debug('Saved artifact from leaf workflow resume', { workflowId: id, type: artifact.type });
+            } catch (artifactError) {
+              logger.error('Failed to save artifact', artifactError as Error, {
+                workflowId: id,
+                type: artifact.type,
+              });
+            }
+          }
+        }
+
         const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
         await updateWorkflowStatus(id, finalStatus);
 
@@ -1156,7 +1390,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
     const id = parseInt(req.params.id);
 
     // Get workflow details
-    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
+    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import('./workflow-state.js');
     const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
 
     const workflow = await getWorkflow(id);
@@ -1227,6 +1461,28 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
           metadata: payload.metadata || {},
         });
 
+        // Save artifacts from the workflow result
+        if (result.artifacts && result.artifacts.length > 0) {
+          for (const artifact of result.artifacts) {
+            try {
+              await saveArtifact(
+                id,
+                null,
+                artifact.type as any,
+                artifact.content,
+                artifact.filePath,
+                artifact.metadata
+              );
+              logger.debug('Saved artifact from retry', { workflowId: id, type: artifact.type });
+            } catch (artifactError) {
+              logger.error('Failed to save artifact', artifactError as Error, {
+                workflowId: id,
+                type: artifact.type,
+              });
+            }
+          }
+        }
+
         const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
         await updateWorkflowStatus(id, finalStatus);
 
@@ -1266,6 +1522,28 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
                   workingDir: nextWorkflowDir,
                   metadata: nextPayload.metadata || {},
                 });
+
+                // Save artifacts from the workflow result
+                if (nextResult.artifacts && nextResult.artifacts.length > 0) {
+                  for (const artifact of nextResult.artifacts) {
+                    try {
+                      await saveArtifact(
+                        nextWorkflowId,
+                        null,
+                        artifact.type as any,
+                        artifact.content,
+                        artifact.filePath,
+                        artifact.metadata
+                      );
+                      logger.debug('Saved artifact from retry loop', { workflowId: nextWorkflowId, type: artifact.type });
+                    } catch (artifactError) {
+                      logger.error('Failed to save artifact', artifactError as Error, {
+                        workflowId: nextWorkflowId,
+                        type: artifact.type,
+                      });
+                    }
+                  }
+                }
 
                 const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
                 await updateWorkflowStatus(nextWorkflowId, nextFinalStatus);

@@ -19,6 +19,12 @@ import {
   Expand,
   List,
   TreePine,
+  ExternalLink,
+  X,
+  FileText,
+  Calendar,
+  Target,
+  Layers,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -52,6 +58,7 @@ interface WorkflowChild {
   id: number;
   workflow_type: string;
   status: string;
+  effective_status?: string;
   task_description?: string;
   target_module?: string;
   execution_order: number;
@@ -60,6 +67,8 @@ interface WorkflowChild {
   completed_at?: string;
   hasChildren: boolean;
   childCount: number;
+  failedDescendants?: number;
+  incompleteDescendants?: number;
 }
 
 interface Ancestor {
@@ -77,6 +86,7 @@ interface FullTreeNode {
   parent_workflow_id: number | null;
   workflow_type: string;
   status: string;
+  effective_status?: string;
   task_description?: string;
   target_module?: string;
   execution_order: number;
@@ -85,6 +95,37 @@ interface FullTreeNode {
   completed_at?: string;
   depth: number;
   children: FullTreeNode[];
+  failedDescendants?: number;
+  incompleteDescendants?: number;
+}
+
+interface SelectedWorkflowDetail {
+  id: number;
+  workflow_type: string;
+  status: string;
+  task_description?: string;
+  target_module?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  parent_workflow_id?: number;
+  branch_name?: string;
+  payload?: any;
+  agents?: Array<{
+    id: number;
+    agent_type: string;
+    status: string;
+    started_at?: string;
+    completed_at?: string;
+    error_message?: string;
+  }>;
+  artifacts?: Array<{
+    id: number;
+    artifact_type: string;
+    file_path?: string;
+    description?: string;
+    created_at: string;
+  }>;
 }
 
 interface WorkflowTreeExplorerProps {
@@ -161,11 +202,15 @@ function LazyTreeNode({
   child,
   depth = 0,
   isLast,
+  onSelect,
+  selectedId,
 }: {
   workflowId: number;
   child: WorkflowChild;
   depth?: number;
   isLast: boolean;
+  onSelect: (id: number) => void;
+  selectedId: number | null;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [children, setChildren] = useState<WorkflowChild[]>([]);
@@ -173,9 +218,11 @@ function LazyTreeNode({
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const config = getStatusConfig(child.status);
+  // Use effective_status for visual display (accounts for failed/incomplete descendants)
+  const displayStatus = child.effective_status || child.status;
+  const config = getStatusConfig(displayStatus);
   const StatusIcon = config.icon;
-  const isRunning = child.status === 'running' || child.status === 'in_progress' || child.status === 'planning';
+  const isRunning = displayStatus === 'running' || displayStatus === 'in_progress' || displayStatus === 'planning';
 
   const loadChildren = useCallback(async (reset = false) => {
     if (loading) return;
@@ -231,17 +278,19 @@ function LazyTreeNode({
       <div className={clsx('relative', depth > 0 && 'ml-8')}>
         <div
           className={clsx(
-            'rounded-lg border-2 p-3 transition-all hover:shadow-md',
+            'rounded-lg border-2 p-3 transition-all hover:shadow-md cursor-pointer',
             config.borderColor,
             config.lightBg,
-            isRunning && 'ring-2 ring-blue-300 ring-offset-1'
+            isRunning && 'ring-2 ring-blue-300 ring-offset-1',
+            selectedId === child.id && 'ring-2 ring-indigo-500 ring-offset-2 shadow-lg'
           )}
+          onClick={() => onSelect(child.id)}
         >
           <div className="flex items-start gap-3">
             {/* Expand/collapse button */}
             {child.hasChildren ? (
               <button
-                onClick={handleExpand}
+                onClick={(e) => { e.stopPropagation(); handleExpand(); }}
                 className="flex-shrink-0 p-1 hover:bg-white rounded"
                 disabled={loading}
               >
@@ -271,10 +320,7 @@ function LazyTreeNode({
             </div>
 
             {/* Content */}
-            <Link
-              to={`/workflows/${child.id}`}
-              className="flex-1 min-w-0 hover:underline"
-            >
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="text-xs font-mono bg-white px-1.5 py-0.5 rounded border border-gray-200">
                   #{child.id}
@@ -298,12 +344,27 @@ function LazyTreeNode({
                     {child.childCount} children
                   </span>
                 )}
+                {/* Show warning if effective status differs from actual status */}
+                {child.effective_status && child.effective_status !== child.status && (
+                  <span
+                    className={clsx(
+                      'text-xs px-1.5 py-0.5 rounded flex items-center gap-1',
+                      child.effective_status === 'failed'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-yellow-100 text-yellow-700'
+                    )}
+                    title={`Own status: ${child.status}, but has ${child.failedDescendants || 0} failed and ${child.incompleteDescendants || 0} incomplete descendants`}
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    {child.failedDescendants ? `${child.failedDescendants} failed` : `${child.incompleteDescendants} pending`}
+                  </span>
+                )}
               </div>
 
               <p className="text-sm text-gray-900 line-clamp-1">
                 {description}
               </p>
-            </Link>
+            </div>
 
             {/* Time info */}
             <div className="flex-shrink-0 text-right text-xs text-gray-500">
@@ -330,6 +391,8 @@ function LazyTreeNode({
                 child={childNode}
                 depth={depth + 1}
                 isLast={index === children.length - 1 && !hasMore}
+                onSelect={onSelect}
+                selectedId={selectedId}
               />
             ))}
             {hasMore && (
@@ -440,6 +503,190 @@ function TreeStatsPanel({ stats, onRefresh }: { stats: TreeStats | null; onRefre
   );
 }
 
+// Selected workflow detail panel
+function WorkflowDetailPanel({
+  detail,
+  loading,
+  onClose,
+}: {
+  detail: SelectedWorkflowDetail | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-6 w-6 text-indigo-500 animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!detail) {
+    return (
+      <div className="bg-gradient-to-br from-gray-50 to-slate-50 rounded-lg p-4 border border-gray-200">
+        <div className="flex items-center gap-2 mb-3">
+          <Target className="h-5 w-5 text-gray-400" />
+          <h4 className="font-semibold text-gray-700">Workflow Details</h4>
+        </div>
+        <p className="text-sm text-gray-500 text-center py-6">
+          Click on a workflow in the tree to view its details here
+        </p>
+      </div>
+    );
+  }
+
+  const config = getStatusConfig(detail.status);
+  const StatusIcon = config.icon;
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className={clsx('px-4 py-3 border-b', config.lightBg)}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center', config.bgColor)}>
+              <StatusIcon className="h-4 w-4 text-white" />
+            </div>
+            <div>
+              <span className="text-lg font-bold text-gray-900">#{detail.id}</span>
+              <span className={clsx('ml-2 text-xs font-semibold uppercase px-2 py-0.5 rounded', config.color, config.lightBg)}>
+                {detail.status}
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              to={`/workflows/${detail.id}`}
+              className="p-1.5 hover:bg-gray-100 rounded text-gray-500 hover:text-indigo-600"
+              title="Open full page"
+            >
+              <ExternalLink className="h-4 w-4" />
+            </Link>
+            <button
+              onClick={onClose}
+              className="p-1.5 hover:bg-gray-100 rounded text-gray-500"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-4 space-y-4 max-h-[500px] overflow-y-auto">
+        {/* Type and Module */}
+        <div className="flex flex-wrap gap-2">
+          <span className="text-xs font-semibold uppercase px-2 py-1 rounded bg-indigo-100 text-indigo-700">
+            {detail.workflow_type}
+          </span>
+          {detail.target_module && (
+            <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700">
+              <Layers className="h-3 w-3 inline mr-1" />
+              {detail.target_module}
+            </span>
+          )}
+          {detail.branch_name && (
+            <span className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700">
+              <GitBranch className="h-3 w-3 inline mr-1" />
+              {detail.branch_name}
+            </span>
+          )}
+        </div>
+
+        {/* Task Description */}
+        {detail.task_description && (
+          <div>
+            <h5 className="text-xs font-semibold text-gray-500 uppercase mb-1 flex items-center gap-1">
+              <FileText className="h-3 w-3" /> Task Description
+            </h5>
+            <p className="text-sm text-gray-900 bg-gray-50 rounded p-2">
+              {detail.task_description}
+            </p>
+          </div>
+        )}
+
+        {/* Timestamps */}
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="bg-gray-50 rounded p-2">
+            <div className="text-gray-500 mb-0.5">Created</div>
+            <div className="font-medium">
+              {format(parseISO(detail.created_at), 'MMM d, HH:mm')}
+            </div>
+          </div>
+          {detail.started_at && (
+            <div className="bg-blue-50 rounded p-2">
+              <div className="text-blue-600 mb-0.5">Started</div>
+              <div className="font-medium text-blue-900">
+                {format(parseISO(detail.started_at), 'MMM d, HH:mm')}
+              </div>
+            </div>
+          )}
+          {detail.completed_at && (
+            <div className="bg-green-50 rounded p-2">
+              <div className="text-green-600 mb-0.5">Completed</div>
+              <div className="font-medium text-green-900">
+                {format(parseISO(detail.completed_at), 'MMM d, HH:mm')}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Agents */}
+        {detail.agents && detail.agents.length > 0 && (
+          <div>
+            <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+              Agents ({detail.agents.length})
+            </h5>
+            <div className="space-y-1.5 max-h-32 overflow-y-auto">
+              {detail.agents.map((agent) => {
+                const agentConfig = getStatusConfig(agent.status);
+                const AgentIcon = agentConfig.icon;
+                return (
+                  <div
+                    key={agent.id}
+                    className={clsx('flex items-center gap-2 p-2 rounded text-xs', agentConfig.lightBg)}
+                  >
+                    <AgentIcon className={clsx('h-3 w-3', agentConfig.color)} />
+                    <span className="font-medium flex-1">{agent.agent_type}</span>
+                    <span className={agentConfig.color}>{agent.status}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Artifacts */}
+        {detail.artifacts && detail.artifacts.length > 0 && (
+          <div>
+            <h5 className="text-xs font-semibold text-gray-500 uppercase mb-2">
+              Artifacts ({detail.artifacts.length})
+            </h5>
+            <div className="space-y-1.5 max-h-24 overflow-y-auto">
+              {detail.artifacts.map((artifact) => (
+                <div
+                  key={artifact.id}
+                  className="flex items-center gap-2 p-2 rounded bg-amber-50 text-xs"
+                >
+                  <FileText className="h-3 w-3 text-amber-600" />
+                  <span className="font-medium">{artifact.artifact_type}</span>
+                  {artifact.file_path && (
+                    <span className="text-gray-500 truncate text-[10px]">
+                      {artifact.file_path.split('/').pop()}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Breadcrumb navigation
 function BreadcrumbNav({
   ancestors,
@@ -481,16 +728,22 @@ function FullTreeNodeView({
   isLast = false,
   collapsedNodes,
   toggleCollapse,
+  onSelect,
+  selectedId,
 }: {
   node: FullTreeNode;
   depth?: number;
   isLast?: boolean;
   collapsedNodes: Set<number>;
   toggleCollapse: (id: number) => void;
+  onSelect: (id: number) => void;
+  selectedId: number | null;
 }) {
-  const config = getStatusConfig(node.status);
+  // Use effective_status for visual display (accounts for failed/incomplete descendants)
+  const displayStatus = node.effective_status || node.status;
+  const config = getStatusConfig(displayStatus);
   const StatusIcon = config.icon;
-  const isRunning = node.status === 'running' || node.status === 'in_progress' || node.status === 'planning';
+  const isRunning = displayStatus === 'running' || displayStatus === 'in_progress' || displayStatus === 'planning';
   const hasChildren = node.children && node.children.length > 0;
   const isCollapsed = collapsedNodes.has(node.id);
 
@@ -516,16 +769,18 @@ function FullTreeNodeView({
       <div className={clsx('relative', depth > 0 && 'ml-7')}>
         <div
           className={clsx(
-            'rounded border p-2 transition-all hover:shadow-sm flex items-center gap-2',
+            'rounded border p-2 transition-all hover:shadow-sm flex items-center gap-2 cursor-pointer',
             config.borderColor,
             config.lightBg,
-            isRunning && 'ring-1 ring-blue-300'
+            isRunning && 'ring-1 ring-blue-300',
+            selectedId === node.id && 'ring-2 ring-indigo-500 shadow-md'
           )}
+          onClick={() => onSelect(node.id)}
         >
           {/* Expand/collapse button for nodes with children */}
           {hasChildren ? (
             <button
-              onClick={() => toggleCollapse(node.id)}
+              onClick={(e) => { e.stopPropagation(); toggleCollapse(node.id); }}
               className="flex-shrink-0 p-0.5 hover:bg-white rounded"
             >
               {isCollapsed ? (
@@ -550,10 +805,7 @@ function FullTreeNodeView({
           </div>
 
           {/* Content */}
-          <Link
-            to={`/workflows/${node.id}`}
-            className="flex-1 min-w-0 hover:underline flex items-center gap-2 flex-wrap"
-          >
+          <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
             <span className="text-xs font-mono bg-white px-1 py-0.5 rounded border border-gray-200">
               #{node.id}
             </span>
@@ -576,7 +828,21 @@ function FullTreeNodeView({
                 {node.children.length}
               </span>
             )}
-          </Link>
+            {/* Show warning if effective status differs from actual status */}
+            {node.effective_status && node.effective_status !== node.status && (
+              <span
+                className={clsx(
+                  'text-xs px-1 py-0.5 rounded flex items-center gap-0.5',
+                  node.effective_status === 'failed'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-yellow-100 text-yellow-700'
+                )}
+                title={`Own status: ${node.status}, but has ${node.failedDescendants || 0} failed and ${node.incompleteDescendants || 0} incomplete descendants`}
+              >
+                <AlertTriangle className="h-3 w-3" />
+              </span>
+            )}
+          </div>
 
           {/* Depth indicator */}
           <span className="text-xs text-gray-400 flex-shrink-0">
@@ -595,6 +861,8 @@ function FullTreeNodeView({
                 isLast={index === node.children.length - 1}
                 collapsedNodes={collapsedNodes}
                 toggleCollapse={toggleCollapse}
+                onSelect={onSelect}
+                selectedId={selectedId}
               />
             ))}
           </div>
@@ -625,6 +893,11 @@ export default function WorkflowTreeExplorer({
   const [fullTreeError, setFullTreeError] = useState<string | null>(null);
   const [collapsedNodes, setCollapsedNodes] = useState<Set<number>>(new Set());
 
+  // Selected workflow detail
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<SelectedWorkflowDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+
   const toggleCollapse = useCallback((id: number) => {
     setCollapsedNodes(prev => {
       const next = new Set(prev);
@@ -652,6 +925,51 @@ export default function WorkflowTreeExplorer({
 
   const expandAll = useCallback(() => {
     setCollapsedNodes(new Set());
+  }, []);
+
+  const loadSelectedWorkflow = useCallback(async (id: number) => {
+    setLoadingDetail(true);
+    try {
+      const response = await fetch(`/api/workflows/${id}`);
+      const result = await response.json();
+      if (result.workflow) {
+        setSelectedDetail({
+          id: result.workflow.id,
+          workflow_type: result.workflow.workflow_type,
+          status: result.workflow.status,
+          task_description: result.workflow.task_description,
+          target_module: result.workflow.target_module,
+          created_at: result.workflow.created_at,
+          started_at: result.workflow.started_at,
+          completed_at: result.workflow.completed_at,
+          parent_workflow_id: result.workflow.parent_workflow_id,
+          branch_name: result.workflow.branch_name,
+          payload: result.workflow.payload,
+          agents: result.agents || [],
+          artifacts: result.artifacts || [],
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load workflow details:', error);
+    } finally {
+      setLoadingDetail(false);
+    }
+  }, []);
+
+  const handleSelect = useCallback((id: number) => {
+    if (id === selectedId) {
+      // Clicking same node deselects
+      setSelectedId(null);
+      setSelectedDetail(null);
+    } else {
+      setSelectedId(id);
+      loadSelectedWorkflow(id);
+    }
+  }, [selectedId, loadSelectedWorkflow]);
+
+  const handleCloseDetail = useCallback(() => {
+    setSelectedId(null);
+    setSelectedDetail(null);
   }, []);
 
   const loadStats = useCallback(async () => {
@@ -901,6 +1219,8 @@ export default function WorkflowTreeExplorer({
                     child={child}
                     depth={0}
                     isLast={index === children.length - 1 && !hasMore}
+                    onSelect={handleSelect}
+                    selectedId={selectedId}
                   />
                 ))}
 
@@ -962,7 +1282,7 @@ export default function WorkflowTreeExplorer({
 
                 {/* Full tree view */}
                 {fullTree && !loadingFullTree && (
-                  <div className="space-y-1 max-h-[600px] overflow-y-auto pr-2">
+                  <div className="space-y-1 overflow-y-auto pr-2">
                     {fullTree.children && fullTree.children.length > 0 ? (
                       fullTree.children.map((child, index) => (
                         <FullTreeNodeView
@@ -972,6 +1292,8 @@ export default function WorkflowTreeExplorer({
                           isLast={index === fullTree.children.length - 1}
                           collapsedNodes={collapsedNodes}
                           toggleCollapse={toggleCollapse}
+                          onSelect={handleSelect}
+                          selectedId={selectedId}
                         />
                       ))
                     ) : (
@@ -984,8 +1306,13 @@ export default function WorkflowTreeExplorer({
           </div>
 
           {/* Stats sidebar */}
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 space-y-4">
             <TreeStatsPanel stats={stats} onRefresh={loadStats} />
+            <WorkflowDetailPanel
+              detail={selectedDetail}
+              loading={loadingDetail}
+              onClose={handleCloseDetail}
+            />
           </div>
         </div>
       </div>
@@ -994,9 +1321,7 @@ export default function WorkflowTreeExplorer({
       <div className="bg-gray-50 px-6 py-3 border-t border-gray-200">
         <p className="text-xs text-gray-500 flex items-center gap-2">
           <GitBranch className="h-4 w-4" />
-          {viewMode === 'lazy'
-            ? 'Click expand arrows to lazy-load children. Click workflow IDs to navigate.'
-            : 'Full tree view loaded. Use Expand/Collapse All to navigate. Click workflow IDs to view details.'}
+          Click on a workflow to view details in the sidebar. Use the external link icon to open full page.
         </p>
       </div>
     </div>
