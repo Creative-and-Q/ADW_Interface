@@ -92,6 +92,10 @@ export declare class CodingAgent {
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
     /**
+     * Ensure tsconfig.json excludes test files to prevent test code from breaking builds
+     */
+    private ensureTsconfigExcludesTests;
+    /**
      * Verify build by running TypeScript compilation check
      * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
      * Runs npm install first to ensure all dependencies are installed

@@ -856,6 +856,40 @@ When finished, say: "IMPLEMENTATION COMPLETE"
   }
 
   /**
+   * Ensure tsconfig.json excludes test files to prevent test code from breaking builds
+   */
+  private async ensureTsconfigExcludesTests(tsconfigPath: string): Promise<void> {
+    try {
+      const content = await fs.readFile(tsconfigPath, 'utf-8');
+      const tsconfig = JSON.parse(content);
+
+      // Check if there's already an exclude array
+      if (!tsconfig.exclude) {
+        tsconfig.exclude = [];
+      }
+
+      // Check if tests are already excluded
+      const testExcludes = ['**/*.test.ts', '**/*.test.tsx', '**/__tests__/**'];
+      let modified = false;
+
+      for (const exclude of testExcludes) {
+        if (!tsconfig.exclude.includes(exclude)) {
+          tsconfig.exclude.push(exclude);
+          modified = true;
+        }
+      }
+
+      if (modified) {
+        console.log(`CodingAgent: Adding test exclusions to ${tsconfigPath}`);
+        await fs.writeFile(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+      }
+    } catch (error) {
+      // If we can't parse or modify tsconfig, just continue
+      console.warn(`CodingAgent: Could not update tsconfig at ${tsconfigPath}:`, (error as Error).message);
+    }
+  }
+
+  /**
    * Verify build by running TypeScript compilation check
    * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
    * Runs npm install first to ensure all dependencies are installed
@@ -863,6 +897,23 @@ When finished, say: "IMPLEMENTATION COMPLETE"
   private async verifyBuild(workingDir: string): Promise<{ success: boolean; error?: string }> {
     const results: string[] = [];
     let hasError = false;
+
+    // Step -1: Ensure tsconfig excludes test files
+    try {
+      const rootTsconfig = path.join(workingDir, 'tsconfig.json');
+      await fs.access(rootTsconfig);
+      await this.ensureTsconfigExcludesTests(rootTsconfig);
+    } catch {
+      // No root tsconfig - skip
+    }
+
+    try {
+      const frontendTsconfig = path.join(workingDir, 'frontend', 'tsconfig.json');
+      await fs.access(frontendTsconfig);
+      await this.ensureTsconfigExcludesTests(frontendTsconfig);
+    } catch {
+      // No frontend tsconfig - skip
+    }
 
     // Step 0: Run npm install in root directory if package.json exists
     try {
