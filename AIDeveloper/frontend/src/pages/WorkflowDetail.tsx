@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { workflowsAPI } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import toast from 'react-hot-toast';
@@ -11,6 +11,7 @@ import {
   GitBranch,
   Calendar,
   RotateCcw,
+  MessageCircle,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { getStatusColor } from '../utils/workflowChartUtils';
@@ -20,12 +21,14 @@ import AgentExecutionTimeline from '../components/AgentExecutionTimeline';
 import ArtifactsList from '../components/ArtifactsList';
 import ExecutionLogs from '../components/ExecutionLogs';
 import WorkflowTreeExplorer from '../components/WorkflowTreeExplorer';
+import ConversationThread from '../components/ConversationThread';
 
-type ViewMode = 'overview' | 'timeline';
+type ViewMode = 'overview' | 'timeline' | 'conversation';
 
 export default function WorkflowDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [workflow, setWorkflow] = useState<any>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [artifacts, setArtifacts] = useState<any[]>([]);
@@ -38,6 +41,9 @@ export default function WorkflowDetail() {
   const [isResuming, setIsResuming] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
+  const [messages, setMessages] = useState<any[]>([]);
+  const [rootWorkflowId, setRootWorkflowId] = useState<number | null>(null);
+  const [isSubWorkflow, setIsSubWorkflow] = useState(false);
   const { socket, subscribe } = useWebSocket();
 
   useEffect(() => {
@@ -45,7 +51,12 @@ export default function WorkflowDetail() {
       loadWorkflow();
       subscribe(parseInt(id));
     }
-  }, [id]);
+    // Check for view query parameter
+    const view = searchParams.get('view');
+    if (view === 'conversation') {
+      setViewMode('conversation');
+    }
+  }, [id, searchParams]);
 
   useEffect(() => {
     if (socket && id) {
@@ -59,6 +70,25 @@ export default function WorkflowDetail() {
       });
       socket.on('artifact:created', () => {
         loadWorkflow();
+      });
+      // Handle new messages in real-time
+      socket.on('message:new', (data) => {
+        if (data.workflowId === parseInt(id!)) {
+          setMessages(prev => [...prev, data.message]);
+        }
+      });
+      // Handle pause/unpause events
+      socket.on('workflow:paused', (data) => {
+        if (data.workflowId === parseInt(id!)) {
+          toast('Workflow paused', { icon: '⏸️' });
+          loadWorkflow();
+        }
+      });
+      socket.on('workflow:unpaused', (data) => {
+        if (data.workflowId === parseInt(id!)) {
+          toast('Workflow resumed', { icon: '▶️' });
+          loadWorkflow();
+        }
       });
     }
   }, [socket, id]);
@@ -75,6 +105,7 @@ export default function WorkflowDetail() {
       }
       await loadLogs();
       await loadQueueStatus();
+      await loadMessages();
       // Load resume state if workflow failed
       if (data.workflow.status === 'failed') {
         await loadResumeState();
@@ -83,6 +114,57 @@ export default function WorkflowDetail() {
       console.error('Failed to load workflow:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadMessages = async () => {
+    try {
+      const { data } = await workflowsAPI.getMessages(parseInt(id!));
+      setMessages(data.data?.messages || []);
+      setRootWorkflowId(data.data?.rootWorkflowId || null);
+      setIsSubWorkflow(data.data?.isSubWorkflow || false);
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  };
+
+  const handleSendMessage = async (content: string, actionType: string, metadata?: any) => {
+    try {
+      await workflowsAPI.sendMessage(parseInt(id!), content, actionType, metadata);
+      // Message will be added via WebSocket event
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      toast.error('Failed to send message');
+    }
+  };
+
+  const handlePauseWorkflow = async () => {
+    try {
+      await workflowsAPI.pauseWorkflow(parseInt(id!), 'User requested pause');
+      toast.success('Pause requested');
+    } catch (error) {
+      console.error('Failed to pause workflow:', error);
+      toast.error('Failed to pause workflow');
+    }
+  };
+
+  const handleResumeFromPause = async () => {
+    try {
+      await workflowsAPI.unpauseWorkflow(parseInt(id!));
+      toast.success('Workflow resumed');
+    } catch (error) {
+      console.error('Failed to resume workflow:', error);
+      toast.error('Failed to resume workflow');
+    }
+  };
+
+  const handleCancelWorkflow = async () => {
+    try {
+      await workflowsAPI.sendMessage(parseInt(id!), 'User cancelled workflow', 'cancel');
+      toast.success('Cancel requested');
+    } catch (error) {
+      console.error('Failed to cancel workflow:', error);
+      toast.error('Failed to cancel workflow');
     }
   };
 
@@ -346,18 +428,32 @@ export default function WorkflowDetail() {
           <List className="h-4 w-4 mr-2" />
           Detailed Timeline
         </button>
+        <button
+          onClick={() => setViewMode('conversation')}
+          className={`flex items-center px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            viewMode === 'conversation'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          <MessageCircle className="h-4 w-4 mr-2" />
+          Conversation
+          {messages.length > 0 && (
+            <span className="ml-2 px-2 py-0.5 text-xs font-bold bg-blue-100 text-blue-700 rounded-full">
+              {messages.length}
+            </span>
+          )}
+        </button>
       </div>
 
-      {/* Sub-Workflows Hierarchy - Always use Tree Explorer for better navigation */}
-      {subWorkflows && subWorkflows.length > 0 && (
-        <WorkflowTreeExplorer
-          workflowId={workflow.id}
-          className="mb-6"
-        />
-      )}
+      {/* Sub-Workflows Hierarchy - Always show Tree Explorer */}
+      <WorkflowTreeExplorer
+        workflowId={workflow.id}
+        className="mb-6"
+      />
 
       {/* Content based on view mode */}
-      {viewMode === 'overview' ? (
+      {viewMode === 'overview' && (
         <div className="space-y-6">
           {/* Agent Execution Chart */}
           <AgentExecutionChart agents={agents} />
@@ -403,7 +499,9 @@ export default function WorkflowDetail() {
             onLoadLogs={loadLogs}
           />
         </div>
-      ) : (
+      )}
+
+      {viewMode === 'timeline' && (
         <div className="space-y-6">
           {/* Detailed Timeline */}
           <AgentExecutionTimeline agents={agents} />
@@ -419,6 +517,40 @@ export default function WorkflowDetail() {
             onLoadLogs={loadLogs}
           />
         </div>
+      )}
+
+      {viewMode === 'conversation' && (
+        isSubWorkflow && rootWorkflowId ? (
+          <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+            <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Conversation Thread on Master Workflow
+            </h3>
+            <p className="text-gray-600 mb-4">
+              All conversation messages are managed at the master workflow level to keep
+              communications unified across the entire workflow tree.
+            </p>
+            <button
+              onClick={() => navigate(`/workflows/${rootWorkflowId}?view=conversation`)}
+              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <MessageCircle className="h-4 w-4 mr-2" />
+              Go to Master Workflow Conversation
+            </button>
+          </div>
+        ) : (
+          <ConversationThread
+            workflowId={workflow.id}
+            messages={messages}
+            workflowStatus={workflow.status}
+            isPaused={workflow.is_paused || false}
+            onSendMessage={handleSendMessage}
+            onPause={handlePauseWorkflow}
+            onResume={handleResumeFromPause}
+            onCancel={handleCancelWorkflow}
+            rootWorkflowId={rootWorkflowId || workflow.id}
+          />
+        )
       )}
     </div>
   );

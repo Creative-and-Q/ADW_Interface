@@ -12,9 +12,35 @@ import {
   getQueueStatus,
   advanceSubWorkflowQueue,
 } from '../sub-workflow-queue.js';
-import { saveWorkflowPlan, updateWorkflowStatus } from '../workflow-state.js';
-import { WorkflowStatus } from '../types.js';
+import { saveWorkflowPlan, updateWorkflowStatus, saveArtifact } from '../workflow-state.js';
+import { WorkflowStatus, ArtifactType } from '../types.js';
 import { query } from '../database.js';
+
+/**
+ * Helper to save artifacts from workflow execution result
+ */
+async function saveWorkflowArtifacts(workflowId: number, artifacts: Array<{ type: string; content: string; filePath?: string; metadata?: any }> | undefined): Promise<void> {
+  if (!artifacts || artifacts.length === 0) return;
+
+  for (const artifact of artifacts) {
+    try {
+      await saveArtifact(
+        workflowId,
+        null, // executionId - not available here
+        artifact.type as ArtifactType,
+        artifact.content,
+        artifact.filePath,
+        artifact.metadata
+      );
+      logger.debug('Saved artifact from sub-workflow', { workflowId, type: artifact.type });
+    } catch (artifactError) {
+      logger.error('Failed to save artifact from sub-workflow', artifactError as Error, {
+        workflowId,
+        type: artifact.type,
+      });
+    }
+  }
+}
 
 const router = Router();
 
@@ -91,6 +117,9 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
               metadata: payload.metadata || {},
             });
 
+            // Save artifacts from the workflow result
+            await saveWorkflowArtifacts(nextWorkflowId, result.artifacts);
+
             // Update workflow status based on result
             const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
             await updateWorkflowStatus(nextWorkflowId, finalStatus);
@@ -131,6 +160,9 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
                   workingDir: nextWorkflowDir,
                   metadata: nextPayload.metadata || {},
                 });
+
+                // Save artifacts from the workflow result
+                await saveWorkflowArtifacts(currentNext, nextResult.artifacts);
 
                 const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
                 await updateWorkflowStatus(currentNext, nextFinalStatus);
@@ -258,11 +290,14 @@ router.post('/:id/advance-queue', async (req: Request, res: Response): Promise<v
               workingDir: workflowDir,
               metadata: payload.metadata || {},
             });
-            
+
+            // Save artifacts from the workflow result
+            await saveWorkflowArtifacts(nextWorkflowId, result.artifacts);
+
             // Update workflow status based on result
             const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
             await updateWorkflowStatus(nextWorkflowId, finalStatus);
-            
+
             // Update sub-workflow queue status
             const { updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
             await updateSubWorkflowStatus(nextWorkflowId, finalStatus, result.success ? undefined : result.summary);
@@ -503,7 +538,26 @@ router.get('/:id/children', async (req: Request, res: Response): Promise<void> =
         w.created_at,
         w.started_at,
         w.completed_at,
-        (SELECT COUNT(*) FROM workflows c WHERE c.parent_workflow_id = w.id) as child_count
+        w.payload,
+        (SELECT COUNT(*) FROM workflows c WHERE c.parent_workflow_id = w.id) as child_count,
+        (
+          WITH RECURSIVE descendants AS (
+            SELECT id, status FROM workflows WHERE parent_workflow_id = w.id
+            UNION ALL
+            SELECT wf.id, wf.status FROM workflows wf
+            INNER JOIN descendants d ON wf.parent_workflow_id = d.id
+          )
+          SELECT COUNT(*) FROM descendants WHERE status = 'failed'
+        ) as failed_descendants,
+        (
+          WITH RECURSIVE descendants AS (
+            SELECT id, status FROM workflows WHERE parent_workflow_id = w.id
+            UNION ALL
+            SELECT wf.id, wf.status FROM workflows wf
+            INNER JOIN descendants d ON wf.parent_workflow_id = d.id
+          )
+          SELECT COUNT(*) FROM descendants WHERE status NOT IN ('completed', 'failed')
+        ) as incomplete_descendants
       FROM workflows w
       WHERE w.parent_workflow_id = ?
     `;
@@ -528,11 +582,62 @@ router.get('/:id/children', async (req: Request, res: Response): Promise<void> =
     }
     const [countResult] = await query<any>(countSql, countParams);
 
-    // Map results to include hasChildren flag
+    // Helper to extract description from payload or task_description
+    const extractDescription = (workflow: any): string | null => {
+      // First try task_description column
+      if (workflow.task_description) return workflow.task_description;
+
+      // Then try to extract from payload JSON
+      if (workflow.payload) {
+        try {
+          const payload = typeof workflow.payload === 'string'
+            ? JSON.parse(workflow.payload)
+            : workflow.payload;
+          return payload.taskDescription || payload.title || payload.description || null;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    };
+
+    // Helper to compute effective status based on descendants
+    const computeEffectiveStatus = (child: any): string => {
+      // If this workflow has no children, return its own status
+      if (child.child_count === 0) {
+        return child.status;
+      }
+
+      // If any descendants failed, effective status is 'failed'
+      if (child.failed_descendants > 0) {
+        return 'failed';
+      }
+
+      // If any descendants are incomplete (not completed or failed), effective status is 'in_progress'
+      if (child.incomplete_descendants > 0) {
+        return 'in_progress';
+      }
+
+      // All descendants are completed or failed (and no failed ones), return own status
+      return child.status;
+    };
+
+    // Map results to include hasChildren flag, extracted description, and effective status
     const childrenWithFlags = children.map((child: any) => ({
-      ...child,
+      id: child.id,
+      workflow_type: child.workflow_type,
+      status: child.status,
+      effective_status: computeEffectiveStatus(child),
+      task_description: extractDescription(child),
+      target_module: child.target_module,
+      execution_order: child.execution_order,
+      created_at: child.created_at,
+      started_at: child.started_at,
+      completed_at: child.completed_at,
       hasChildren: child.child_count > 0,
       childCount: child.child_count,
+      failedDescendants: child.failed_descendants,
+      incompleteDescendants: child.incomplete_descendants,
     }));
 
     res.json({
@@ -755,6 +860,9 @@ router.get('/:id/full-tree', async (req: Request, res: Response): Promise<void> 
       workflowMap.set(workflow.id, {
         ...workflow,
         children: [],
+        effective_status: workflow.status, // Will be updated in third pass
+        failedDescendants: 0,
+        incompleteDescendants: 0,
       });
     }
 
@@ -767,6 +875,44 @@ router.get('/:id/full-tree', async (req: Request, res: Response): Promise<void> 
       } else if (workflow.parent_workflow_id && workflowMap.has(workflow.parent_workflow_id)) {
         const parent = workflowMap.get(workflow.parent_workflow_id);
         parent.children.push(node);
+      }
+    }
+
+    // Third pass: compute effective status (bottom-up)
+    // Process in reverse depth order to ensure children are computed before parents
+    const sortedByDepthDesc = [...allWorkflows].sort((a, b) => b.depth - a.depth);
+    for (const workflow of sortedByDepthDesc) {
+      const node = workflowMap.get(workflow.id);
+      if (node.children.length > 0) {
+        // Count failed and incomplete descendants
+        let failedCount = 0;
+        let incompleteCount = 0;
+
+        const countDescendants = (children: any[]) => {
+          for (const child of children) {
+            if (child.status === 'failed' || child.effective_status === 'failed') {
+              failedCount++;
+            } else if (!['completed', 'failed'].includes(child.status)) {
+              incompleteCount++;
+            }
+            // Add counts from deeper descendants
+            failedCount += child.failedDescendants || 0;
+            incompleteCount += child.incompleteDescendants || 0;
+          }
+        };
+
+        countDescendants(node.children);
+        node.failedDescendants = failedCount;
+        node.incompleteDescendants = incompleteCount;
+
+        // Compute effective status
+        if (failedCount > 0) {
+          node.effective_status = 'failed';
+        } else if (incompleteCount > 0) {
+          node.effective_status = 'in_progress';
+        } else {
+          node.effective_status = node.status;
+        }
       }
     }
 
