@@ -94,6 +94,7 @@ export declare class CodingAgent {
     /**
      * Verify build by running TypeScript compilation check
      * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
+     * Runs npm install first to ensure all dependencies are installed
      */
     private verifyBuild;
 }

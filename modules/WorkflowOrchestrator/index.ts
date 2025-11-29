@@ -71,11 +71,264 @@ export interface AgentOutput {
 }
 
 /**
+ * Interrupt Signal Interface
+ */
+interface InterruptSignal {
+  type: 'pause' | 'cancel' | 'redirect' | 'instruction';
+  messageId: number;
+  content: string;
+  metadata?: any;
+}
+
+/**
  * WorkflowOrchestrator Agent
  */
 export class WorkflowOrchestrator {
+  private pauseCheckInterval = 5000; // 5 seconds
+  private maxPauseTime = 30 * 60 * 1000; // 30 minutes
+
   constructor() {
     // Orchestrator doesn't need API key for now
+  }
+
+  /**
+   * Get a human-readable description of what each agent does
+   */
+  private getAgentDescription(agentType: string): string {
+    const descriptions: Record<string, string> = {
+      plan: 'Analyzing the codebase and creating an implementation plan',
+      code: 'Writing and modifying code based on the plan',
+      test: 'Writing and running tests to verify the implementation',
+      review: 'Reviewing code quality and suggesting improvements',
+      document: 'Generating documentation for the code changes',
+      scaffold: 'Creating the initial module structure and files',
+    };
+    return descriptions[agentType] || `Executing ${agentType} operations`;
+  }
+
+  /**
+   * Post a comment to the workflow conversation thread
+   */
+  private async postAgentComment(
+    workflowId: number,
+    agentType: string,
+    content: string,
+    agentExecutionId?: number,
+    metadata?: any
+  ): Promise<void> {
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `INSERT INTO workflow_messages
+         (workflow_id, agent_execution_id, message_type, agent_type, content, metadata, action_type, action_status)
+         VALUES (?, ?, 'agent', ?, ?, ?, 'comment', 'processed')`,
+        [
+          workflowId,
+          agentExecutionId || null,
+          agentType,
+          content,
+          metadata ? JSON.stringify(metadata) : null,
+        ]
+      );
+      console.log(`[${agentType}] ${content}`);
+    } catch (error) {
+      console.error('Failed to post agent comment:', error);
+      // Don't throw - comments are non-critical
+    }
+  }
+
+  /**
+   * Post a system message to the workflow conversation thread
+   */
+  private async postSystemMessage(
+    workflowId: number,
+    content: string,
+    actionType: string = 'comment',
+    metadata?: any
+  ): Promise<void> {
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `INSERT INTO workflow_messages
+         (workflow_id, message_type, content, metadata, action_type, action_status)
+         VALUES (?, 'system', ?, ?, ?, 'processed')`,
+        [
+          workflowId,
+          content,
+          metadata ? JSON.stringify(metadata) : null,
+          actionType,
+        ]
+      );
+      console.log(`[System] ${content}`);
+    } catch (error) {
+      console.error('Failed to post system message:', error);
+    }
+  }
+
+  /**
+   * Check for interrupt signals from user messages
+   */
+  private async checkForInterrupt(workflowId: number): Promise<InterruptSignal | null> {
+    try {
+      const db = getDbPool();
+
+      // Check for pending user messages with action types
+      const [messages] = await db.execute(
+        `SELECT id, content, action_type, metadata
+         FROM workflow_messages
+         WHERE workflow_id = ?
+           AND message_type = 'user'
+           AND action_status = 'pending'
+           AND action_type IN ('pause', 'cancel', 'redirect', 'instruction')
+         ORDER BY created_at ASC
+         LIMIT 1`,
+        [workflowId]
+      );
+
+      const pendingMessages = messages as any[];
+      if (pendingMessages.length > 0) {
+        const msg = pendingMessages[0];
+        return {
+          type: msg.action_type,
+          messageId: msg.id,
+          content: msg.content,
+          metadata: msg.metadata ? (typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata) : null,
+        };
+      }
+
+      // Also check if workflow is paused
+      const [workflows] = await db.execute(
+        `SELECT is_paused FROM workflows WHERE id = ?`,
+        [workflowId]
+      );
+
+      if ((workflows as any[])[0]?.is_paused) {
+        return {
+          type: 'pause',
+          messageId: 0,
+          content: 'Workflow is paused',
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Failed to check for interrupt:', error);
+      return null; // Don't throw - let workflow continue
+    }
+  }
+
+  /**
+   * Mark a message as acknowledged
+   */
+  private async markMessageAcknowledged(messageId: number): Promise<void> {
+    if (messageId === 0) return; // Skip for pause flag checks
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `UPDATE workflow_messages SET action_status = 'acknowledged' WHERE id = ?`,
+        [messageId]
+      );
+    } catch (error) {
+      console.error('Failed to mark message as acknowledged:', error);
+    }
+  }
+
+  /**
+   * Mark a message as processed
+   */
+  private async markMessageProcessed(messageId: number): Promise<void> {
+    if (messageId === 0) return;
+    try {
+      const db = getDbPool();
+      await db.execute(
+        `UPDATE workflow_messages SET action_status = 'processed' WHERE id = ?`,
+        [messageId]
+      );
+    } catch (error) {
+      console.error('Failed to mark message as processed:', error);
+    }
+  }
+
+  /**
+   * Handle pause request - wait for unpause signal
+   */
+  private async handlePause(workflowId: number, interrupt: InterruptSignal): Promise<void> {
+    await this.markMessageAcknowledged(interrupt.messageId);
+    await this.postSystemMessage(workflowId, `Workflow paused: ${interrupt.content}`, 'pause');
+
+    // Set paused flag if not already set
+    const db = getDbPool();
+    await db.execute(
+      `UPDATE workflows SET is_paused = TRUE, pause_requested_at = NOW(), pause_reason = ? WHERE id = ?`,
+      [interrupt.content, workflowId]
+    );
+
+    await this.logWorkflow(workflowId, 'info', 'workflow_paused', `Workflow paused: ${interrupt.content}`);
+  }
+
+  /**
+   * Wait for workflow to be unpaused
+   */
+  private async waitForUnpause(workflowId: number): Promise<void> {
+    const startTime = Date.now();
+    let checkCount = 0;
+
+    while (Date.now() - startTime < this.maxPauseTime) {
+      await new Promise(resolve => setTimeout(resolve, this.pauseCheckInterval));
+      checkCount++;
+
+      // Check if still paused
+      const db = getDbPool();
+      const [workflows] = await db.execute(
+        `SELECT is_paused FROM workflows WHERE id = ?`,
+        [workflowId]
+      );
+
+      if (!(workflows as any[])[0]?.is_paused) {
+        await this.postSystemMessage(workflowId, 'Workflow resumed', 'resume');
+        await this.logWorkflow(workflowId, 'info', 'workflow_resumed', 'Workflow resumed after pause');
+        return;
+      }
+
+      // Log periodic status
+      if (checkCount % 12 === 0) { // Every minute
+        await this.logWorkflow(workflowId, 'debug', 'workflow_paused_waiting',
+          `Workflow still paused, waiting for resume... (${Math.round((Date.now() - startTime) / 1000)}s)`);
+      }
+    }
+
+    // Timeout - auto-resume with warning
+    await this.postSystemMessage(workflowId, 'Workflow auto-resumed after 30 minute timeout', 'resume');
+    await this.logWorkflow(workflowId, 'warn', 'workflow_pause_timeout', 'Workflow auto-resumed after 30 minute timeout');
+
+    const db = getDbPool();
+    await db.execute(
+      `UPDATE workflows SET is_paused = FALSE, pause_requested_at = NULL, pause_reason = NULL WHERE id = ?`,
+      [workflowId]
+    );
+  }
+
+  /**
+   * Handle cancel request
+   */
+  private async handleCancel(workflowId: number, interrupt: InterruptSignal): Promise<void> {
+    await this.markMessageAcknowledged(interrupt.messageId);
+    await this.postSystemMessage(workflowId, `Workflow cancelled by user: ${interrupt.content}`, 'cancel');
+    await this.logWorkflow(workflowId, 'info', 'workflow_cancelled', `Workflow cancelled by user: ${interrupt.content}`);
+    await this.markMessageProcessed(interrupt.messageId);
+  }
+
+  /**
+   * Handle instruction from user - acknowledge and continue
+   */
+  private async handleInstruction(workflowId: number, interrupt: InterruptSignal, agentType: string): Promise<void> {
+    await this.markMessageAcknowledged(interrupt.messageId);
+    await this.postAgentComment(
+      workflowId,
+      agentType,
+      `Acknowledged user instruction: "${interrupt.content.substring(0, 100)}${interrupt.content.length > 100 ? '...' : ''}"`,
+    );
+    await this.markMessageProcessed(interrupt.messageId);
   }
 
   /**
@@ -162,9 +415,43 @@ export class WorkflowOrchestrator {
         codeWorkingDir,
       });
 
+      // Post initial workflow message
+      await this.postSystemMessage(
+        input.workflowId,
+        `Starting workflow with ${agentSequence.length} agent(s): ${agentSequence.join(' → ')}`,
+        'comment',
+        { agentSequence, workflowType: input.workflowType }
+      );
+
       // Execute agents in sequence
       for (let i = 0; i < agentSequence.length; i++) {
         const agentType = agentSequence[i];
+
+        // ===== CHECK FOR USER INTERRUPTS =====
+        const interrupt = await this.checkForInterrupt(input.workflowId);
+        if (interrupt) {
+          if (interrupt.type === 'pause') {
+            await this.handlePause(input.workflowId, interrupt);
+            await this.waitForUnpause(input.workflowId);
+          } else if (interrupt.type === 'cancel') {
+            await this.handleCancel(input.workflowId, interrupt);
+            return {
+              success: false,
+              artifacts: allArtifacts,
+              summary: `Workflow cancelled by user: ${interrupt.content}`,
+            };
+          } else if (interrupt.type === 'instruction') {
+            await this.handleInstruction(input.workflowId, interrupt, agentType);
+            // Continue with execution after acknowledging
+          }
+        }
+
+        // ===== POST AGENT STARTING COMMENT =====
+        await this.postAgentComment(
+          input.workflowId,
+          agentType,
+          `Starting ${agentType} agent (${i + 1}/${agentSequence.length}) - ${this.getAgentDescription(agentType)}`
+        );
 
         await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_starting`, `Starting ${agentType} agent (${i + 1}/${agentSequence.length})`);
 
@@ -205,6 +492,15 @@ export class WorkflowOrchestrator {
             hasFailedAgent = true;
             await this.updateAgentExecution(agentExecutionId, 'failed', agentOutput, agentOutput.summary);
             await this.logWorkflow(input.workflowId, 'warn', `agent_${agentType}_returned_failure`, `${agentType} agent returned success=false: ${agentOutput.summary}`);
+
+            // ===== POST AGENT FAILURE COMMENT =====
+            await this.postAgentComment(
+              input.workflowId,
+              agentType,
+              `❌ ${agentType} agent failed: ${agentOutput.summary}`,
+              agentExecutionId
+            );
+
             allSummaries.push(`${agentType}: FAILED - ${agentOutput.summary}`);
             // Continue with next agent
             continue;
@@ -216,6 +512,15 @@ export class WorkflowOrchestrator {
           // Collect artifacts and summaries
           allArtifacts.push(...agentOutput.artifacts);
           allSummaries.push(`${agentType}: ${agentOutput.summary}`);
+
+          // ===== POST AGENT COMPLETION COMMENT =====
+          await this.postAgentComment(
+            input.workflowId,
+            agentType,
+            `✅ ${agentType} agent completed: ${agentOutput.summary.substring(0, 200)}${agentOutput.summary.length > 200 ? '...' : ''}`,
+            agentExecutionId,
+            { artifactsCount: agentOutput.artifacts.length }
+          );
 
           await this.logWorkflow(input.workflowId, 'info', `agent_${agentType}_completed`, `${agentType} agent completed successfully`, {
             artifactsCount: agentOutput.artifacts.length,
@@ -496,11 +801,17 @@ export class WorkflowOrchestrator {
     errorMessage?: string
   ): Promise<void> {
     const db = getDbPool();
+    // Truncate error message to 60000 chars (TEXT column limit is ~65KB)
+    const truncatedError = errorMessage
+      ? (errorMessage.length > 60000
+          ? errorMessage.substring(0, 60000) + '\n\n[TRUNCATED - full error in output JSON]'
+          : errorMessage)
+      : null;
     await db.execute(
       `UPDATE agent_executions
        SET status = ?, output = ?, error_message = ?, completed_at = NOW()
        WHERE id = ?`,
-      [status, output ? JSON.stringify(output) : null, errorMessage || null, agentExecutionId]
+      [status, output ? JSON.stringify(output) : null, truncatedError, agentExecutionId]
     );
   }
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Write content to file
-# Usage: ./write-file.sh <file_path> [content]
-#        OR: echo "content" | ./write-file.sh <file_path>
+# Usage: ./write-file.sh <file_path> <content>
+# Note: Content MUST be provided as second argument (stdin not supported to avoid blocking)
 
 set -e
 
@@ -11,6 +11,12 @@ CONTENT="$2"
 
 if [ -z "$FILE_PATH" ]; then
   echo "Error: file_path is required"
+  exit 1
+fi
+
+if [ -z "$CONTENT" ]; then
+  echo "Error: content is required as second argument"
+  echo "Usage: ./write-file.sh <file_path> <content>"
   exit 1
 fi
 
@@ -31,15 +37,11 @@ if [ "$DIR_PATH" != "." ] && [ ! -d "$DIR_PATH" ]; then
   mkdir -p "$DIR_PATH"
 fi
 
-# Write content
-if [ -n "$CONTENT" ]; then
-  echo "$CONTENT" > "$FILE_PATH"
-else
-  # Read from stdin
-  cat > "$FILE_PATH"
-fi
+# Write content (use printf to handle special characters better than echo)
+printf '%s\n' "$CONTENT" > "$FILE_PATH"
 
 echo "File written: $FILE_PATH"
+
 
 
 

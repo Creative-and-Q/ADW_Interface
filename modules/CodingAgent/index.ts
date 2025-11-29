@@ -121,13 +121,16 @@ export class CodingAgent {
 
       let iterations = 0;
       const maxIterations = 10;
+      const maxBuildRetries = 3; // Number of times to retry if build fails
+      let buildRetryCount = 0;
       const toolResults: string[] = [];
       let allResponses: string[] = [];
+      let lastBuildError: string | null = null;
 
       while (iterations < maxIterations) {
         iterations++;
         console.log(`CodingAgent iteration ${iterations}/${maxIterations}`);
-        
+
         // Call OpenRouter API
         const aiResponse = await this.callOpenRouter(messages, {
           systemPrompt,
@@ -139,23 +142,86 @@ export class CodingAgent {
 
         // Parse and execute tool calls OR auto-extract code
         const executed = await this.parseAndExecuteTools(aiResponse, input.workingDir);
-        
+
         if (executed.length === 0) {
           // No tools found and no code extracted
           console.log('No actions taken from response, considering complete');
           toolResults.push(`No actions: ${aiResponse.substring(0, 200)}`);
           break;
         }
-        
+
         // Check if AI is done (says complete or successful extractions made)
-        if (aiResponse.toLowerCase().includes('implementation complete') ||
+        const aiSaysComplete = aiResponse.toLowerCase().includes('implementation complete') ||
             aiResponse.toLowerCase().includes('all changes implemented') ||
-            executed.some(r => r.includes('Auto-wrote'))) {
-          // AI is done or files were auto-extracted
-          console.log(`CodingAgent completed after ${iterations} iterations (${executed.filter(r => r.includes('Auto-wrote')).length} files written)`);
+            aiResponse.toLowerCase().includes('task complete') ||
+            aiResponse.toLowerCase().includes('build error fixed') ||
+            executed.some(r => r.includes('Auto-wrote'));
+
+        if (aiSaysComplete) {
+          // AI is done or files were auto-extracted - VERIFY BUILD BEFORE ACCEPTING
+          console.log(`CodingAgent: AI indicates completion after ${iterations} iterations, verifying build...`);
           toolResults.push(...executed);
-          toolResults.push(`Final: ${aiResponse.substring(0, 300)}`);
-          break;
+
+          // Run build verification NOW (inside the loop)
+          const buildVerification = await this.verifyBuild(input.workingDir);
+
+          if (buildVerification.success) {
+            // Build passed! We're done
+            console.log(`CodingAgent: Build verification PASSED after ${iterations} iterations`);
+            toolResults.push(`Build verification: PASSED`);
+            toolResults.push(`Final: ${aiResponse.substring(0, 300)}`);
+            lastBuildError = null;
+            break;
+          } else {
+            // Build failed - retry if we haven't exceeded max retries
+            buildRetryCount++;
+            lastBuildError = buildVerification.error || 'Unknown build error';
+
+            if (buildRetryCount >= maxBuildRetries) {
+              console.error(`CodingAgent: Build failed after ${buildRetryCount} retry attempts`);
+              toolResults.push(`Build verification: FAILED (attempt ${buildRetryCount}/${maxBuildRetries})`);
+              break;
+            }
+
+            console.log(`CodingAgent: Build FAILED (attempt ${buildRetryCount}/${maxBuildRetries}), asking AI to fix...`);
+            toolResults.push(`Build verification: FAILED (attempt ${buildRetryCount}/${maxBuildRetries}): ${lastBuildError}`);
+
+            // Add build error to conversation so AI can fix it
+            messages.push({
+              role: 'assistant',
+              content: aiResponse,
+            });
+
+            messages.push({
+              role: 'user',
+              content: `⚠️ BUILD VERIFICATION FAILED (attempt ${buildRetryCount}/${maxBuildRetries})
+
+The code you wrote has the following build errors:
+
+\`\`\`
+${lastBuildError}
+\`\`\`
+
+PLEASE FIX THESE ERRORS:
+1. Analyze the error messages carefully
+2. Identify the file(s) and line(s) causing the errors
+3. Write the CORRECTED file content with the errors fixed
+
+Common fixes include:
+- **"Cannot find module 'X'"**: Add the package to package.json dependencies and update the import OR use a different approach that doesn't require external packages
+- **"Could not find a declaration file for module 'X'"**: Add @types/X to devDependencies in package.json OR add a declare module statement
+- **"declared but never used"**: Remove the unused import/variable
+- **Type errors**: Fix the type annotations
+- **Syntax errors**: Fix the syntax
+
+IMPORTANT: If you need to add new packages to package.json, show the updated package.json file with the new dependencies.
+
+Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
+            });
+
+            // Continue the loop to let AI fix the error
+            continue;
+          }
         }
 
         // Add AI response and tool results to conversation
@@ -172,11 +238,16 @@ export class CodingAgent {
         toolResults.push(...executed);
       }
 
-      // BUILD VERIFICATION: Run TypeScript type-check after code changes
-      console.log('CodingAgent: Running build verification...');
-      const buildVerification = await this.verifyBuild(input.workingDir);
+      // Final build check if we exited the loop without a successful build check
+      if (lastBuildError === null) {
+        console.log('CodingAgent: Running final build verification...');
+        const finalBuildCheck = await this.verifyBuild(input.workingDir);
+        if (!finalBuildCheck.success) {
+          lastBuildError = finalBuildCheck.error || 'Unknown build error';
+        }
+      }
 
-      if (!buildVerification.success) {
+      if (lastBuildError !== null) {
         console.error('CodingAgent: Build verification FAILED');
         return {
           success: false,
@@ -187,18 +258,20 @@ export class CodingAgent {
               workflowId: input.workflowId,
               iterations,
               toolsExecuted: toolResults.length,
-              buildError: buildVerification.error,
+              buildError: lastBuildError,
+              buildRetryAttempts: buildRetryCount,
             },
           }],
-          summary: `CodingAgent wrote files but BUILD FAILED: ${buildVerification.error}`,
+          summary: `CodingAgent wrote files but BUILD FAILED after ${buildRetryCount} fix attempts: ${lastBuildError}`,
           requiresRetry: true,
-          retryReason: `Build verification failed: ${buildVerification.error}`,
+          retryReason: `Build verification failed after ${buildRetryCount} attempts: ${lastBuildError}`,
           metadata: {
             workflowId: input.workflowId,
             iterations,
             toolsExecuted: toolResults.length,
             buildVerification: 'FAILED',
-            buildError: buildVerification.error,
+            buildError: lastBuildError,
+            buildRetryAttempts: buildRetryCount,
           },
         };
       }
@@ -758,10 +831,14 @@ When finished, say: "IMPLEMENTATION COMPLETE"
       // Check if tool exists
       await fs.access(toolPath);
 
-      // Execute tool
+      // Execute tool with timeout to prevent hanging
       const { stdout, stderr } = await execAsync(
         `bash "${toolPath}" ${args.map(arg => `"${arg}"`).join(' ')}`,
-        { cwd: workingDir }
+        {
+          cwd: workingDir,
+          timeout: 30000, // 30 second timeout
+          maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        }
       );
 
       if (stderr) {
@@ -769,7 +846,11 @@ When finished, say: "IMPLEMENTATION COMPLETE"
       }
 
       return stdout;
-    } catch (error) {
+    } catch (error: any) {
+      // Check if it was a timeout
+      if (error.killed) {
+        throw new Error(`Tool ${toolName} timed out after 30 seconds`);
+      }
       throw new Error(`Failed to execute tool ${toolName}: ${(error as Error).message}`);
     }
   }
@@ -777,10 +858,60 @@ When finished, say: "IMPLEMENTATION COMPLETE"
   /**
    * Verify build by running TypeScript compilation check
    * Checks both root tsconfig.json and frontend/tsconfig.json if they exist
+   * Runs npm install first to ensure all dependencies are installed
    */
   private async verifyBuild(workingDir: string): Promise<{ success: boolean; error?: string }> {
     const results: string[] = [];
     let hasError = false;
+
+    // Step 0: Run npm install in root directory if package.json exists
+    try {
+      const rootPackageJson = path.join(workingDir, 'package.json');
+      await fs.access(rootPackageJson);
+      console.log('CodingAgent: Running npm install in root directory...');
+      try {
+        await execAsync('npm install', {
+          cwd: workingDir,
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 180000, // 3 minute timeout
+        });
+        console.log('CodingAgent: npm install completed successfully');
+      } catch (installError: any) {
+        const errorOutput = installError.stdout || installError.stderr || installError.message;
+        console.error('CodingAgent: npm install failed:', errorOutput.substring(0, 500));
+        hasError = true;
+        results.push(`npm install FAILED:\n${errorOutput}`);
+      }
+    } catch {
+      // No package.json - skip npm install
+    }
+
+    // Step 0b: Run npm install in frontend directory if package.json exists
+    try {
+      const frontendPackageJson = path.join(workingDir, 'frontend', 'package.json');
+      await fs.access(frontendPackageJson);
+      console.log('CodingAgent: Running npm install in frontend directory...');
+      try {
+        await execAsync('npm install', {
+          cwd: path.join(workingDir, 'frontend'),
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 180000, // 3 minute timeout
+        });
+        console.log('CodingAgent: frontend npm install completed successfully');
+      } catch (installError: any) {
+        const errorOutput = installError.stdout || installError.stderr || installError.message;
+        console.error('CodingAgent: frontend npm install failed:', errorOutput.substring(0, 500));
+        hasError = true;
+        results.push(`Frontend npm install FAILED:\n${errorOutput}`);
+      }
+    } catch {
+      // No frontend/package.json - skip
+    }
+
+    // If npm install already failed, return early
+    if (hasError) {
+      return { success: false, error: results.join('\n\n') };
+    }
 
     // Check 1: Root tsconfig.json (backend code)
     try {
