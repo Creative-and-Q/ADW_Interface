@@ -603,15 +603,39 @@ export class WorkflowOrchestrator {
         }
       }
 
-      await this.logWorkflow(input.workflowId, 'info', 'workflow_completed', 'Workflow completed successfully', {
+      // Check for structured plan and create sub-workflows if present
+      const subWorkflowsCreated = await this.handleSubWorkflowCreation(input.workflowId, allArtifacts);
+
+      // Determine final workflow status
+      const db = getDbPool();
+      let finalStatus: string;
+
+      if (hasFailedAgent) {
+        finalStatus = 'failed';
+      } else if (subWorkflowsCreated) {
+        // If sub-workflows were created, parent stays 'running' until children complete
+        finalStatus = 'running';
+        await this.logWorkflow(input.workflowId, 'info', 'workflow_awaiting_children',
+          'Workflow created sub-workflows, staying in running state until children complete');
+      } else {
+        finalStatus = 'completed';
+      }
+
+      // Update workflow status in database
+      await db.execute(
+        `UPDATE workflows SET status = ?, ${finalStatus === 'completed' || finalStatus === 'failed' ? 'completed_at = NOW(),' : ''} updated_at = NOW() WHERE id = ?`,
+        [finalStatus, input.workflowId]
+      );
+
+      await this.logWorkflow(input.workflowId, 'info', 'workflow_completed',
+        `Workflow finished with status: ${finalStatus}`, {
         totalArtifacts: allArtifacts.length,
+        hasFailedAgent,
+        subWorkflowsCreated,
       });
 
-      // Check for structured plan and create sub-workflows if present
-      await this.handleSubWorkflowCreation(input.workflowId, allArtifacts);
-
-      // Auto-push if this is a root workflow (no parent) and workflow succeeded
-      if (!hasFailedAgent && !input.metadata?.parentWorkflowId) {
+      // Auto-push if this is a root workflow (no parent) and workflow succeeded without sub-workflows
+      if (!hasFailedAgent && !subWorkflowsCreated && !input.metadata?.parentWorkflowId) {
         const pushResult = await this.autoPushChanges(codeWorkingDir, input.workflowId, input.branchName);
         if (pushResult.pushed) {
           allSummaries.push('auto_push: Pushed changes to remote');
@@ -625,6 +649,13 @@ export class WorkflowOrchestrator {
       };
     } catch (error) {
       await this.logWorkflow(input.workflowId, 'error', 'workflow_failed', `Workflow failed: ${(error as Error).message}`);
+
+      // Update workflow status to failed in database
+      const db = getDbPool();
+      await db.execute(
+        `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+        [input.workflowId]
+      );
 
       return {
         success: false,
@@ -899,31 +930,32 @@ export class WorkflowOrchestrator {
   /**
    * Handle sub-workflow creation from structured plan
    * If the planning agent generated a structured plan, automatically create sub-workflows
+   * Returns true if sub-workflows were created (so parent knows to wait)
    */
   private async handleSubWorkflowCreation(
     workflowId: number,
     artifacts: AgentOutput['artifacts']
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       // Look for structured_plan artifact
       const planArtifact = artifacts.find(a => a.type === 'structured_plan');
       if (!planArtifact) {
-        return; // No structured plan, nothing to do
+        return false; // No structured plan, nothing to do
       }
 
       const structuredPlan = JSON.parse(planArtifact.content);
-      
+
       // Check if workflow should auto-create sub-workflows
       const db = getDbPool();
       const [rows] = await db.execute(
-        'SELECT auto_execute_children, branch_name, target_module FROM workflows WHERE id = ?',
+        'SELECT auto_execute_children, branch_name, target_module, payload FROM workflows WHERE id = ?',
         [workflowId]
       );
       const workflow = (rows as any[])[0];
-      
+
       if (!workflow || workflow.auto_execute_children === false) {
         await this.logWorkflow(workflowId, 'info', 'sub_workflow_skipped', 'Auto-execution disabled, skipping sub-workflow creation');
-        return;
+        return false;
       }
 
       // Save plan to workflow
@@ -939,20 +971,169 @@ export class WorkflowOrchestrator {
         // Call the API to create sub-workflows
         const axios = (await import('axios')).default;
         const apiUrl = process.env.AIDEVELOPER_API_URL || 'http://localhost:3000';
-        
+
         const response = await axios.post(`${apiUrl}/api/workflows/${workflowId}/sub-workflows`, {
           subTasks: structuredPlan.subTasks,
         });
 
+        const childWorkflowIds = response.data?.data?.childWorkflowIds || [];
+
         await this.logWorkflow(workflowId, 'info', 'sub_workflows_created', `Created ${structuredPlan.subTasks.length} sub-workflows from plan`, {
-          childWorkflowIds: response.data?.data?.childWorkflowIds,
+          childWorkflowIds,
         });
+
+        // Trigger execution of child workflows
+        if (childWorkflowIds.length > 0) {
+          await this.executeChildWorkflows(workflowId, childWorkflowIds, workflow);
+        }
+
+        return true; // Sub-workflows were created
       }
+
+      return false;
     } catch (error) {
       console.error('Failed to handle sub-workflow creation:', error);
       await this.logWorkflow(workflowId, 'error', 'sub_workflow_creation_failed', `Failed to create sub-workflows: ${(error as Error).message}`);
-      // Don't throw - this is a non-critical enhancement
+      return false; // Don't throw - this is a non-critical enhancement
     }
+  }
+
+  /**
+   * Execute child workflows sequentially
+   * This ensures child workflows are actually run, not left pending
+   */
+  private async executeChildWorkflows(
+    parentWorkflowId: number,
+    childWorkflowIds: number[],
+    parentWorkflow: any
+  ): Promise<void> {
+    const db = getDbPool();
+
+    await this.logWorkflow(parentWorkflowId, 'info', 'executing_children',
+      `Starting execution of ${childWorkflowIds.length} child workflows`);
+
+    // Get working directory from parent workflow payload
+    let workingDir: string | null = null;
+    if (parentWorkflow.payload) {
+      try {
+        const payload = typeof parentWorkflow.payload === 'string'
+          ? JSON.parse(parentWorkflow.payload)
+          : parentWorkflow.payload;
+        workingDir = payload.workingDir;
+      } catch {}
+    }
+
+    // If no workingDir in payload, try to construct it from target_module
+    if (!workingDir && parentWorkflow.target_module) {
+      workingDir = `/home/kevin/Home/ex_nihilo/modules/${parentWorkflow.target_module}`;
+    }
+
+    if (!workingDir) {
+      await this.logWorkflow(parentWorkflowId, 'error', 'no_working_dir',
+        'Cannot execute children: no working directory found');
+      return;
+    }
+
+    let allChildrenSucceeded = true;
+    let anyChildFailed = false;
+
+    // Execute children sequentially
+    for (const childId of childWorkflowIds) {
+      try {
+        // Get child workflow details
+        const [childRows] = await db.execute(
+          'SELECT id, workflow_type, task_description, payload FROM workflows WHERE id = ?',
+          [childId]
+        );
+        const childWorkflow = (childRows as any[])[0];
+
+        if (!childWorkflow) {
+          await this.logWorkflow(parentWorkflowId, 'warn', 'child_not_found',
+            `Child workflow #${childId} not found`);
+          continue;
+        }
+
+        // Mark child as running
+        await db.execute(
+          `UPDATE workflows SET status = 'running', started_at = NOW(), updated_at = NOW() WHERE id = ?`,
+          [childId]
+        );
+
+        await this.logWorkflow(parentWorkflowId, 'info', 'child_starting',
+          `Starting child workflow #${childId}: ${childWorkflow.task_description?.substring(0, 50) || 'No description'}...`);
+
+        // Get task description from payload if not in task_description field
+        let taskDescription = childWorkflow.task_description;
+        if (!taskDescription && childWorkflow.payload) {
+          try {
+            const payload = typeof childWorkflow.payload === 'string'
+              ? JSON.parse(childWorkflow.payload)
+              : childWorkflow.payload;
+            taskDescription = payload.taskDescription || payload.title;
+          } catch {}
+        }
+
+        // Create input for child workflow
+        const childInput: AgentInput = {
+          workflowId: childId,
+          workflowType: childWorkflow.workflow_type,
+          targetModule: parentWorkflow.target_module,
+          taskDescription: taskDescription || `Sub-task for workflow #${parentWorkflowId}`,
+          branchName: parentWorkflow.branch_name,
+          workingDir,
+          metadata: {
+            parentWorkflowId,
+          },
+        };
+
+        // Execute child workflow
+        const result = await this.execute(childInput);
+
+        if (!result.success) {
+          anyChildFailed = true;
+          allChildrenSucceeded = false;
+          await this.logWorkflow(parentWorkflowId, 'warn', 'child_failed',
+            `Child workflow #${childId} failed: ${result.summary.substring(0, 100)}`);
+        } else {
+          await this.logWorkflow(parentWorkflowId, 'info', 'child_completed',
+            `Child workflow #${childId} completed successfully`);
+        }
+
+      } catch (error) {
+        anyChildFailed = true;
+        allChildrenSucceeded = false;
+
+        // Mark child as failed
+        await db.execute(
+          `UPDATE workflows SET status = 'failed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+          [childId]
+        );
+
+        await this.logWorkflow(parentWorkflowId, 'error', 'child_execution_error',
+          `Error executing child workflow #${childId}: ${(error as Error).message}`);
+      }
+    }
+
+    // Update parent workflow status based on children results
+    let parentFinalStatus: string;
+    if (anyChildFailed) {
+      parentFinalStatus = 'failed';
+    } else if (allChildrenSucceeded) {
+      parentFinalStatus = 'completed';
+    } else {
+      parentFinalStatus = 'completed_with_warnings';
+    }
+
+    await db.execute(
+      `UPDATE workflows SET status = ?, completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
+      [parentFinalStatus, parentWorkflowId]
+    );
+
+    await this.logWorkflow(parentWorkflowId, 'info', 'children_execution_complete',
+      `All ${childWorkflowIds.length} child workflows processed. Parent status: ${parentFinalStatus}`, {
+      allChildrenSucceeded,
+      anyChildFailed,
+    });
   }
 
   /**
