@@ -625,3 +625,216 @@ export async function resetWorkflowForResume(id: number): Promise<void> {
     throw error;
   }
 }
+
+/**
+ * Save a checkpoint commit for a workflow
+ * Called when a workflow completes successfully
+ */
+export async function saveWorkflowCheckpoint(
+  workflowId: number,
+  commitSha: string
+): Promise<void> {
+  try {
+    await update(
+      'workflows',
+      {
+        checkpoint_commit: commitSha,
+        checkpoint_created_at: new Date(),
+      },
+      'id = ?',
+      [workflowId]
+    );
+    logger.info(`Saved checkpoint for workflow ${workflowId}`, { commitSha });
+  } catch (error) {
+    logger.error('Failed to save workflow checkpoint', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Get the last successful checkpoint commit in a workflow tree
+ * Traverses the hierarchy to find the most recent completed workflow with a checkpoint
+ */
+export async function getLastCheckpoint(workflowId: number): Promise<{
+  workflowId: number;
+  commitSha: string;
+  createdAt: Date;
+  targetModule: string;
+} | null> {
+  try {
+    // Find the last completed workflow with a checkpoint in the tree
+    // Use recursive CTE to traverse the hierarchy
+    const result = await queryOne<any>(
+      `WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, checkpoint_commit, checkpoint_created_at, target_module
+        FROM workflows WHERE id = ?
+        UNION ALL
+        SELECT w.id, w.parent_workflow_id, w.status, w.checkpoint_commit, w.checkpoint_created_at, w.target_module
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT id, checkpoint_commit, checkpoint_created_at, target_module
+      FROM workflow_tree
+      WHERE status = 'completed' AND checkpoint_commit IS NOT NULL
+      ORDER BY checkpoint_created_at DESC
+      LIMIT 1`,
+      [workflowId]
+    );
+
+    if (!result || !result.checkpoint_commit) {
+      return null;
+    }
+
+    return {
+      workflowId: result.id,
+      commitSha: result.checkpoint_commit,
+      createdAt: result.checkpoint_created_at,
+      targetModule: result.target_module,
+    };
+  } catch (error) {
+    logger.error('Failed to get last checkpoint', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Get all checkpoints in a workflow tree (for display purposes)
+ */
+export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<Array<{
+  workflowId: number;
+  commitSha: string;
+  createdAt: Date;
+  targetModule: string;
+  taskDescription: string | null;
+}>> {
+  try {
+    const results = await query<any[]>(
+      `WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, checkpoint_commit, checkpoint_created_at, target_module, task_description, payload
+        FROM workflows WHERE id = ?
+        UNION ALL
+        SELECT w.id, w.parent_workflow_id, w.status, w.checkpoint_commit, w.checkpoint_created_at, w.target_module, w.task_description, w.payload
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT id, checkpoint_commit, checkpoint_created_at, target_module, task_description, payload
+      FROM workflow_tree
+      WHERE checkpoint_commit IS NOT NULL
+      ORDER BY checkpoint_created_at DESC`,
+      [rootWorkflowId]
+    );
+
+    return results.map(row => {
+      let taskDesc = row.task_description;
+      if (!taskDesc && row.payload) {
+        try {
+          const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+          taskDesc = payload.taskDescription || payload.title || null;
+        } catch { /* ignore */ }
+      }
+      return {
+        workflowId: row.id,
+        commitSha: row.checkpoint_commit,
+        createdAt: row.checkpoint_created_at,
+        targetModule: row.target_module,
+        taskDescription: taskDesc,
+      };
+    });
+  } catch (error) {
+    logger.error('Failed to get workflow checkpoints', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Resume a workflow tree from the last checkpoint
+ * Resets all failed/pending workflows after the checkpoint
+ */
+export async function resumeFromCheckpoint(
+  rootWorkflowId: number,
+  checkpointWorkflowId?: number
+): Promise<{
+  checkpointCommit: string;
+  resetWorkflowIds: number[];
+  targetModule: string;
+}> {
+  try {
+    // Get the checkpoint to resume from (either specified or last successful)
+    let checkpoint;
+    if (checkpointWorkflowId) {
+      const row = await queryOne<any>(
+        'SELECT id, checkpoint_commit, target_module FROM workflows WHERE id = ? AND checkpoint_commit IS NOT NULL',
+        [checkpointWorkflowId]
+      );
+      if (row) {
+        checkpoint = {
+          workflowId: row.id,
+          commitSha: row.checkpoint_commit,
+          targetModule: row.target_module,
+        };
+      }
+    } else {
+      checkpoint = await getLastCheckpoint(rootWorkflowId);
+    }
+
+    if (!checkpoint) {
+      throw new Error('No checkpoint found to resume from');
+    }
+
+    // Find all workflows in the tree that need to be reset
+    // These are workflows that came AFTER the checkpoint (by execution order or creation time)
+    const workflowsToReset = await query<any[]>(
+      `WITH RECURSIVE workflow_tree AS (
+        SELECT id, parent_workflow_id, status, checkpoint_created_at, created_at, execution_order
+        FROM workflows WHERE id = ?
+        UNION ALL
+        SELECT w.id, w.parent_workflow_id, w.status, w.checkpoint_created_at, w.created_at, w.execution_order
+        FROM workflows w
+        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT id, status FROM workflow_tree
+      WHERE status IN ('failed', 'pending', 'pending_fix')
+        AND id != ?`,
+      [rootWorkflowId, checkpoint.workflowId]
+    );
+
+    const resetIds: number[] = [];
+
+    // Reset each failed/pending workflow
+    for (const workflow of workflowsToReset) {
+      await update(
+        'workflows',
+        { status: WorkflowStatus.PENDING, started_at: null, completed_at: null },
+        'id = ?',
+        [workflow.id]
+      );
+      resetIds.push(workflow.id);
+    }
+
+    // Also reset the sub_workflow_queue entries
+    if (resetIds.length > 0) {
+      await query(
+        `UPDATE sub_workflow_queue
+         SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL
+         WHERE child_workflow_id IN (${resetIds.join(',')})`,
+        []
+      );
+    }
+
+    logger.info('Resumed workflow tree from checkpoint', {
+      rootWorkflowId,
+      checkpointWorkflowId: checkpoint.workflowId,
+      checkpointCommit: checkpoint.commitSha,
+      resetCount: resetIds.length,
+    });
+
+    return {
+      checkpointCommit: checkpoint.commitSha,
+      resetWorkflowIds: resetIds,
+      targetModule: checkpoint.targetModule,
+    };
+  } catch (error) {
+    logger.error('Failed to resume from checkpoint', error as Error);
+    throw error;
+  }
+}

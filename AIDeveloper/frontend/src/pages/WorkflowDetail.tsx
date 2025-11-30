@@ -12,6 +12,11 @@ import {
   Calendar,
   RotateCcw,
   MessageCircle,
+  History,
+  GitCommit,
+  X,
+  AlertCircle,
+  CheckCircle,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { getStatusColor } from '../utils/workflowChartUtils';
@@ -44,6 +49,16 @@ export default function WorkflowDetail() {
   const [messages, setMessages] = useState<any[]>([]);
   const [rootWorkflowId, setRootWorkflowId] = useState<number | null>(null);
   const [isSubWorkflow, setIsSubWorkflow] = useState(false);
+  const [checkpoints, setCheckpoints] = useState<Array<{
+    workflowId: number;
+    commitSha: string;
+    createdAt: string;
+    targetModule: string;
+    taskDescription: string | null;
+  }>>([]);
+  const [showCheckpointModal, setShowCheckpointModal] = useState(false);
+  const [isResumingFromCheckpoint, setIsResumingFromCheckpoint] = useState(false);
+  const [hasFailedDescendants, setHasFailedDescendants] = useState(false);
   const { socket, subscribe } = useWebSocket();
 
   useEffect(() => {
@@ -109,6 +124,11 @@ export default function WorkflowDetail() {
       // Load resume state if workflow failed
       if (data.workflow.status === 'failed') {
         await loadResumeState();
+      }
+      // Load checkpoints and check for failed descendants for master workflows
+      if (!data.workflow.parent_workflow_id) {
+        await loadCheckpoints();
+        await checkForFailedDescendants();
       }
     } catch (error) {
       console.error('Failed to load workflow:', error);
@@ -189,6 +209,52 @@ export default function WorkflowDetail() {
       setResumeState(data);
     } catch (error) {
       console.error('Failed to load resume state:', error);
+    }
+  };
+
+  const loadCheckpoints = async () => {
+    try {
+      const { data } = await workflowsAPI.getCheckpoints(parseInt(id!));
+      if (data.success) {
+        setCheckpoints(data.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to load checkpoints:', error);
+    }
+  };
+
+  const checkForFailedDescendants = async () => {
+    try {
+      const response = await fetch(`/api/workflows/${id}/tree-stats`);
+      const result = await response.json();
+      if (result.success && result.data) {
+        const failed = result.data.statusCounts?.failed || 0;
+        setHasFailedDescendants(failed > 0);
+      }
+    } catch (error) {
+      console.error('Failed to check tree stats:', error);
+    }
+  };
+
+  const handleResumeFromCheckpoint = async (checkpointWorkflowId?: number) => {
+    try {
+      setIsResumingFromCheckpoint(true);
+      const { data } = await workflowsAPI.resumeFromCheckpoint(parseInt(id!), checkpointWorkflowId);
+      if (data.success) {
+        toast.success(`Restored to checkpoint ${data.data.checkpointCommit.substring(0, 7)}. Reset ${data.data.resetWorkflowIds.length} workflow(s).`);
+        setShowCheckpointModal(false);
+        // Reload workflow after short delay
+        setTimeout(() => {
+          loadWorkflow();
+          setIsResumingFromCheckpoint(false);
+        }, 1000);
+      } else {
+        toast.error('Failed to resume from checkpoint');
+        setIsResumingFromCheckpoint(false);
+      }
+    } catch (error: any) {
+      toast.error(`Failed to resume from checkpoint: ${error.response?.data?.error || error.message}`);
+      setIsResumingFromCheckpoint(false);
     }
   };
 
@@ -315,28 +381,42 @@ export default function WorkflowDetail() {
               </div>
             </div>
           </div>
-          {resumeState?.canResume && (
-            <button
-              onClick={handleResume}
-              disabled={isResuming}
-              className="flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Resume workflow from last checkpoint"
-            >
-              <Play className="h-4 w-4 mr-2" />
-              {isResuming ? 'Resuming...' : 'Resume Workflow'}
-            </button>
-          )}
-          {workflow.status === 'failed' && !resumeState?.canResume && (
-            <button
-              onClick={handleRestart}
-              disabled={isRestarting}
-              className="flex items-center px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="Restart workflow from the beginning"
-            >
-              <RotateCcw className="h-4 w-4 mr-2" />
-              {isRestarting ? 'Restarting...' : 'Restart Workflow'}
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {/* Resume from Checkpoint - for master workflows with failed descendants and checkpoints */}
+            {!workflow.parent_workflow_id && hasFailedDescendants && checkpoints.length > 0 && (
+              <button
+                onClick={() => setShowCheckpointModal(true)}
+                disabled={isResumingFromCheckpoint}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Resume from a previous checkpoint"
+              >
+                <History className="h-4 w-4 mr-2" />
+                {isResumingFromCheckpoint ? 'Resuming...' : 'Resume from Checkpoint'}
+              </button>
+            )}
+            {resumeState?.canResume && (
+              <button
+                onClick={handleResume}
+                disabled={isResuming}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Resume workflow from last checkpoint"
+              >
+                <Play className="h-4 w-4 mr-2" />
+                {isResuming ? 'Resuming...' : 'Resume Workflow'}
+              </button>
+            )}
+            {workflow.status === 'failed' && !resumeState?.canResume && (
+              <button
+                onClick={handleRestart}
+                disabled={isRestarting}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Restart workflow from the beginning"
+              >
+                <RotateCcw className="h-4 w-4 mr-2" />
+                {isRestarting ? 'Restarting...' : 'Restart Workflow'}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Task Description */}
@@ -551,6 +631,115 @@ export default function WorkflowDetail() {
             rootWorkflowId={rootWorkflowId || workflow.id}
           />
         )
+      )}
+
+      {/* Checkpoint Resume Modal */}
+      {showCheckpointModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-purple-50">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-purple-100 rounded-lg">
+                  <History className="h-5 w-5 text-purple-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Resume from Checkpoint</h3>
+                  <p className="text-sm text-gray-500">Select a checkpoint to restore code state</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCheckpointModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* Warning Banner */}
+            <div className="px-6 py-3 bg-yellow-50 border-b border-yellow-100">
+              <div className="flex items-start space-x-2">
+                <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-yellow-800">
+                  <strong>Warning:</strong> Resuming from a checkpoint will:
+                  <ul className="list-disc list-inside mt-1 ml-2">
+                    <li>Reset the git branch to the selected commit</li>
+                    <li>Mark all workflows after the checkpoint as pending</li>
+                    <li>Allow you to re-run failed workflows from a known good state</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Checkpoints List */}
+            <div className="px-6 py-4 overflow-y-auto max-h-[400px]">
+              <div className="space-y-3">
+                {checkpoints.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <GitCommit className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No checkpoints available</p>
+                  </div>
+                ) : (
+                  checkpoints.map((checkpoint, index) => (
+                    <div
+                      key={checkpoint.workflowId}
+                      className="border border-gray-200 rounded-lg p-4 hover:border-purple-300 hover:bg-purple-50 transition-colors cursor-pointer"
+                      onClick={() => handleResumeFromCheckpoint(checkpoint.workflowId)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2 mb-1">
+                            <span className="text-sm font-mono bg-gray-100 px-2 py-0.5 rounded">
+                              {checkpoint.commitSha.substring(0, 7)}
+                            </span>
+                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                              Workflow #{checkpoint.workflowId}
+                            </span>
+                            {index === 0 && (
+                              <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded flex items-center">
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                Latest
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-600 mb-1">
+                            <span className="font-medium">{checkpoint.targetModule}</span>
+                          </div>
+                          {checkpoint.taskDescription && (
+                            <p className="text-xs text-gray-500 line-clamp-2">
+                              {checkpoint.taskDescription}
+                            </p>
+                          )}
+                        </div>
+                        <div className="text-right text-xs text-gray-400 ml-4">
+                          {format(parseISO(checkpoint.createdAt), 'MMM d, HH:mm')}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
+              <button
+                onClick={() => handleResumeFromCheckpoint()}
+                disabled={isResumingFromCheckpoint || checkpoints.length === 0}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                <GitCommit className="h-4 w-4 mr-2" />
+                {isResumingFromCheckpoint ? 'Resuming...' : 'Resume from Latest Checkpoint'}
+              </button>
+              <button
+                onClick={() => setShowCheckpointModal(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

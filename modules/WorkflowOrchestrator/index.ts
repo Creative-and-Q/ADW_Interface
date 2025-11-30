@@ -537,10 +537,13 @@ export class WorkflowOrchestrator {
                 input.workflowId,
                 input.taskDescription || `Workflow #${input.workflowId} changes`
               );
-              if (commitResult.committed) {
+              if (commitResult.committed && commitResult.hash) {
                 allSummaries.push(`auto_commit: Committed changes (${commitResult.hash})`);
                 await this.logWorkflow(input.workflowId, 'info', 'auto_commit_success',
                   `Auto-committed changes: ${commitResult.hash}`, { commitHash: commitResult.hash });
+
+                // Save checkpoint commit for this workflow
+                await this.saveCheckpoint(input.workflowId, commitResult.hash);
               }
             }
             if (!buildResult.success) {
@@ -1371,6 +1374,41 @@ export class WorkflowOrchestrator {
       console.error('WorkflowOrchestrator: Auto-push failed:', error.message);
       await this.logWorkflow(workflowId, 'warn', 'auto_push_failed', `Push failed: ${error.message}`);
       return { pushed: false, error: error.message };
+    }
+  }
+
+  /**
+   * Save checkpoint commit for a workflow
+   * This allows resuming from the last successful point if later steps fail
+   */
+  private async saveCheckpoint(workflowId: number, commitHash: string): Promise<void> {
+    try {
+      const db = getDbPool();
+
+      // Get the full commit hash (40 chars)
+      let fullHash = commitHash;
+      if (commitHash.length < 40) {
+        try {
+          const { stdout } = await execAsync(`git rev-parse ${commitHash}`, { timeout: 5000 });
+          fullHash = stdout.trim();
+        } catch {
+          // Keep using short hash if we can't get full one
+        }
+      }
+
+      await db.execute(
+        `UPDATE workflows
+         SET checkpoint_commit = ?, checkpoint_created_at = NOW()
+         WHERE id = ?`,
+        [fullHash, workflowId]
+      );
+
+      console.log(`WorkflowOrchestrator: Saved checkpoint ${fullHash.substring(0, 7)} for workflow #${workflowId}`);
+      await this.logWorkflow(workflowId, 'info', 'checkpoint_saved',
+        `Saved checkpoint: ${fullHash.substring(0, 7)}`, { commitHash: fullHash });
+    } catch (error) {
+      console.error('WorkflowOrchestrator: Failed to save checkpoint:', error);
+      // Don't throw - checkpoint save is not critical for workflow success
     }
   }
 
