@@ -203,6 +203,38 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Workflow not found' });
     }
 
+    // Compute effective status by checking all descendants
+    const [descendantStats] = await query<any>(`
+      WITH RECURSIVE descendants AS (
+        SELECT id, status FROM workflows WHERE id = ?
+        UNION ALL
+        SELECT w.id, w.status FROM workflows w
+        JOIN descendants d ON w.parent_workflow_id = d.id
+      )
+      SELECT
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+        SUM(CASE WHEN status IN ('pending', 'running', 'in_progress', 'planning') THEN 1 ELSE 0 END) as incomplete_count
+      FROM descendants WHERE id != ?
+    `, [id, id]);
+
+    const failedDescendants = parseInt(descendantStats?.failed_count || '0');
+    const incompleteDescendants = parseInt(descendantStats?.incomplete_count || '0');
+
+    // Determine effective status
+    let effectiveStatus = workflow.status;
+    if (workflow.status === 'completed') {
+      if (failedDescendants > 0) {
+        effectiveStatus = 'failed';
+      } else if (incompleteDescendants > 0) {
+        effectiveStatus = 'in_progress';
+      }
+    }
+
+    // Add effective status info to workflow
+    workflow.effective_status = effectiveStatus;
+    workflow.failedDescendants = failedDescendants;
+    workflow.incompleteDescendants = incompleteDescendants;
+
     // Get agent executions
     const agents = await query<any>(
       'SELECT * FROM agent_executions WHERE workflow_id = ? ORDER BY started_at ASC',

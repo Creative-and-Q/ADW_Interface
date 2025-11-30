@@ -329,7 +329,9 @@ export default function WorkflowDetail() {
     return <div className="text-center text-gray-500">Workflow not found</div>;
   }
 
-  const statusColor = getStatusColor(workflow.status);
+  // Use effective_status if available (accounts for failed descendants)
+  const displayStatus = workflow.effective_status || workflow.status;
+  const statusColor = getStatusColor(displayStatus);
   const taskDescription = getTaskDescription();
 
   return (
@@ -357,8 +359,16 @@ export default function WorkflowDetail() {
                     color: statusColor,
                   }}
                 >
-                  {workflow.status.charAt(0).toUpperCase() + workflow.status.slice(1)}
+                  {displayStatus.charAt(0).toUpperCase() + displayStatus.slice(1)}
                 </span>
+                {workflow.effective_status && workflow.effective_status !== workflow.status && (
+                  <span className="px-2 py-1 text-xs bg-yellow-100 text-yellow-700 rounded-full flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {workflow.failedDescendants > 0 ? `${workflow.failedDescendants} failed` : ''}
+                    {workflow.failedDescendants > 0 && workflow.incompleteDescendants > 0 ? ', ' : ''}
+                    {workflow.incompleteDescendants > 0 ? `${workflow.incompleteDescendants} pending` : ''}
+                  </span>
+                )}
               </div>
               <div className="flex items-center space-x-4 text-sm text-gray-600">
                 <span className="flex items-center space-x-1 capitalize">
