@@ -336,6 +336,114 @@ router.get('/agents', async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// Checkpoint Routes
+// ============================================================================
+
+/**
+ * GET /api/workflows/:id/checkpoints
+ * Get all checkpoints in a workflow tree
+ */
+router.get('/workflows/:id/checkpoints', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { getWorkflowCheckpoints } = await import('./workflow-state.js');
+    const checkpoints = await getWorkflowCheckpoints(id);
+
+    return res.json({
+      success: true,
+      data: {
+        checkpoints,
+        count: checkpoints.length,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get workflow checkpoints', error as Error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get workflow checkpoints',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * GET /api/workflows/:id/last-checkpoint
+ * Get the most recent checkpoint in a workflow tree
+ */
+router.get('/workflows/:id/last-checkpoint', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { getLastCheckpoint } = await import('./workflow-state.js');
+    const checkpoint = await getLastCheckpoint(id);
+
+    return res.json({
+      success: true,
+      data: checkpoint,
+    });
+  } catch (error) {
+    logger.error('Failed to get last checkpoint', error as Error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to get last checkpoint',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/resume-from-checkpoint
+ * Resume a workflow tree from a checkpoint
+ */
+router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { checkpointWorkflowId } = req.body;
+
+    const { resumeFromCheckpoint } = await import('./workflow-state.js');
+    const { advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+
+    // Resume from checkpoint
+    const result = await resumeFromCheckpoint(id, checkpointWorkflowId);
+
+    // Git reset to checkpoint commit if needed
+    if (result.checkpointCommit && result.targetModule) {
+      try {
+        const { exec } = await import('child_process');
+        const { promisify } = await import('util');
+        const execAsync = promisify(exec);
+
+        const moduleDir = `/home/kevin/Home/ex_nihilo/modules/${result.targetModule}`;
+        await execAsync(`cd "${moduleDir}" && git checkout ${result.checkpointCommit}`, { timeout: 30000 });
+        logger.info(`Git reset to checkpoint commit ${result.checkpointCommit} in ${result.targetModule}`);
+      } catch (gitError) {
+        logger.warn('Failed to reset git to checkpoint (may not be a git repo)', { error: (gitError as Error).message });
+      }
+    }
+
+    // Advance the queue to start execution
+    const nextWorkflowId = await advanceSubWorkflowQueue(id);
+
+    return res.json({
+      success: true,
+      data: {
+        checkpointCommit: result.checkpointCommit,
+        resetWorkflowIds: result.resetWorkflowIds,
+        nextWorkflowId,
+        targetModule: result.targetModule,
+      },
+      message: `Resumed from checkpoint. Reset ${result.resetWorkflowIds.length} workflow(s).`,
+    });
+  } catch (error) {
+    logger.error('Failed to resume from checkpoint', error as Error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to resume from checkpoint',
+      message: (error as Error).message,
+    });
+  }
+});
+
 /**
  * GET /api/stats
  * Dashboard statistics

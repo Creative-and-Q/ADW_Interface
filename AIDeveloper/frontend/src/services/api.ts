@@ -42,6 +42,7 @@ export const workflowsAPI = {
   getResumeState: (id: number) => api.get(`/workflows/${id}/resume-state`),
   resumeWorkflow: (id: number, fromAgentIndex?: number) =>
     api.post(`/workflows/${id}/resume`, { fromAgentIndex }),
+  retryWorkflow: (id: number) => api.post(`/workflows/${id}/retry`),
   createNewModule: (moduleConfig: {
     moduleName: string;
     description: string;
@@ -52,6 +53,39 @@ export const workflowsAPI = {
     relatedModules?: string[];
     taskDescription?: string;
   }) => api.post('/workflows/new-module', moduleConfig),
+
+  // Conversation thread API
+  getMessages: (id: number) => api.get(`/workflows/${id}/messages`),
+  sendMessage: (id: number, content: string, actionType: string, metadata?: any) =>
+    api.post(`/workflows/${id}/messages`, { content, action_type: actionType, metadata }),
+  pauseWorkflow: (id: number, reason?: string) =>
+    api.post(`/workflows/${id}/pause`, { reason }),
+  unpauseWorkflow: (id: number) =>
+    api.post(`/workflows/${id}/unpause`),
+
+  // Checkpoint API for resuming from failed workflows
+  getCheckpoints: (id: number) =>
+    api.get<{ success: boolean; data: Array<{
+      workflowId: number;
+      commitSha: string;
+      createdAt: string;
+      targetModule: string;
+      taskDescription: string | null;
+    }> }>(`/workflows/${id}/checkpoints`),
+  getLastCheckpoint: (id: number) =>
+    api.get<{ success: boolean; data: {
+      workflowId: number;
+      commitSha: string;
+      createdAt: string;
+      targetModule: string;
+    } | null }>(`/workflows/${id}/last-checkpoint`),
+  resumeFromCheckpoint: (id: number, checkpointWorkflowId?: number) =>
+    api.post<{ success: boolean; data: {
+      checkpointCommit: string;
+      resetWorkflowIds: number[];
+      targetModule: string;
+      message: string;
+    } }>(`/workflows/${id}/resume-from-checkpoint`, { checkpointWorkflowId }),
 };
 
 export const statsAPI = {
