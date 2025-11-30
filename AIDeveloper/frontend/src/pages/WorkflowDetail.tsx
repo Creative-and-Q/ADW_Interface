@@ -214,9 +214,10 @@ export default function WorkflowDetail() {
 
   const loadCheckpoints = async () => {
     try {
-      const { data } = await workflowsAPI.getCheckpoints(parseInt(id!));
-      if (data.success) {
-        setCheckpoints(data.data || []);
+      const response = await fetch(`/api/workflows/${id}/checkpoints`);
+      const result = await response.json();
+      if (result.success && result.data?.checkpoints) {
+        setCheckpoints(result.data.checkpoints);
       }
     } catch (error) {
       console.error('Failed to load checkpoints:', error);
