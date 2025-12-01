@@ -23,6 +23,10 @@ npm-debug.log*
 .vscode/
 .idea/
 
+# VSCode SQLTools (prevent absolute path pollution)
+**/.node-runtime
+**/vscode-sqltools/**
+
 # OS
 .DS_Store
 Thumbs.db
