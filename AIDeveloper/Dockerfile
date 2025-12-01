@@ -35,7 +35,7 @@ COPY --from=builder /app/templates ./templates
 COPY --from=builder /app/migrations ./migrations
 
 # Create directories for workflows and modules
-RUN mkdir -p /app/workflows /home/kevin/Home/ex_nihilo/modules
+RUN mkdir -p /app/workflows /app/modules
 
 # Expose port
 EXPOSE 3000

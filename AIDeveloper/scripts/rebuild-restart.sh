@@ -3,13 +3,16 @@
 # This script runs detached to survive server shutdown
 
 LOG_FILE="/tmp/aideveloper-restart.log"
-WORK_DIR="/home/kevin/Home/ex_nihilo/AIDeveloper"
+# Use the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Redirect all output to log file
 exec >> "$LOG_FILE" 2>&1
 
 echo "========================================"
 echo "Restart initiated at $(date)"
+echo "Working directory: $WORK_DIR"
 echo "========================================"
 
 # Change to AIDeveloper directory

@@ -16,7 +16,7 @@ import { getGit } from './git-helper.js';
  * Load SSH environment for git operations
  */
 function getSSHEnvironment(): NodeJS.ProcessEnv {
-  const homeDir = process.env.HOME || '/home/kevin';
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '/root';
   const sshEnvFile = path.join(homeDir, '.ssh', 'agent-environment');
 
   try {

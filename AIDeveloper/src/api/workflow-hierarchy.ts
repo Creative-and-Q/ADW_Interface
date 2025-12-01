@@ -16,6 +16,18 @@ import {
 import { saveWorkflowPlan, updateWorkflowStatus, saveArtifact } from '../workflow-state.js';
 import { WorkflowStatus, ArtifactType } from '../types.js';
 import { query } from '../database.js';
+import { getModulesPath } from '../utils/module-manager.js';
+import path from 'path';
+
+// Helper function to get WorkflowOrchestrator path
+function getWorkflowOrchestratorPath(): string {
+  return `file://${path.join(getModulesPath(), 'WorkflowOrchestrator', 'index.js')}`;
+}
+
+// Helper function to get module directory path
+function getModuleDirectory(moduleName: string): string {
+  return path.join(getModulesPath(), moduleName);
+}
 
 /**
  * Helper to save artifacts from workflow execution result
@@ -92,14 +104,14 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
 
             // Import WorkflowOrchestrator dynamically
             // @ts-ignore - Dynamic import path resolved at runtime
-            const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+            const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
             const { getWorkflowDirectory } = await import('../utils/workflow-directory-manager.js');
             const { updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
 
             // Get or create workflow directory - use the target module directory for feature workflows
             const targetModule = workflow.target_module;
             const workflowDir = targetModule
-              ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+              ? getModuleDirectory(targetModule)
               : getWorkflowDirectory(nextWorkflowId, workflow.branchName || 'master');
 
             // Update workflow status to planning (workflow is starting)
@@ -147,7 +159,7 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
 
               const nextTargetModule = nextWorkflow.target_module;
               const nextWorkflowDir = nextTargetModule
-                ? `/home/kevin/Home/ex_nihilo/modules/${nextTargetModule}`
+                ? getModuleDirectory(nextTargetModule)
                 : getWorkflowDirectory(currentNext, nextWorkflow.branchName || 'master');
 
               await updateWorkflowStatus(currentNext, WorkflowStatus.PLANNING);
@@ -278,13 +290,13 @@ router.post('/:id/advance-queue', async (req: Request, res: Response): Promise<v
             
             // Import WorkflowOrchestrator dynamically
             // @ts-ignore - Dynamic import path resolved at runtime
-            const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+            const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
             const { getWorkflowDirectory } = await import('../utils/workflow-directory-manager.js');
 
             // Get or create workflow directory - use the target module directory for feature workflows
             const targetModule = workflow.target_module;
             const workflowDir = targetModule
-              ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+              ? getModuleDirectory(targetModule)
               : getWorkflowDirectory(nextWorkflowId, workflow.branchName || 'master');
             
             // Update workflow status to planning (workflow is starting)

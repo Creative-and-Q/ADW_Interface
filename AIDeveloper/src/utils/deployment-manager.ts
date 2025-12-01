@@ -794,8 +794,8 @@ class DeploymentManager extends EventEmitter {
   }
 
   private getModulePath(moduleName: string): string {
-    // Modules are located at the project parent level (/home/kevin/Home/ex_nihilo/modules/)
-    // process.cwd() is /home/kevin/Home/ex_nihilo/AIDeveloper when running
+    // Modules are located at the project parent level (../modules/)
+    // process.cwd() is typically /path/to/workspace/AIDeveloper when running
     return path.join(process.cwd(), '..', 'modules', moduleName);
   }
 }

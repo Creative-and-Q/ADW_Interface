@@ -17,6 +17,7 @@ import {
   updateModulePrompt,
   getModuleStats,
   importModule,
+  getModulesPath,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
 import modulePluginsRouter from './api/module-plugins.js';
@@ -25,6 +26,16 @@ import fs from 'fs/promises';
 import path from 'path';
 
 const router = Router();
+
+// Helper function to get WorkflowOrchestrator path
+function getWorkflowOrchestratorPath(): string {
+  return `file://${path.join(getModulesPath(), 'WorkflowOrchestrator', 'index.js')}`;
+}
+
+// Helper function to get module directory path
+function getModuleDirectory(moduleName: string): string {
+  return path.join(getModulesPath(), moduleName);
+}
 
 // ============================================================================
 // Module Plugin Routes (MUST BE BEFORE PROXY ROUTES)
@@ -454,7 +465,7 @@ router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: R
         const { promisify } = await import('util');
         const execAsync = promisify(exec);
 
-        const moduleDir = `/home/kevin/Home/ex_nihilo/modules/${result.targetModule}`;
+        const moduleDir = getModuleDirectory(result.targetModule);
         await execAsync(`cd "${moduleDir}" && git checkout ${result.checkpointCommit}`, { timeout: 30000 });
         logger.info(`Git reset to checkpoint commit ${result.checkpointCommit} in ${result.targetModule}`);
       } catch (gitError) {
@@ -747,7 +758,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 
         const { createWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
 
         // Create a branch name for the workflow
         const sanitizedDescription = taskDescription
@@ -928,7 +939,7 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
         
         const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
         
         // Create a temporary workflow directory for the scaffold agent
         // For new_module, we don't need to clone a repo - ModuleScaffoldAgent creates it
@@ -1071,7 +1082,7 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
     }
 
     // Verify module exists
-    const modulePath = path.join('/home/kevin/Home/ex_nihilo/modules', moduleName);
+    const modulePath = getModuleDirectory(moduleName);
     try {
       await fs.access(modulePath);
     } catch {
@@ -1110,7 +1121,7 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
       try {
         const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
 
         // Create workflow directory
         const branchName = `dockerize-${moduleName}-${workflowId}`;
@@ -1539,7 +1550,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
             // Execute the sub-workflow queue
             // @ts-ignore - Dynamic import path resolved at runtime
-            const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+            const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
             const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
 
             let currentWorkflowId: number | null = nextWorkflowEntry.childWorkflowId;
@@ -1555,7 +1566,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
               const targetModule = currentWorkflow.target_module;
               const workflowDir = targetModule
-                ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+                ? getModuleDirectory(targetModule)
                 : getWorkflowDirectory(currentWorkflowId, currentWorkflow.branchName || 'master');
 
               await updateWorkflowStatus(currentWorkflowId, WorkflowStatus.PLANNING);
@@ -1668,12 +1679,12 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
     (async () => {
       try {
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
         const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
 
         const targetModule = workflow.target_module;
         const workflowDir = targetModule
-          ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+          ? getModuleDirectory(targetModule)
           : getWorkflowDirectory(id, workflow.branchName || 'master');
 
         await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
@@ -1811,7 +1822,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
     (async () => {
       try {
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
         const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
 
         // Mark as in_progress
@@ -1821,7 +1832,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
 
         const targetModule = workflow.target_module;
         const workflowDir = targetModule
-          ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+          ? getModuleDirectory(targetModule)
           : getWorkflowDirectory(id, workflow.branchName || 'master');
 
         await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
@@ -1882,7 +1893,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
 
               const nextTargetModule = nextWorkflow.target_module;
               const nextWorkflowDir = nextTargetModule
-                ? `/home/kevin/Home/ex_nihilo/modules/${nextTargetModule}`
+                ? getModuleDirectory(nextTargetModule)
                 : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
 
               await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
@@ -2016,7 +2027,7 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
     (async () => {
       try {
         // @ts-ignore - Dynamic import path resolved at runtime
-        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+        const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
         const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
 
         let nextWorkflowId = await advanceSubWorkflowQueue(parentId);
@@ -2031,7 +2042,7 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
 
           const nextTargetModule = nextWorkflow.target_module;
           const nextWorkflowDir = nextTargetModule
-            ? `/home/kevin/Home/ex_nihilo/modules/${nextTargetModule}`
+            ? getModuleDirectory(nextTargetModule)
             : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
 
           await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);

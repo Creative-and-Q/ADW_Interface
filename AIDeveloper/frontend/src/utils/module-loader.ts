@@ -63,14 +63,7 @@ export async function loadModuleComponent(
   }
 
   // Try to load from module's frontend directory using pre-generated glob imports
-  const modulePath = `@modules/${module}/frontend/src/pages/${componentName}.tsx`;
-
-  // Also try alternative path formats that the glob might match
-  const possiblePaths = [
-    modulePath,
-    `../../modules/${module}/frontend/src/pages/${componentName}.tsx`,
-    `/home/kevin/Home/ex_nihilo/modules/${module}/frontend/src/pages/${componentName}.tsx`,
-  ];
+  // The glob pattern will match any path format that Vite can resolve
 
   // Find matching import from the glob
   for (const [path, importFn] of Object.entries(moduleComponents)) {

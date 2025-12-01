@@ -29,7 +29,7 @@ services:
         condition: service_healthy
     volumes:
       - aideveloper_workflows:/app/workflows
-      - aideveloper_modules:/home/kevin/Home/ex_nihilo/modules
+      - aideveloper_modules:/app/modules
     networks:
       - aideveloper_network
     restart: unless-stopped
