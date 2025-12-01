@@ -28,19 +28,25 @@ if [ ! -d "$SSH_DIR" ]; then
     chmod 700 "$SSH_DIR"
 fi
 
-# Check for SSH key
-if [ ! -f "$SSH_DIR/id_rsa" ]; then
-    echo -e "${RED}ERROR: No SSH key found at $SSH_DIR/id_rsa${NC}"
+# Detect SSH key (prefer ed25519, then rsa, then ecdsa)
+SSH_KEY=""
+if [ -f "$SSH_DIR/id_ed25519" ]; then SSH_KEY="$SSH_DIR/id_ed25519"
+elif [ -f "$SSH_DIR/id_rsa" ]; then SSH_KEY="$SSH_DIR/id_rsa"
+elif [ -f "$SSH_DIR/id_ecdsa" ]; then SSH_KEY="$SSH_DIR/id_ecdsa"
+else
+    echo -e "${RED}ERROR: No SSH key found${NC}"
     echo "Please generate an SSH key and add it to GitHub:"
-    echo "  ssh-keygen -t rsa -b 4096 -C 'your_email@example.com'"
-    echo "  cat $SSH_DIR/id_rsa.pub  # Add this to GitHub"
+    echo "  ssh-keygen -t ed25519 -C 'your_email@example.com'"
+    echo "  cat ~/.ssh/id_ed25519.pub  # Add this to GitHub"
     exit 1
 fi
 
+echo "Using SSH key: $SSH_KEY"
+
 # Set correct permissions
 chmod 700 "$SSH_DIR"
-chmod 600 "$SSH_DIR/id_rsa"
-chmod 644 "$SSH_DIR/id_rsa.pub" 2>/dev/null || true
+chmod 600 "$SSH_KEY"
+chmod 644 "${SSH_KEY}.pub" 2>/dev/null || true
 chmod 600 "$SSH_DIR/config" 2>/dev/null || true
 
 echo -e "${GREEN}✓ SSH directory and keys configured${NC}"
@@ -57,7 +63,7 @@ cat > "$SSH_DIR/config" <<EOF
 Host github.com
     HostName github.com
     User git
-    IdentityFile $SSH_DIR/id_rsa
+    IdentityFile $SSH_KEY
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     UserKnownHostsFile $SSH_DIR/known_hosts
@@ -66,7 +72,7 @@ Host github.com
 
 # Default for all hosts
 Host *
-    IdentityFile $SSH_DIR/id_rsa
+    IdentityFile $SSH_KEY
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 60
@@ -84,13 +90,13 @@ echo -e "${GREEN}✓ SSH config updated${NC}"
 echo ""
 echo "🔑 Step 3: Adding GitHub to known_hosts..."
 
-# Remove old GitHub keys (in case they changed)
-ssh-keygen -R github.com 2>/dev/null || true
-
-# Add GitHub's current SSH host keys
-ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "$SSH_DIR/known_hosts" 2>/dev/null
-
-echo -e "${GREEN}✓ GitHub added to known_hosts${NC}"
+# Only add GitHub if not already present
+if ! ssh-keygen -F github.com > /dev/null 2>&1; then
+    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "$SSH_DIR/known_hosts" 2>/dev/null
+    echo -e "${GREEN}✓ GitHub added to known_hosts${NC}"
+else
+    echo -e "${GREEN}✓ GitHub already in known_hosts${NC}"
+fi
 
 ###############################################################################
 # 4. Test SSH connection to GitHub
@@ -105,7 +111,7 @@ else
     echo -e "${RED}✗ Failed to authenticate with GitHub${NC}"
     echo "Please check:"
     echo "  1. SSH key is added to GitHub (https://github.com/settings/keys)"
-    echo "  2. SSH key permissions are correct (chmod 600 $SSH_DIR/id_rsa)"
+    echo "  2. SSH key permissions are correct (chmod 600 $SSH_KEY)"
     echo "  3. SSH agent is running (eval \$(ssh-agent -s))"
     exit 1
 fi
@@ -121,7 +127,7 @@ echo "🔧 Step 5: Configuring Git..."
 git config --global url."git@github.com:".insteadOf "https://github.com/"
 
 # Configure git SSH command with verbose logging for debugging
-git config --global core.sshCommand "ssh -i $SSH_DIR/id_rsa -F $SSH_DIR/config"
+git config --global core.sshCommand "ssh -i $SSH_KEY -F $SSH_DIR/config"
 
 # Set git user (if not already set)
 if [ -z "$(git config --global user.name)" ]; then
@@ -150,7 +156,7 @@ else
 fi
 
 # Add key to agent
-ssh-add "$SSH_DIR/id_rsa" 2>/dev/null && echo -e "${GREEN}✓ SSH key added to agent${NC}" || echo -e "${YELLOW}⚠ Could not add key to agent (may already be added)${NC}"
+ssh-add "$SSH_KEY" 2>/dev/null && echo -e "${GREEN}✓ SSH key added to agent${NC}" || echo -e "${YELLOW}⚠ Could not add key to agent (may already be added)${NC}"
 
 ###############################################################################
 # 7. Create persistent SSH agent configuration
@@ -167,24 +173,27 @@ fi
 
 # Add SSH agent auto-start to shell profile if not already present
 if ! grep -q "SSH_ENV=" "$SHELL_RC" 2>/dev/null; then
-    cat >> "$SHELL_RC" <<'EOF'
+    cat >> "$SHELL_RC" <<EOF
 
 # SSH Agent Auto-start
-SSH_ENV="$HOME/.ssh/agent-environment"
+SSH_ENV="\$HOME/.ssh/agent-environment"
 
 function start_agent {
     echo "Initialising new SSH agent..."
-    ssh-agent | sed 's/^echo/#echo/' > "${SSH_ENV}"
-    chmod 600 "${SSH_ENV}"
-    . "${SSH_ENV}" > /dev/null
-    ssh-add ~/.ssh/id_rsa 2>/dev/null
+    ssh-agent | sed 's/^echo/#echo/' > "\${SSH_ENV}"
+    chmod 600 "\${SSH_ENV}"
+    . "\${SSH_ENV}" > /dev/null
+    # Auto-detect and add SSH key
+    for key in ~/.ssh/id_ed25519 ~/.ssh/id_rsa ~/.ssh/id_ecdsa; do
+        if [ -f "\$key" ]; then ssh-add "\$key" 2>/dev/null; break; fi
+    done
 }
 
 # Source SSH agent settings if file exists
-if [ -f "${SSH_ENV}" ]; then
-    . "${SSH_ENV}" > /dev/null
+if [ -f "\${SSH_ENV}" ]; then
+    . "\${SSH_ENV}" > /dev/null
     # Check if agent is still running
-    ps -ef | grep ${SSH_AGENT_PID} | grep ssh-agent$ > /dev/null || {
+    ps -ef | grep \${SSH_AGENT_PID} | grep ssh-agent$ > /dev/null || {
         start_agent;
     }
 else
@@ -204,7 +213,7 @@ echo "📝 Step 8: Creating SSH environment file for workflows..."
 cat > "$SSH_DIR/agent-environment" <<EOF
 SSH_AUTH_SOCK=$SSH_AUTH_SOCK; export SSH_AUTH_SOCK;
 SSH_AGENT_PID=$SSH_AGENT_PID; export SSH_AGENT_PID;
-GIT_SSH_COMMAND='ssh -i $SSH_DIR/id_rsa -F $SSH_DIR/config'; export GIT_SSH_COMMAND;
+GIT_SSH_COMMAND='ssh -i $SSH_KEY -F $SSH_DIR/config'; export GIT_SSH_COMMAND;
 EOF
 
 chmod 600 "$SSH_DIR/agent-environment"
@@ -222,7 +231,7 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo "Configuration:"
 echo "  • SSH Dir: $SSH_DIR"
-echo "  • SSH Key: $SSH_DIR/id_rsa"
+echo "  • SSH Key: $SSH_KEY"
 echo "  • SSH Config: $SSH_DIR/config"
 echo "  • Agent Socket: $SSH_AUTH_SOCK"
 echo "  • Agent PID: $SSH_AGENT_PID"
