@@ -1,0 +1,63 @@
+# Dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist
+build
+*.tsbuildinfo
+
+# IDE and editor
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Test and coverage
+coverage
+.nyc_output
+*.test.js
+*.spec.js
+__tests__
+
+# Git
+.git
+.gitignore
+
+# Docker (don't include docker files in build context)
+Dockerfile
+docker-compose*.yml
+.docker
+
+# Documentation
+docs
+
+# Logs
+logs
+*.log
+
+# Temporary files
+tmp
+temp
+.cache
+
+# Frontend (built separately)
+frontend/node_modules
+frontend/dist
+
+# Workflows directory (mounted as volume)
+workflows

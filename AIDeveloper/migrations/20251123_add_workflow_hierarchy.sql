@@ -51,3 +51,4 @@ MODIFY COLUMN plan_json JSON NULL COMMENT 'Structured plan for generating sub-wo
 MODIFY COLUMN auto_execute_children BOOLEAN DEFAULT TRUE COMMENT 'Auto-execute child workflows when created';
 
 
+

@@ -241,9 +241,18 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       [id]
     );
 
-    // Get artifacts from artifacts table
+    // Get artifacts from artifacts table - include artifacts from all descendant workflows
     const artifacts = await query<any>(
-      'SELECT id, workflow_id, agent_execution_id, artifact_type, content, file_path, metadata, created_at FROM artifacts WHERE workflow_id = ? ORDER BY created_at ASC',
+      `WITH RECURSIVE workflow_tree AS (
+        SELECT id FROM workflows WHERE id = ?
+        UNION ALL
+        SELECT w.id FROM workflows w
+        JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+      )
+      SELECT a.id, a.workflow_id, a.agent_execution_id, a.artifact_type, a.content, a.file_path, a.metadata, a.created_at
+      FROM artifacts a
+      WHERE a.workflow_id IN (SELECT id FROM workflow_tree)
+      ORDER BY a.created_at ASC`,
       [id]
     );
 
@@ -461,10 +470,11 @@ router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: R
       data: {
         checkpointCommit: result.checkpointCommit,
         resetWorkflowIds: result.resetWorkflowIds,
+        removedWorkflowIds: result.removedWorkflowIds,
         nextWorkflowId,
         targetModule: result.targetModule,
       },
-      message: `Resumed from checkpoint. Reset ${result.resetWorkflowIds.length} workflow(s).`,
+      message: `Resumed from checkpoint. Reset ${result.resetWorkflowIds.length} workflow(s), removed ${result.removedWorkflowIds.length} sub-workflow(s).`,
     });
   } catch (error) {
     logger.error('Failed to resume from checkpoint', error as Error);
@@ -1041,6 +1051,166 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/workflows/dockerize
+ * Add Docker configuration to an existing module
+ */
+router.post('/workflows/dockerize', async (req: Request, res: Response) => {
+  try {
+    const {
+      moduleName,
+      databaseType = 'none',
+      port,
+      frontendPort,
+      hasFrontend,
+    } = req.body;
+
+    if (!moduleName) {
+      return res.status(400).json({
+        error: 'moduleName is required',
+      });
+    }
+
+    // Verify module exists
+    const modulePath = path.join('/home/kevin/Home/ex_nihilo/modules', moduleName);
+    try {
+      await fs.access(modulePath);
+    } catch {
+      return res.status(404).json({
+        error: `Module not found: ${moduleName}`,
+      });
+    }
+
+    // Import dynamically to avoid circular dependencies
+    const { createWorkflow } = await import('./workflow-state.js');
+
+    // Create payload in WebhookPayload format
+    const payload = {
+      source: 'manual' as const,
+      workflowType: 'dockerize',
+      targetModule: moduleName,
+      taskDescription: `Add Docker configuration to ${moduleName}`,
+      metadata: {
+        databaseType,
+        port,
+        frontendPort,
+        hasFrontend,
+      },
+    };
+
+    // Import workflow types
+    const { WorkflowType } = await import('./types.js');
+
+    // Create workflow record
+    const workflowId = await createWorkflow(WorkflowType.DOCKERIZE, payload, moduleName);
+
+    logger.info('Dockerize workflow created', { workflowId, moduleName, databaseType });
+
+    // Execute the workflow asynchronously
+    (async () => {
+      try {
+        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        // @ts-ignore - Dynamic import path resolved at runtime
+        const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
+
+        // Create workflow directory
+        const branchName = `dockerize-${moduleName}-${workflowId}`;
+        const workflowDir = getWorkflowDirectory(workflowId, branchName);
+
+        logger.info('Creating workflow directory', { workflowId, workflowDir });
+        await fs.mkdir(workflowDir, { recursive: true });
+
+        // Update workflow status to running
+        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
+
+        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType: 'dockerize' });
+
+        // Execute WorkflowOrchestrator
+        const orchestrator = new WorkflowOrchestrator();
+        const result = await orchestrator.execute({
+          workflowId,
+          workflowType: 'dockerize',
+          targetModule: moduleName,
+          taskDescription: `Add Docker configuration to ${moduleName}`,
+          workingDir: workflowDir,
+          metadata: {
+            databaseType,
+            port,
+            frontendPort,
+            hasFrontend,
+          },
+        });
+
+        // Save artifacts from the workflow result
+        if (result.artifacts && result.artifacts.length > 0) {
+          const { saveArtifact } = await import('./workflow-state.js');
+          for (const artifact of result.artifacts) {
+            await saveArtifact(workflowId, artifact.filePath || `docker-${artifact.type}`, artifact.content, artifact.type);
+          }
+        }
+
+        // Update workflow status based on result
+        const finalStatus = result.success ? 'completed' : 'failed';
+        if (!result.success) {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const rawPayload = currentPayload[0]?.payload;
+          const payload = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
+          payload.error = result.summary;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            finalStatus,
+            JSON.stringify(payload),
+            workflowId,
+          ]);
+        } else {
+          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+        }
+
+        logger.info('Dockerize workflow completed', { workflowId, status: finalStatus });
+      } catch (error) {
+        logger.error('Failed to execute dockerize workflow', error as Error, {
+          workflowId,
+          errorMessage: (error as Error).message,
+        });
+        try {
+          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const rawPayload = currentPayload[0]?.payload;
+          const payload = rawPayload
+            ? typeof rawPayload === 'string'
+              ? JSON.parse(rawPayload)
+              : rawPayload
+            : {};
+          payload.error = (error as Error).message;
+          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+            'failed',
+            JSON.stringify(payload),
+            workflowId,
+          ]);
+        } catch (updateError) {
+          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+        }
+      }
+    })().catch((error) => {
+      logger.error('Unhandled error in dockerize workflow execution', error as Error, { workflowId });
+    });
+
+    return res.json({
+      success: true,
+      workflowId,
+      message: `Docker configuration workflow started for ${moduleName}`,
+    });
+  } catch (error) {
+    logger.error('Failed to create dockerize workflow', error as Error);
+    return res.status(500).json({
+      error: 'Failed to create dockerize workflow',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
  * DELETE /api/workflows/:id
  * Cancel a workflow
  */
@@ -1188,6 +1358,75 @@ router.post('/workflows/:id/pause', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to pause workflow', error as Error);
     return res.status(500).json({ error: 'Failed to pause workflow' });
+  }
+});
+
+/**
+ * POST /api/workflows/:id/force-fail
+ * Force a workflow to fail immediately
+ */
+router.post('/workflows/:id/force-fail', async (req: Request, res: Response) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { reason } = req.body;
+
+    // Get workflow to check current status
+    const workflows = await query('SELECT status FROM workflows WHERE id = ?', [id]);
+    if (!workflows || workflows.length === 0) {
+      return res.status(404).json({ error: 'Workflow not found' });
+    }
+
+    const workflow = workflows[0];
+    if (workflow.status === 'failed' || workflow.status === 'completed') {
+      return res.status(400).json({
+        error: `Cannot force fail workflow in '${workflow.status}' state`,
+      });
+    }
+
+    const errorMessage = reason || 'Manually forced to fail by user';
+
+    // Get current payload to add error info
+    const currentPayloadResult = await query('SELECT payload FROM workflows WHERE id = ?', [id]);
+    const currentPayload = currentPayloadResult[0]?.payload || {};
+    const updatedPayload = {
+      ...currentPayload,
+      error: errorMessage,
+      forceFailedAt: new Date().toISOString(),
+    };
+
+    // Update workflow status to failed (store error in payload JSON since there's no error_message column)
+    await query(
+      'UPDATE workflows SET status = ?, payload = ?, is_paused = false WHERE id = ?',
+      ['failed', JSON.stringify(updatedPayload), id]
+    );
+
+    // Fail any running agent executions
+    await query(
+      `UPDATE agent_executions SET status = 'failed'
+       WHERE workflow_id = ? AND status IN ('pending', 'running')`,
+      [id]
+    );
+
+    // Update sub-workflow queue if this is a queued workflow
+    await query(
+      `UPDATE sub_workflow_queue SET status = 'failed'
+       WHERE child_workflow_id = ? AND status IN ('pending', 'in_progress')`,
+      [id]
+    );
+
+    logger.info('Workflow force-failed', { workflowId: id, reason: errorMessage });
+
+    // Emit websocket event
+    const { emitWorkflowFailed } = await import('./websocket-emitter.js');
+    emitWorkflowFailed(id, errorMessage);
+
+    return res.json({
+      success: true,
+      message: 'Workflow failed',
+    });
+  } catch (error) {
+    logger.error('Failed to force-fail workflow', error as Error);
+    return res.status(500).json({ error: 'Failed to force-fail workflow' });
   }
 });
 

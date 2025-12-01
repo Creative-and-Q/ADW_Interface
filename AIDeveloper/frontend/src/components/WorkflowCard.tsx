@@ -48,20 +48,8 @@ export default function WorkflowCard({ workflow, className = '' }: WorkflowCardP
       .join(' ');
   };
 
-  // Get task description from payload
-  const getTaskDescription = () => {
-    try {
-      if (typeof workflow.payload === 'string') {
-        const parsed = JSON.parse(workflow.payload);
-        return parsed.customData?.taskDescription || parsed.description || 'No description';
-      }
-      return workflow.payload?.customData?.taskDescription || workflow.payload?.description || 'No description';
-    } catch {
-      return 'No description';
-    }
-  };
-
-  const taskDescription = getTaskDescription();
+  // Get task description - API now provides this from payload extraction
+  const taskDescription = workflow.task_description || 'No description';
 
   return (
     <Link

@@ -15,3 +15,4 @@ MODIFY COLUMN agent_type ENUM(
 ) NOT NULL;
 
 
+

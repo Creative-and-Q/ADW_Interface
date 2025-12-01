@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  # AIDeveloper Backend
+  aideveloper:
+    build: .
+    container_name: aideveloper
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - NODE_ENV=production
+      - PORT=${PORT:-3000}
+      - DB_HOST=aideveloper_db
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-app}
+      - DB_PASSWORD=${DB_PASSWORD:-apppassword}
+      - DB_NAME=${DB_NAME:-aideveloper}
+      - REDIS_HOST=aideveloper_redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_OWNER=${GITHUB_OWNER:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    depends_on:
+      aideveloper_db:
+        condition: service_healthy
+      aideveloper_redis:
+        condition: service_healthy
+    volumes:
+      - aideveloper_workflows:/app/workflows
+      - aideveloper_modules:/home/kevin/Home/ex_nihilo/modules
+    networks:
+      - aideveloper_network
+    restart: unless-stopped
+
+  # AIDeveloper Frontend
+  aideveloper_frontend:
+    build: ./frontend
+    container_name: aideveloper_frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - aideveloper
+    networks:
+      - aideveloper_network
+    restart: unless-stopped
+
+  # MySQL Database
+  aideveloper_db:
+    image: mysql:8.0
+    container_name: aideveloper_db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-aideveloper}
+      MYSQL_USER: ${DB_USER:-app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-apppassword}
+    volumes:
+      - aideveloper_db_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aideveloper_network
+    restart: unless-stopped
+
+  # Redis for caching and pub/sub
+  aideveloper_redis:
+    image: redis:7-alpine
+    container_name: aideveloper_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - aideveloper_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aideveloper_network
+    restart: unless-stopped
+
+volumes:
+  aideveloper_db_data:
+  aideveloper_redis_data:
+  aideveloper_workflows:
+  aideveloper_modules:
+
+networks:
+  aideveloper_network:
+    driver: bridge

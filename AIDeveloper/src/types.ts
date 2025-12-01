@@ -10,6 +10,7 @@ export enum WorkflowType {
   DOCUMENTATION = 'documentation',
   REVIEW = 'review',
   NEW_MODULE = 'new_module',
+  DOCKERIZE = 'dockerize',
 }
 
 // Workflow statuses
@@ -23,6 +24,7 @@ export enum WorkflowStatus {
   DOCUMENTING = 'documenting',
   COMPLETED = 'completed',
   FAILED = 'failed',
+  CANCELLED = 'cancelled',  // Workflow was cancelled (e.g., by checkpoint resume)
 }
 
 // Agent types

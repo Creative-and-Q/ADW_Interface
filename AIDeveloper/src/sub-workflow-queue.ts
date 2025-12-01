@@ -7,6 +7,105 @@ import { insert, update, query, queryOne } from './database.js';
 import { SubWorkflowQueueEntry, WorkflowExecution, WorkflowStatus, WorkflowType } from './types.js';
 import { getWorkflow, updateWorkflowStatus } from './workflow-state.js';
 import * as logger from './utils/logger.js';
+import { createClient, RedisClientType } from 'redis';
+
+// Redis client for distributed locking
+let redisClient: RedisClientType | null = null;
+
+async function getRedisClient(): Promise<RedisClientType> {
+  if (!redisClient) {
+    redisClient = createClient({
+      url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`,
+    });
+    redisClient.on('error', (err: Error) => logger.error('Redis client error', err));
+    await redisClient.connect();
+  }
+  return redisClient;
+}
+
+/**
+ * Acquire a lock for a master workflow tree
+ * Returns true if lock acquired, false otherwise
+ */
+async function acquireTreeLock(masterWorkflowId: number, ttlSeconds: number = 300): Promise<boolean> {
+  try {
+    const client = await getRedisClient();
+    const lockKey = `workflow_tree_lock:${masterWorkflowId}`;
+    const result = await client.set(lockKey, Date.now().toString(), {
+      NX: true, // Only set if not exists
+      EX: ttlSeconds, // Expire after ttlSeconds
+    });
+    return result === 'OK';
+  } catch (error) {
+    logger.error('Failed to acquire tree lock', error as Error);
+    return false;
+  }
+}
+
+/**
+ * Release a lock for a master workflow tree
+ */
+async function releaseTreeLock(masterWorkflowId: number): Promise<void> {
+  try {
+    const client = await getRedisClient();
+    const lockKey = `workflow_tree_lock:${masterWorkflowId}`;
+    await client.del(lockKey);
+  } catch (error) {
+    logger.error('Failed to release tree lock', error as Error);
+  }
+}
+
+/**
+ * Get the root master workflow ID for a given workflow
+ * Traverses up the parent chain to find the top-level workflow
+ */
+async function getRootMasterWorkflowId(workflowId: number): Promise<number> {
+  let currentId = workflowId;
+  let iterations = 0;
+  const maxIterations = 20; // Prevent infinite loops
+
+  while (iterations < maxIterations) {
+    const workflow = await queryOne<{ parent_workflow_id: number | null }>(
+      'SELECT parent_workflow_id FROM workflows WHERE id = ?',
+      [currentId]
+    );
+
+    if (!workflow || workflow.parent_workflow_id === null) {
+      return currentId;
+    }
+
+    currentId = workflow.parent_workflow_id;
+    iterations++;
+  }
+
+  logger.warn('Max iterations reached while finding root master workflow', { workflowId });
+  return currentId;
+}
+
+/**
+ * Check if any workflow in the master workflow tree is currently running
+ * Uses recursive CTE to find all workflows in the tree
+ */
+async function hasRunningWorkflowInTree(masterWorkflowId: number): Promise<boolean> {
+  const result = await queryOne<{ count: number }>(
+    `WITH RECURSIVE workflow_tree AS (
+      SELECT id, parent_workflow_id, status
+      FROM workflows
+      WHERE id = ?
+      UNION ALL
+      SELECT w.id, w.parent_workflow_id, w.status
+      FROM workflows w
+      INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+    )
+    SELECT COUNT(*) as count
+    FROM workflow_tree
+    WHERE status IN ('running', 'planning', 'coding', 'testing', 'reviewing', 'documenting', 'security_linting')
+      AND id != ?`,
+    [masterWorkflowId, masterWorkflowId]
+  );
+
+  return (result?.count || 0) > 0;
+}
 
 /**
  * Create sub-workflows from a parent workflow plan
@@ -126,11 +225,25 @@ export async function getSubWorkflows(parentWorkflowId: number): Promise<Workflo
 /**
  * Get next executable sub-workflow from queue
  * Returns the next workflow that has all dependencies completed
+ * Only returns a workflow if no other workflow in the master tree is currently running
  */
 export async function getNextExecutableSubWorkflow(
   parentWorkflowId: number
 ): Promise<SubWorkflowQueueEntry | null> {
   try {
+    // First, check if any workflow in the master tree is already running
+    // This prevents concurrent execution of workflows that could conflict
+    const masterWorkflowId = await getRootMasterWorkflowId(parentWorkflowId);
+    const hasRunning = await hasRunningWorkflowInTree(masterWorkflowId);
+
+    if (hasRunning) {
+      logger.debug('Another workflow is already running in master tree, waiting...', {
+        parentWorkflowId,
+        masterWorkflowId,
+      });
+      return null;
+    }
+
     // Get all queue entries for parent
     const queueEntries = await query<any[]>(
       `SELECT * FROM sub_workflow_queue
@@ -486,13 +599,27 @@ export async function resetFailedSubWorkflows(
 /**
  * Auto-advance sub-workflow queue
  * Gets next executable workflow and marks it as ready to execute
+ * Uses Redis locking to prevent race conditions in hierarchical workflows
  */
 export async function advanceSubWorkflowQueue(
   parentWorkflowId: number
 ): Promise<number | null> {
+  // Get the root master workflow for locking
+  const masterWorkflowId = await getRootMasterWorkflowId(parentWorkflowId);
+
+  // Try to acquire lock - if we can't, another process is advancing the queue
+  const lockAcquired = await acquireTreeLock(masterWorkflowId);
+  if (!lockAcquired) {
+    logger.debug('Could not acquire tree lock, another process is advancing the queue', {
+      parentWorkflowId,
+      masterWorkflowId,
+    });
+    return null;
+  }
+
   try {
     const nextWorkflow = await getNextExecutableSubWorkflow(parentWorkflowId);
-    
+
     if (!nextWorkflow) {
       // Check if queue is complete
       const isComplete = await checkParentWorkflowCompletion(parentWorkflowId);
@@ -501,17 +628,32 @@ export async function advanceSubWorkflowQueue(
         // Update parent workflow status
         await updateWorkflowStatus(parentWorkflowId, WorkflowStatus.COMPLETED);
       }
+      await releaseTreeLock(masterWorkflowId);
       return null;
     }
 
     // Mark as in progress
     await updateSubWorkflowStatus(nextWorkflow.childWorkflowId, 'in_progress');
-    
+
     logger.info(`Advanced queue: sub-workflow ${nextWorkflow.childWorkflowId} ready for execution`);
+
+    // Don't release lock here - it will be released when the workflow completes
+    // This prevents other workflows from starting while this one is running
     return nextWorkflow.childWorkflowId;
   } catch (error) {
+    await releaseTreeLock(masterWorkflowId);
     logger.error('Failed to advance sub-workflow queue', error as Error);
     throw error;
   }
+}
+
+/**
+ * Release the tree lock when a workflow completes
+ * Should be called after workflow execution finishes
+ */
+export async function releaseWorkflowTreeLock(workflowId: number): Promise<void> {
+  const masterWorkflowId = await getRootMasterWorkflowId(workflowId);
+  await releaseTreeLock(masterWorkflowId);
+  logger.debug('Released tree lock after workflow completion', { workflowId, masterWorkflowId });
 }
 

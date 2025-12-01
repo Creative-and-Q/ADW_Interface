@@ -152,7 +152,7 @@ export default function SubWorkflowList({
                     </div>
                     
                     <p className="text-sm font-medium truncate">
-                      {subWorkflow.task_description || subWorkflow.payload?.taskDescription || subWorkflow.payload?.title || 'Sub-task'}
+                      {subWorkflow.task_description || 'Sub-task'}
                     </p>
                     {subWorkflow.target_module && (
                       <span className="text-xs text-gray-500">

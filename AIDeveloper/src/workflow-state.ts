@@ -748,7 +748,14 @@ export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<Ar
 
 /**
  * Resume a workflow tree from the last checkpoint
- * Resets all failed/pending workflows after the checkpoint
+ * Fully resets all workflows that fall after the checkpoint:
+ * - Sub-workflows of the checkpoint workflow
+ * - Sibling workflows that come after checkpoint (by execution_order or id)
+ * - All descendants of those sibling workflows
+ *
+ * Example: For tree A, B, B1, B2, C, C1, D, D1, D2, D3
+ * If checkpoint is B, removes: B1, B2, C, C1, D, D1, D2, D3
+ * (keeps A and B)
  */
 export async function resumeFromCheckpoint(
   rootWorkflowId: number,
@@ -756,6 +763,7 @@ export async function resumeFromCheckpoint(
 ): Promise<{
   checkpointCommit: string;
   resetWorkflowIds: number[];
+  removedWorkflowIds: number[];
   targetModule: string;
 }> {
   try {
@@ -763,74 +771,211 @@ export async function resumeFromCheckpoint(
     let checkpoint;
     if (checkpointWorkflowId) {
       const row = await queryOne<any>(
-        'SELECT id, checkpoint_commit, target_module FROM workflows WHERE id = ? AND checkpoint_commit IS NOT NULL',
+        `SELECT id, checkpoint_commit, checkpoint_created_at, target_module, parent_workflow_id, execution_order
+         FROM workflows WHERE id = ? AND checkpoint_commit IS NOT NULL`,
         [checkpointWorkflowId]
       );
       if (row) {
         checkpoint = {
           workflowId: row.id,
           commitSha: row.checkpoint_commit,
+          createdAt: row.checkpoint_created_at,
           targetModule: row.target_module,
+          parentWorkflowId: row.parent_workflow_id,
+          executionOrder: row.execution_order || 0,
         };
       }
     } else {
-      checkpoint = await getLastCheckpoint(rootWorkflowId);
+      const lastCheckpoint = await getLastCheckpoint(rootWorkflowId);
+      if (lastCheckpoint) {
+        const row = await queryOne<any>(
+          `SELECT parent_workflow_id, execution_order FROM workflows WHERE id = ?`,
+          [lastCheckpoint.workflowId]
+        );
+        checkpoint = {
+          ...lastCheckpoint,
+          parentWorkflowId: row?.parent_workflow_id,
+          executionOrder: row?.execution_order || 0,
+        };
+      }
     }
 
     if (!checkpoint) {
       throw new Error('No checkpoint found to resume from');
     }
 
-    // Find all workflows in the tree that need to be reset
-    // These are workflows that came AFTER the checkpoint (by execution order or creation time)
-    const workflowsToReset = await query<any[]>(
-      `WITH RECURSIVE workflow_tree AS (
-        SELECT id, parent_workflow_id, status, checkpoint_created_at, created_at, execution_order
-        FROM workflows WHERE id = ?
+    // Find workflows to remove - this is a multi-step process:
+    // 1. All children/descendants of the checkpoint workflow
+    // 2. All siblings that come AFTER the checkpoint (same parent, higher execution_order or higher id)
+    // 3. All descendants of those siblings
+
+    const workflowsToRemove: number[] = [];
+
+    // Step 1: Get all descendants of the checkpoint workflow (its children, grandchildren, etc.)
+    const checkpointDescendants = await query<any[]>(
+      `WITH RECURSIVE descendants AS (
+        SELECT id FROM workflows WHERE parent_workflow_id = ?
         UNION ALL
-        SELECT w.id, w.parent_workflow_id, w.status, w.checkpoint_created_at, w.created_at, w.execution_order
-        FROM workflows w
-        INNER JOIN workflow_tree wt ON w.parent_workflow_id = wt.id
+        SELECT w.id FROM workflows w
+        INNER JOIN descendants d ON w.parent_workflow_id = d.id
       )
-      SELECT id, status FROM workflow_tree
-      WHERE status IN ('failed', 'pending', 'pending_fix')
-        AND id != ?`,
-      [rootWorkflowId, checkpoint.workflowId]
+      SELECT id FROM descendants`,
+      [checkpoint.workflowId]
+    );
+    workflowsToRemove.push(...checkpointDescendants.map(w => w.id));
+
+    // Step 2: Get siblings that come after the checkpoint
+    // (same parent, execution_order > checkpoint's or same execution_order but higher id)
+    if (checkpoint.parentWorkflowId !== null) {
+      const laterSiblings = await query<any[]>(
+        `SELECT id FROM workflows
+         WHERE parent_workflow_id = ?
+           AND id != ?
+           AND (
+             execution_order > ?
+             OR (execution_order = ? AND id > ?)
+           )`,
+        [
+          checkpoint.parentWorkflowId,
+          checkpoint.workflowId,
+          checkpoint.executionOrder,
+          checkpoint.executionOrder,
+          checkpoint.workflowId
+        ]
+      );
+
+      // Step 3: For each later sibling, get all their descendants too
+      for (const sibling of laterSiblings) {
+        workflowsToRemove.push(sibling.id);
+
+        const siblingDescendants = await query<any[]>(
+          `WITH RECURSIVE descendants AS (
+            SELECT id FROM workflows WHERE parent_workflow_id = ?
+            UNION ALL
+            SELECT w.id FROM workflows w
+            INNER JOIN descendants d ON w.parent_workflow_id = d.id
+          )
+          SELECT id FROM descendants`,
+          [sibling.id]
+        );
+        workflowsToRemove.push(...siblingDescendants.map(w => w.id));
+      }
+    }
+
+    // Deduplicate
+    const uniqueRemoveIds = [...new Set(workflowsToRemove)];
+
+    logger.info('Workflows to remove on checkpoint resume', {
+      checkpointWorkflowId: checkpoint.workflowId,
+      checkpointParent: checkpoint.parentWorkflowId,
+      checkpointOrder: checkpoint.executionOrder,
+      removeCount: uniqueRemoveIds.length,
+      removeIds: uniqueRemoveIds,
+    });
+
+    if (uniqueRemoveIds.length > 0) {
+      const idsPlaceholder = uniqueRemoveIds.map(() => '?').join(',');
+
+      // STEP 0: Mark all workflows being removed as CANCELLED first
+      // This allows running orchestrators to detect cancellation and stop gracefully
+      await query(
+        `UPDATE workflows SET status = 'cancelled' WHERE id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.info(`Marked ${uniqueRemoveIds.length} workflows as cancelled`);
+
+      // Also mark their sub_workflow_queue entries as cancelled
+      await query(
+        `UPDATE sub_workflow_queue SET status = 'cancelled' WHERE child_workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Marked sub_workflow_queue entries as cancelled`);
+
+      // Wait briefly to allow running orchestrators to detect cancellation
+      // This gives them time to check status and exit gracefully
+      const CANCELLATION_WAIT_MS = 2000;
+      logger.info(`Waiting ${CANCELLATION_WAIT_MS}ms for running orchestrators to detect cancellation...`);
+      await new Promise(resolve => setTimeout(resolve, CANCELLATION_WAIT_MS));
+
+      // Now proceed with cleanup - orchestrators should have stopped or will ignore FK errors
+
+      // 1. Delete all agent_executions for these workflows
+      await query(
+        `DELETE FROM agent_executions WHERE workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted agent_executions for ${uniqueRemoveIds.length} workflows`);
+
+      // 2. Delete all artifacts for these workflows
+      await query(
+        `DELETE FROM artifacts WHERE workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted artifacts for ${uniqueRemoveIds.length} workflows`);
+
+      // 3. Delete all execution_logs for these workflows
+      await query(
+        `DELETE FROM execution_logs WHERE workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted execution_logs for ${uniqueRemoveIds.length} workflows`);
+
+      // 4. Delete all workflow_messages for these workflows
+      await query(
+        `DELETE FROM workflow_messages WHERE workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted workflow_messages for ${uniqueRemoveIds.length} workflows`);
+
+      // 5. Delete sub_workflow_queue entries for these workflows
+      await query(
+        `DELETE FROM sub_workflow_queue WHERE child_workflow_id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted sub_workflow_queue entries for ${uniqueRemoveIds.length} workflows`);
+
+      // 6. Delete the workflow records themselves
+      await query(
+        `DELETE FROM workflows WHERE id IN (${idsPlaceholder})`,
+        uniqueRemoveIds
+      );
+      logger.debug(`Deleted ${uniqueRemoveIds.length} workflow records`);
+    }
+
+    // Reset the checkpoint workflow itself to pending so it can be re-run
+    await update(
+      'workflows',
+      {
+        status: WorkflowStatus.PENDING,
+        started_at: null,
+        completed_at: null,
+        plan_json: null,
+        // Keep checkpoint_commit so we know where to restore git to
+      },
+      'id = ?',
+      [checkpoint.workflowId]
     );
 
-    const resetIds: number[] = [];
+    // Reset sub_workflow_queue entry for checkpoint workflow
+    await query(
+      `UPDATE sub_workflow_queue
+       SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL
+       WHERE child_workflow_id = ?`,
+      [checkpoint.workflowId]
+    );
 
-    // Reset each failed/pending workflow
-    for (const workflow of workflowsToReset) {
-      await update(
-        'workflows',
-        { status: WorkflowStatus.PENDING, started_at: null, completed_at: null },
-        'id = ?',
-        [workflow.id]
-      );
-      resetIds.push(workflow.id);
-    }
-
-    // Also reset the sub_workflow_queue entries
-    if (resetIds.length > 0) {
-      await query(
-        `UPDATE sub_workflow_queue
-         SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL
-         WHERE child_workflow_id IN (${resetIds.join(',')})`,
-        []
-      );
-    }
-
-    logger.info('Resumed workflow tree from checkpoint', {
+    logger.info('Resumed workflow tree from checkpoint with full cleanup', {
       rootWorkflowId,
       checkpointWorkflowId: checkpoint.workflowId,
       checkpointCommit: checkpoint.commitSha,
-      resetCount: resetIds.length,
+      removedCount: uniqueRemoveIds.length,
+      removedWorkflows: uniqueRemoveIds,
     });
 
     return {
       checkpointCommit: checkpoint.commitSha,
-      resetWorkflowIds: resetIds,
+      resetWorkflowIds: [checkpoint.workflowId],
+      removedWorkflowIds: uniqueRemoveIds,
       targetModule: checkpoint.targetModule,
     };
   } catch (error) {
