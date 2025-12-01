@@ -1,0 +1,67 @@
+{
+  "organization": "Creative-and-Q",
+  "modulesDirectory": "../modules",
+  "defaultBranch": "master",
+  "modules": [
+    {
+      "name": "CodeDocumentationAgent",
+      "repo": "ADW_CodeDocumentationAgent",
+      "description": "Agent for generating and maintaining code documentation",
+      "required": true
+    },
+    {
+      "name": "CodePlannerAgent",
+      "repo": "ADW_CodePlannerAgent",
+      "description": "Agent for planning code changes and implementations",
+      "required": true
+    },
+    {
+      "name": "CodeReviewAgent",
+      "repo": "ADW_CodeReviewAgent",
+      "description": "Agent for reviewing code quality and suggesting improvements",
+      "required": true
+    },
+    {
+      "name": "CodeTestingAgent",
+      "repo": "ADW_CodeTestingAgent",
+      "description": "Agent for generating and running tests",
+      "required": true
+    },
+    {
+      "name": "CodingAgent",
+      "repo": "ADW_CodingAgent",
+      "description": "Agent for writing and modifying code",
+      "required": true
+    },
+    {
+      "name": "DockerizeAgent",
+      "repo": "ADW_DockerizeAgent",
+      "description": "Agent for containerizing applications with Docker",
+      "required": false
+    },
+    {
+      "name": "ModuleImportAgent",
+      "repo": "ADW_ModuleImportAgent",
+      "description": "Agent for importing and integrating external modules",
+      "required": true
+    },
+    {
+      "name": "ModuleScaffoldAgent",
+      "repo": "ADW_ModuleScaffoldAgent",
+      "description": "Agent for scaffolding new module projects",
+      "required": true
+    },
+    {
+      "name": "ScreenshotTools",
+      "repo": "ADW_ScreenshotTools",
+      "description": "Tools for capturing and analyzing screenshots",
+      "required": false
+    },
+    {
+      "name": "WorkflowOrchestrator",
+      "repo": "ADW_WorkflowOrchestrator",
+      "description": "Orchestrates multi-agent workflows and task coordination",
+      "required": true
+    }
+  ]
+}

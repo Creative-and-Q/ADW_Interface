@@ -570,7 +570,7 @@ router.get('/:id/children', async (req: Request, res: Response): Promise<void> =
             SELECT wf.id, wf.status FROM workflows wf
             INNER JOIN descendants d ON wf.parent_workflow_id = d.id
           )
-          SELECT COUNT(*) FROM descendants WHERE status NOT IN ('completed', 'failed')
+          SELECT COUNT(*) FROM descendants WHERE status NOT IN ('completed', 'failed', 'cancelled')
         ) as incomplete_descendants
       FROM workflows w
       WHERE w.parent_workflow_id = ?
@@ -906,7 +906,7 @@ router.get('/:id/full-tree', async (req: Request, res: Response): Promise<void> 
           for (const child of children) {
             if (child.status === 'failed' || child.effective_status === 'failed') {
               failedCount++;
-            } else if (!['completed', 'failed'].includes(child.status)) {
+            } else if (!['completed', 'failed', 'cancelled'].includes(child.status)) {
               incompleteCount++;
             }
             // Add counts from deeper descendants

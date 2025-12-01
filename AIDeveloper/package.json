@@ -23,7 +23,12 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "auto-fix": "tsx scripts/auto-fix-workflow.ts"
+    "auto-fix": "tsx scripts/auto-fix-workflow.ts",
+    "modules:install": "tsx scripts/install-modules.ts",
+    "modules:install:all": "tsx scripts/install-modules.ts --all",
+    "modules:update": "tsx scripts/install-modules.ts --update",
+    "modules:list": "tsx scripts/install-modules.ts --list",
+    "postinstall": "tsx scripts/install-modules.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
