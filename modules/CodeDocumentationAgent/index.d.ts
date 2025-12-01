@@ -38,6 +38,16 @@ export interface AgentOutput {
     requiresRetry?: boolean;
     retryReason?: string;
     metadata?: Record<string, any>;
+    /** Full conversation history from the agent's API interactions */
+    conversationHistory?: Array<{
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        toolCalls?: Array<{
+            name: string;
+            input: any;
+            result?: string;
+        }>;
+    }>;
 }
 /**
  * CodeDocumentationAgent

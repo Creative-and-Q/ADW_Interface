@@ -57,6 +57,16 @@ export interface AgentOutput {
   requiresRetry?: boolean;
   retryReason?: string;
   metadata?: Record<string, any>;
+  /** Full conversation history from the agent's API interactions */
+  conversationHistory?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    toolCalls?: Array<{
+      name: string;
+      input: any;
+      result?: string;
+    }>;
+  }>;
 }
 
 /**
@@ -200,6 +210,7 @@ export class CodeReviewAgent {
           iterations,
           filesReviewed,
         },
+        conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
       };
     } catch (error) {
       return {

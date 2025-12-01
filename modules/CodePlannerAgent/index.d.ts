@@ -37,6 +37,16 @@ export interface AgentOutput {
     retryReason?: string;
     metadata?: Record<string, any>;
     structuredPlan?: StructuredPlan;
+    /** Full conversation history from the agent's API interactions */
+    conversationHistory?: Array<{
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        toolCalls?: Array<{
+            name: string;
+            input: any;
+            result?: string;
+        }>;
+    }>;
 }
 /**
  * Structured Plan for Sub-Workflow Generation

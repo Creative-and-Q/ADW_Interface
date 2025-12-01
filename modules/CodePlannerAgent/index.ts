@@ -61,6 +61,16 @@ export interface AgentOutput {
   retryReason?: string;
   metadata?: Record<string, any>;
   structuredPlan?: StructuredPlan; // New: structured plan for sub-workflow creation
+  /** Full conversation history from the agent's API interactions */
+  conversationHistory?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    toolCalls?: Array<{
+      name: string;
+      input: any;
+      result?: string;
+    }>;
+  }>;
 }
 
 /**
@@ -177,6 +187,14 @@ export class CodePlannerAgent {
       // Build user content with optional images
       const userContent = this.buildUserContent(input, screenshots);
 
+      // Build messages for tracking
+      const messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+      messages.push({ role: 'system', content: systemPrompt });
+      messages.push({
+        role: 'user',
+        content: typeof userContent === 'string' ? userContent : JSON.stringify(userContent)
+      });
+
       // Call OpenRouter API with multimodal support
       const aiResponse = await this.callOpenRouter([
         {
@@ -189,11 +207,14 @@ export class CodePlannerAgent {
         temperature: 0.7,
       });
 
+      // Add assistant response to messages
+      messages.push({ role: 'assistant', content: aiResponse });
+
       // Close browser
       await this.screenshotManager.close();
 
       // Parse and return response with screenshots
-      const result = this.parseResponse(aiResponse, input);
+      const result = this.parseResponse(aiResponse, input, messages);
       result.artifacts = [...artifacts, ...result.artifacts];
       return result;
     } catch (error) {
@@ -433,7 +454,11 @@ ${screenshots.length > 0 ? `\n${screenshots.length} screenshot(s) have been capt
   /**
    * Parse AI response and extract structured plan
    */
-  private parseResponse(response: string, input: AgentInput): AgentOutput {
+  private parseResponse(
+    response: string,
+    input: AgentInput,
+    messages?: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>
+  ): AgentOutput {
     // Try to extract structured plan JSON from response
     let structuredPlan: StructuredPlan | undefined;
     
@@ -506,6 +531,7 @@ ${screenshots.length > 0 ? `\n${screenshots.length} screenshot(s) have been capt
         subTaskCount: structuredPlan?.subTasks.length || 0,
       },
       structuredPlan,
+      conversationHistory: messages,
     };
   }
 }

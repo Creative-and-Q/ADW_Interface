@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  {{MODULE_NAME_LOWER}}:
+    build: .
+    container_name: {{MODULE_NAME_LOWER}}
+    ports:
+      - "{{PORT}}:{{PORT}}"
+    environment:
+      - NODE_ENV=production
+      - PORT={{PORT}}
+      - DB_HOST={{MODULE_NAME_LOWER}}_db
+      - DB_PORT=5432
+      - DB_USER=app
+      - DB_PASSWORD=${DB_PASSWORD:-apppassword}
+      - DB_NAME={{MODULE_NAME_LOWER}}
+    depends_on:
+      {{MODULE_NAME_LOWER}}_db:
+        condition: service_healthy
+    networks:
+      - {{MODULE_NAME_LOWER}}_network
+    restart: unless-stopped
+
+  {{MODULE_NAME_LOWER}}_db:
+    image: postgres:15-alpine
+    container_name: {{MODULE_NAME_LOWER}}_db
+    environment:
+      POSTGRES_DB: {{MODULE_NAME_LOWER}}
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-apppassword}
+    volumes:
+      - {{MODULE_NAME_LOWER}}_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d {{MODULE_NAME_LOWER}}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - {{MODULE_NAME_LOWER}}_network
+    restart: unless-stopped
+
+volumes:
+  {{MODULE_NAME_LOWER}}_db_data:
+
+networks:
+  {{MODULE_NAME_LOWER}}_network:
+    driver: bridge

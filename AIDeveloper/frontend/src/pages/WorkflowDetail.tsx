@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   Play,
+  Pause,
   BarChart3,
   List,
   GitBranch,
@@ -17,6 +18,7 @@ import {
   X,
   AlertCircle,
   CheckCircle,
+  XCircle,
 } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { getStatusColor } from '../utils/workflowChartUtils';
@@ -59,6 +61,7 @@ export default function WorkflowDetail() {
   const [showCheckpointModal, setShowCheckpointModal] = useState(false);
   const [isResumingFromCheckpoint, setIsResumingFromCheckpoint] = useState(false);
   const [hasFailedDescendants, setHasFailedDescendants] = useState(false);
+  const [isForceFailing, setIsForceFailing] = useState(false);
   const { socket, subscribe } = useWebSocket();
 
   useEffect(() => {
@@ -185,6 +188,22 @@ export default function WorkflowDetail() {
     } catch (error) {
       console.error('Failed to cancel workflow:', error);
       toast.error('Failed to cancel workflow');
+    }
+  };
+
+  const handleForceFailWorkflow = async () => {
+    try {
+      setIsForceFailing(true);
+      await workflowsAPI.forceFailWorkflow(parseInt(id!), 'Manually failed by user');
+      toast.success('Workflow failed');
+      setTimeout(() => {
+        loadWorkflow();
+        setIsForceFailing(false);
+      }, 1000);
+    } catch (error) {
+      console.error('Failed to force fail workflow:', error);
+      toast.error('Failed to force fail workflow');
+      setIsForceFailing(false);
     }
   };
 
@@ -393,6 +412,45 @@ export default function WorkflowDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Workflow Control Buttons - shown based on current state */}
+
+            {/* Pause button - for running workflows that aren't paused */}
+            {(workflow.status === 'running' || workflow.status === 'in_progress') && !workflow.is_paused && (
+              <button
+                onClick={handlePauseWorkflow}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-yellow-600 rounded-md hover:bg-yellow-700 transition-colors"
+                title="Pause this workflow"
+              >
+                <Pause className="h-4 w-4 mr-2" />
+                Pause
+              </button>
+            )}
+
+            {/* Resume from Pause - for paused workflows */}
+            {workflow.is_paused && (
+              <button
+                onClick={handleResumeFromPause}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors"
+                title="Resume this paused workflow"
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Resume
+              </button>
+            )}
+
+            {/* Force Fail button - for running/paused/pending workflows */}
+            {['running', 'in_progress', 'pending', 'paused'].includes(workflow.status) && (
+              <button
+                onClick={handleForceFailWorkflow}
+                disabled={isForceFailing}
+                className="flex items-center px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Force this workflow to fail"
+              >
+                <XCircle className="h-4 w-4 mr-2" />
+                {isForceFailing ? 'Failing...' : 'Force Fail'}
+              </button>
+            )}
+
             {/* Resume from Checkpoint - for master workflows with failed descendants and checkpoints */}
             {!workflow.parent_workflow_id && hasFailedDescendants && checkpoints.length > 0 && (
               <button
@@ -405,6 +463,8 @@ export default function WorkflowDetail() {
                 {isResumingFromCheckpoint ? 'Resuming...' : 'Resume from Checkpoint'}
               </button>
             )}
+
+            {/* Resume Workflow - for failed workflows with resume capability */}
             {resumeState?.canResume && (
               <button
                 onClick={handleResume}
@@ -416,6 +476,8 @@ export default function WorkflowDetail() {
                 {isResuming ? 'Resuming...' : 'Resume Workflow'}
               </button>
             )}
+
+            {/* Restart Workflow - for failed workflows without resume capability */}
             {workflow.status === 'failed' && !resumeState?.canResume && (
               <button
                 onClick={handleRestart}

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Code2, AlertCircle, LayoutDashboard, Package, FileText } from 'lucide-react';
+import { Code2, AlertCircle, LayoutDashboard, Package, FileText, Activity } from 'lucide-react';
 import { Toaster } from 'react-hot-toast';
 import { useEffect, useState } from 'react';
 import Dashboard from './pages/Dashboard';
@@ -9,6 +9,8 @@ import Modules from './pages/Modules';
 import ModulePrompts from './pages/ModulePrompts';
 import ModuleHistory from './pages/ModuleHistory';
 import ModuleSettings from './pages/ModuleSettings';
+import Workflows from './pages/Workflows';
+import WorkflowDetail from './pages/WorkflowDetail';
 import BranchSwitcher from './components/BranchSwitcher';
 import ModulePage from './components/ModulePage';
 import { modulePluginsAPI, type ModulePage as ModulePageType } from './services/api';
@@ -51,6 +53,7 @@ function Navigation() {
 
   const links = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/workflows', icon: Activity, label: 'Workflows' },
     ...modulePages.map((mp) => ({
       to: mp.page.path,
       icon: getIcon(mp.page.icon),
@@ -154,6 +157,8 @@ function App() {
           <Routes>
             {/* Core AIDeveloper routes */}
             <Route path="/" element={<Dashboard />} />
+            <Route path="/workflows" element={<Workflows />} />
+            <Route path="/workflows/:id" element={<WorkflowDetail />} />
             <Route path="/modules" element={<Modules />} />
             <Route path="/modules/settings" element={<ModuleSettings />} />
             <Route path="/modules/:moduleName/prompts" element={<ModulePrompts />} />

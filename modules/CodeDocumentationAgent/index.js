@@ -130,6 +130,7 @@ export class CodeDocumentationAgent {
                     iterations,
                     filesWritten,
                 },
+                conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
             };
         }
         catch (error) {

@@ -40,18 +40,25 @@ Reads and returns the contents of a file. Useful for understanding existing code
 Writes content to a file. Creates the file if it doesn't exist, overwrites if it does.
 
 **Parameters:**
-- `file_path` - Path to the file to write (relative to working directory)
-- `content` - Content to write to the file (passed via stdin or as argument)
+- `file_path` - Path to the file to write (relative to working directory) - FIRST argument
+- `content` - Content to write to the file - SECOND argument (REQUIRED)
 
 **Example:**
 ```bash
-echo "const x = 1;" | ./tools/write-file.sh "src/file.ts"
+./tools/write-file.sh "src/file.ts" "const x = 1;"
+./tools/write-file.sh "Dockerfile" "FROM node:18-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD [\"npm\", \"start\"]"
 ```
 
 **Description:**
 Writes content to a file. The directory will be created automatically if it doesn't exist. This is the primary tool for creating and modifying code files.
 
-**Note:** Content can be passed via stdin or as a second argument.
+**IMPORTANT:** Content MUST be passed as the second argument. Stdin is NOT supported. The script will fail if no content argument is provided.
 
 ### create-directory.sh
 
@@ -186,6 +193,107 @@ Pushes local commits to the remote repository.
 - ✅ Commit changes
 - ✅ View diffs
 - ✅ Push to remote
+
+## Docker Tools
+
+### docker-build.sh
+
+Builds a Docker image from a Dockerfile.
+
+**Parameters:**
+- `image_name` - (Optional) Name for the image, defaults to "app"
+- `dockerfile_path` - (Optional) Path to Dockerfile, defaults to "Dockerfile"
+
+**Example:**
+```bash
+./tools/docker-build.sh "myapp"
+./tools/docker-build.sh "myapp" "Dockerfile"
+./tools/docker-build.sh "frontend" "frontend/Dockerfile"
+```
+
+**Description:**
+Builds a Docker image from the specified Dockerfile. Reports success/failure and shows image details.
+
+### docker-compose-up.sh
+
+Starts Docker Compose services.
+
+**Parameters:**
+- `compose_file` - (Optional) Path to docker-compose.yml, defaults to "docker-compose.yml"
+- `--build` - (Optional) Rebuild images before starting
+
+**Example:**
+```bash
+./tools/docker-compose-up.sh
+./tools/docker-compose-up.sh "docker-compose.yml" "--build"
+```
+
+**Description:**
+Starts all services defined in docker-compose.yml in detached mode. Shows running containers after startup.
+
+### docker-compose-down.sh
+
+Stops Docker Compose services.
+
+**Parameters:**
+- `compose_file` - (Optional) Path to docker-compose.yml, defaults to "docker-compose.yml"
+- `--volumes` - (Optional) Also remove volumes
+
+**Example:**
+```bash
+./tools/docker-compose-down.sh
+./tools/docker-compose-down.sh "docker-compose.yml" "--volumes"
+```
+
+**Description:**
+Stops and removes all containers defined in docker-compose.yml.
+
+### docker-validate.sh
+
+Validates Docker configuration files for best practices.
+
+**Parameters:** None
+
+**Example:**
+```bash
+./tools/docker-validate.sh
+```
+
+**Description:**
+Checks for presence and quality of Docker configuration:
+- Verifies Dockerfile exists and follows best practices (HEALTHCHECK, EXPOSE, version pinning)
+- Validates docker-compose.yml syntax and best practices (healthchecks, restart policies)
+- Checks for .dockerignore
+- Reports errors and warnings
+
+## Docker Permissions
+
+- ✅ Build Docker images
+- ✅ Start Docker Compose services
+- ✅ Stop Docker Compose services
+- ✅ Validate Docker configuration
+
+## Docker Best Practices
+
+When creating Docker files, follow these guidelines:
+
+1. **Dockerfile Best Practices:**
+   - Use multi-stage builds for smaller images
+   - Pin base image versions (e.g., `node:18-alpine` not `node:latest`)
+   - Include HEALTHCHECK instructions
+   - Use EXPOSE to document ports
+   - Run as non-root user when possible
+
+2. **docker-compose.yml Best Practices:**
+   - Define healthchecks for all services
+   - Use restart policies (e.g., `unless-stopped`)
+   - Use named volumes for persistent data
+   - Use custom networks for service isolation
+
+3. **.dockerignore:**
+   - Always create .dockerignore to exclude unnecessary files
+   - Exclude: node_modules, .git, .env files, build artifacts
+
 
 
 

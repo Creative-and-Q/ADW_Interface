@@ -138,6 +138,7 @@ export class CodeTestingAgent {
                     toolsExecuted: toolResults.length,
                     testsPass,
                 },
+                conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
             };
         }
         catch (error) {
@@ -341,30 +342,70 @@ GENERATE AND EXECUTE TESTS:
     `.trim();
     }
     /**
+     * Truncate messages to fit within context window (keep first user message and last N messages)
+     */
+    truncateMessages(messages, maxMessages = 6) {
+        if (messages.length <= maxMessages) {
+            return messages;
+        }
+        // Keep the first message (original task) and the last N-1 messages
+        const firstMessage = messages[0];
+        const recentMessages = messages.slice(-(maxMessages - 1));
+        console.log(`Truncating messages: ${messages.length} -> ${maxMessages} (keeping first + last ${maxMessages - 1})`);
+        return [firstMessage, ...recentMessages];
+    }
+    /**
      * Call OpenRouter API
      */
     async callOpenRouter(messages, options) {
-        const apiMessages = [...messages];
+        // Truncate messages to prevent context overflow
+        const truncatedMessages = this.truncateMessages(messages, 6);
+        const apiMessages = [...truncatedMessages];
         if (options?.systemPrompt) {
             apiMessages.unshift({
                 role: 'system',
                 content: options.systemPrompt,
             });
         }
-        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-            model: this.model,
-            messages: apiMessages,
-            max_tokens: options?.maxTokens || 4096,
-            temperature: options?.temperature || 0.7,
-        }, {
-            headers: {
-                'Authorization': `Bearer ${this.apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:3000',
-                'X-Title': 'CodeTestingAgent',
-            },
-        });
-        return response.data.choices[0]?.message?.content || '';
+        try {
+            const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+                model: this.model,
+                messages: apiMessages,
+                max_tokens: options?.maxTokens || 4096,
+                temperature: options?.temperature || 0.7,
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'http://localhost:3000',
+                    'X-Title': 'CodeTestingAgent',
+                },
+            });
+            return response.data.choices[0]?.message?.content || '';
+        }
+        catch (error) {
+            // Enhanced error logging for API failures
+            if (error.response) {
+                const status = error.response.status;
+                const data = error.response.data;
+                console.error(`OpenRouter API error (${status}):`, JSON.stringify(data, null, 2));
+                // More specific error messages
+                if (status === 400) {
+                    const errorMsg = data?.error?.message || 'Bad request';
+                    throw new Error(`OpenRouter 400 Bad Request: ${errorMsg}. Messages: ${apiMessages.length}, Model: ${this.model}`);
+                }
+                else if (status === 401) {
+                    throw new Error('OpenRouter API key is invalid or expired');
+                }
+                else if (status === 429) {
+                    throw new Error('OpenRouter rate limit exceeded - please try again later');
+                }
+                else if (status === 402) {
+                    throw new Error('OpenRouter account has insufficient credits');
+                }
+            }
+            throw error;
+        }
     }
     /**
      * Execute a shell script tool

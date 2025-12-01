@@ -62,6 +62,8 @@ export const workflowsAPI = {
     api.post(`/workflows/${id}/pause`, { reason }),
   unpauseWorkflow: (id: number) =>
     api.post(`/workflows/${id}/unpause`),
+  forceFailWorkflow: (id: number, reason?: string) =>
+    api.post(`/workflows/${id}/force-fail`, { reason }),
 
   // Checkpoint API for resuming from failed workflows
   getCheckpoints: (id: number) =>

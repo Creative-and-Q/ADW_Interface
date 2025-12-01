@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  {{MODULE_NAME_LOWER}}:
+    build: .
+    container_name: {{MODULE_NAME_LOWER}}
+    ports:
+      - "{{PORT}}:{{PORT}}"
+    environment:
+      - NODE_ENV=production
+      - PORT={{PORT}}
+      - DB_TYPE=sqlite
+      - DB_PATH=/app/data/{{MODULE_NAME_LOWER}}.db
+    volumes:
+      - {{MODULE_NAME_LOWER}}_data:/app/data
+    networks:
+      - {{MODULE_NAME_LOWER}}_network
+    restart: unless-stopped
+
+volumes:
+  {{MODULE_NAME_LOWER}}_data:
+
+networks:
+  {{MODULE_NAME_LOWER}}_network:
+    driver: bridge

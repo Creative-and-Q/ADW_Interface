@@ -134,6 +134,7 @@ export class CodeReviewAgent {
                     iterations,
                     filesReviewed,
                 },
+                conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
             };
         }
         catch (error) {

@@ -21,6 +21,18 @@ export default defineConfig({
       ],
     },
   },
+  build: {
+    rollupOptions: {
+      // Exclude external modules directory from build
+      external: (id) => {
+        // Exclude any imports from the modules directory outside AIDeveloper
+        if (id.includes('/modules/') && !id.includes('/AIDeveloper/')) {
+          return true;
+        }
+        return false;
+      },
+    },
+  },
   resolve: {
     alias: {
       '@modules': path.resolve(__dirname, '../../modules'),

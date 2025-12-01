@@ -11,6 +11,7 @@ import {
   getNextExecutableSubWorkflow,
   getQueueStatus,
   advanceSubWorkflowQueue,
+  releaseWorkflowTreeLock,
 } from '../sub-workflow-queue.js';
 import { saveWorkflowPlan, updateWorkflowStatus, saveArtifact } from '../workflow-state.js';
 import { WorkflowStatus, ArtifactType } from '../types.js';
@@ -127,6 +128,9 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
             // Update sub-workflow queue status
             await updateSubWorkflowStatus(nextWorkflowId, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
 
+            // Release the tree lock so the next workflow can be started
+            await releaseWorkflowTreeLock(nextWorkflowId);
+
             logger.info('Sub-workflow execution completed', { workflowId: nextWorkflowId, status: finalStatus });
 
             // After completion, continue executing remaining sub-workflows in a loop
@@ -168,6 +172,9 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
                 await updateWorkflowStatus(currentNext, nextFinalStatus);
                 await updateSubWorkflowStatus(currentNext, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
 
+                // Release the tree lock so the next workflow can be started
+                await releaseWorkflowTreeLock(currentNext);
+
                 logger.info('Sub-workflow in queue completed', { workflowId: currentNext, status: nextFinalStatus });
 
                 // Advance to next workflow in queue
@@ -176,6 +183,7 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
                 logger.error('Failed to execute sub-workflow in queue', loopError as Error, { workflowId: currentNext });
                 if (currentNext !== null) {
                   await updateSubWorkflowStatus(currentNext, 'failed', (loopError as Error).message);
+                  await releaseWorkflowTreeLock(currentNext);
                 }
                 break;
               }
@@ -185,8 +193,9 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
           }
         } catch (error) {
           logger.error('Failed to auto-execute sub-workflow', error as Error, { workflowId: nextWorkflowId });
-          const { updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
+          const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
           await updateSubWorkflowStatus(nextWorkflowId, 'failed', (error as Error).message);
+          await releaseLock(nextWorkflowId);
         }
       })().catch((error) => {
         logger.error('Unhandled error in sub-workflow auto-execution', error as Error);
@@ -271,9 +280,12 @@ router.post('/:id/advance-queue', async (req: Request, res: Response): Promise<v
             // @ts-ignore - Dynamic import path resolved at runtime
             const { WorkflowOrchestrator } = await import('file:///home/kevin/Home/ex_nihilo/modules/WorkflowOrchestrator/index.js');
             const { getWorkflowDirectory } = await import('../utils/workflow-directory-manager.js');
-            
-            // Get workflow directory (should already exist from parent workflow)
-            const workflowDir = getWorkflowDirectory(nextWorkflowId, workflow.branchName || 'master');
+
+            // Get or create workflow directory - use the target module directory for feature workflows
+            const targetModule = workflow.target_module;
+            const workflowDir = targetModule
+              ? `/home/kevin/Home/ex_nihilo/modules/${targetModule}`
+              : getWorkflowDirectory(nextWorkflowId, workflow.branchName || 'master');
             
             // Update workflow status to planning (workflow is starting)
             await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
@@ -299,15 +311,17 @@ router.post('/:id/advance-queue', async (req: Request, res: Response): Promise<v
             await updateWorkflowStatus(nextWorkflowId, finalStatus);
 
             // Update sub-workflow queue status
-            const { updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
+            const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
             await updateSubWorkflowStatus(nextWorkflowId, finalStatus, result.success ? undefined : result.summary);
-            
+            await releaseLock(nextWorkflowId);
+
             logger.info('Feature workflow execution completed', { workflowId: nextWorkflowId, status: finalStatus });
           }
         } catch (error) {
           logger.error('Failed to auto-execute feature workflow', error as Error, { workflowId: nextWorkflowId });
-          const { updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
+          const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
           await updateSubWorkflowStatus(nextWorkflowId, 'failed', (error as Error).message);
+          await releaseLock(nextWorkflowId);
         }
       })().catch((error) => {
         logger.error('Unhandled error in workflow auto-execution', error as Error);

@@ -33,6 +33,16 @@ export interface AgentOutput {
     requiresRetry?: boolean;
     retryReason?: string;
     metadata?: Record<string, any>;
+    /** Full conversation history from the agent's API interactions */
+    conversationHistory?: Array<{
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        toolCalls?: Array<{
+            name: string;
+            input: any;
+            result?: string;
+        }>;
+    }>;
 }
 /**
  * CodingAgent
@@ -91,6 +101,16 @@ export declare class CodingAgent {
      * Execute a shell script tool
      */
     executeTool(toolName: string, args: string[], workingDir: string): Promise<string>;
+    /**
+     * Validate react-icons imports by checking actual exports
+     * Returns list of invalid icons and suggestions for valid alternatives
+     */
+    private validateReactIcons;
+    /**
+     * Ensure CSS module type declarations exist
+     * Creates a global.d.ts if needed for CSS modules
+     */
+    private ensureCssModuleTypes;
     /**
      * Ensure tsconfig.json excludes test files to prevent test code from breaking builds
      */

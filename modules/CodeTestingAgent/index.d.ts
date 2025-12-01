@@ -40,6 +40,16 @@ export interface AgentOutput {
     requiresRetry?: boolean;
     retryReason?: string;
     metadata?: Record<string, any>;
+    /** Full conversation history from the agent's API interactions */
+    conversationHistory?: Array<{
+        role: 'user' | 'assistant' | 'system';
+        content: string;
+        toolCalls?: Array<{
+            name: string;
+            input: any;
+            result?: string;
+        }>;
+    }>;
 }
 /**
  * CodeTestingAgent
@@ -72,6 +82,10 @@ export declare class CodeTestingAgent {
      * Build user prompt
      */
     private buildUserPrompt;
+    /**
+     * Truncate messages to fit within context window (keep first user message and last N messages)
+     */
+    private truncateMessages;
     /**
      * Call OpenRouter API
      */

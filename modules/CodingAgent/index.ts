@@ -52,6 +52,16 @@ export interface AgentOutput {
   requiresRetry?: boolean;
   retryReason?: string;
   metadata?: Record<string, any>;
+  /** Full conversation history from the agent's API interactions */
+  conversationHistory?: Array<{
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    toolCalls?: Array<{
+      name: string;
+      input: any;
+      result?: string;
+    }>;
+  }>;
 }
 
 /**
@@ -192,6 +202,41 @@ export class CodingAgent {
               content: aiResponse,
             });
 
+            // Build enhanced error message based on error type
+            let additionalGuidance = '';
+            if (lastBuildError.includes('react-icons') || lastBuildError.includes('has no exported member')) {
+              additionalGuidance = `
+## REACT-ICONS SPECIFIC FIX:
+The error suggests you used an icon that doesn't exist. Common non-existent icons:
+- GiDiceSeven, GiSeven, GiEight, GiNine - DON'T EXIST
+- FaApple, FaBanana - DON'T EXIST
+
+Use these REAL alternatives:
+- For "seven": GiSevenPointedStar
+- For fruits: GiCherry, GiLemon, GiOrange, GiGrapes, GiBanana
+- For treasure: GiOpenTreasureChest
+- For bells: GiRingingBell
+- For valuable: GiDiamondHard, GiCrown, GiCoins
+
+Also use IconType from 'react-icons' for typing, not React.ComponentType.
+`;
+            }
+            if (lastBuildError.includes('.module.css') || lastBuildError.includes('Cannot find module')) {
+              additionalGuidance += `
+## CSS MODULE FIX:
+If using CSS modules, ensure the .module.css file exists and has the classes you're using.
+Or remove the CSS module import and use inline styles instead.
+`;
+            }
+            if (lastBuildError.includes('Property') && lastBuildError.includes('does not exist on type')) {
+              additionalGuidance += `
+## TYPE PROPERTY FIX:
+You're using a property that doesn't exist on the type.
+READ the interface/type definition and use the EXACT property names.
+Common mistakes: 'multiplier' vs 'value', 'Symbol' vs 'SymbolConfig'
+`;
+            }
+
             messages.push({
               role: 'user',
               content: `⚠️ BUILD VERIFICATION FAILED (attempt ${buildRetryCount}/${maxBuildRetries})
@@ -210,10 +255,11 @@ PLEASE FIX THESE ERRORS:
 Common fixes include:
 - **"Cannot find module 'X'"**: Add the package to package.json dependencies and update the import OR use a different approach that doesn't require external packages
 - **"Could not find a declaration file for module 'X'"**: Add @types/X to devDependencies in package.json OR add a declare module statement
+- **"has no exported member 'X'"**: The export doesn't exist - use a different one that DOES exist
 - **"declared but never used"**: Remove the unused import/variable
 - **Type errors**: Fix the type annotations
 - **Syntax errors**: Fix the syntax
-
+${additionalGuidance}
 IMPORTANT: If you need to add new packages to package.json, show the updated package.json file with the new dependencies.
 
 Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
@@ -273,6 +319,7 @@ Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
             buildError: lastBuildError,
             buildRetryAttempts: buildRetryCount,
           },
+          conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
         };
       }
 
@@ -298,6 +345,7 @@ Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
           toolsExecuted: toolResults.length,
           buildVerification: 'PASSED',
         },
+        conversationHistory: messages.map(m => ({ role: m.role, content: m.content })),
       };
     } catch (error) {
       return {
@@ -411,8 +459,8 @@ Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
     };
 
     // Pattern 1: Code block with file path in header (```tsx:path/to/file.tsx)
-    // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json, svg, xml, scss, sass
-    const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json|svg|xml|scss|sass):([^\n]+)\n([\s\S]*?)```/g;
+    // Supports: typescript, tsx, ts, javascript, jsx, js, css, html, json, svg, xml, scss, sass, dockerfile, yaml, yml, sh, bash, text, plain, env, gitignore, dockerignore, md, markdown
+    const pattern1 = /```(?:typescript|tsx|ts|javascript|jsx|js|css|html|json|svg|xml|scss|sass|dockerfile|yaml|yml|sh|bash|text|plain|env|gitignore|dockerignore|md|markdown)?:([^\n]+)\n([\s\S]*?)```/g;
     let match;
 
     while ((match = pattern1.exec(response)) !== null) {
@@ -499,6 +547,33 @@ Show the complete fixed file(s) and then say "BUILD ERROR FIXED".`,
 
     if (results.length === 0) {
       results.push('⚠️ No code blocks with file paths found in response');
+    }
+
+    // Validate react-icons in all written files
+    for (const result of results) {
+      if (result.includes('Auto-wrote') || result.includes('Smart-merged')) {
+        const fileMatch = result.match(/(?:Auto-wrote|Smart-merged[^:]*): ([^\s]+)/);
+        if (fileMatch) {
+          const filePath = fileMatch[1];
+          const fullPath = path.isAbsolute(filePath) ? filePath : path.join(workingDir, filePath);
+          try {
+            const content = await fs.readFile(fullPath, 'utf-8');
+            if (content.includes('react-icons')) {
+              const validation = await this.validateReactIcons(workingDir, content);
+              if (!validation.valid) {
+                results.push(`⚠️ INVALID REACT-ICONS in ${filePath}: ${validation.invalidIcons.join(', ')}`);
+                for (const [icon, suggestions] of Object.entries(validation.suggestions)) {
+                  if (suggestions.length > 0) {
+                    results.push(`   → Replace "${icon}" with one of: ${suggestions.join(', ')}`);
+                  }
+                }
+              }
+            }
+          } catch {
+            // File read failed - skip validation
+          }
+        }
+      }
     }
 
     return results;
@@ -714,12 +789,51 @@ When creating NEW files that don't exist yet:
 - ✅ Copy files (use copy-file.sh)
 - ⚠️  All operations restricted to working directory
 
+## CRITICAL: react-icons Usage
+
+When using react-icons, you MUST use ONLY icons that actually exist. Common mistakes:
+- ❌ GiDiceSeven, GiSeven, GiEight, GiNine - DO NOT EXIST
+- ❌ FaApple, FaBanana - DO NOT EXIST
+- ❌ GiStar2, GiStar3 - DO NOT EXIST
+
+**Instead use these REAL icons:**
+- ✅ GiSevenPointedStar (for "seven")
+- ✅ GiCherry, GiLemon, GiOrange, GiGrapes, GiBanana (for fruits)
+- ✅ GiOpenTreasureChest, GiTreasureMap (for treasure)
+- ✅ GiBarn, GiChurch, GiRingingBell (for buildings/bells)
+- ✅ GiDiamondHard, GiCrown, GiCoins, GiClover (for valuable items)
+
+**BEFORE using any icon, verify it exists by checking the project's node_modules/react-icons/[set]/index.d.ts**
+
+Also remember to import IconType for proper typing:
+\`\`\`typescript
+import { IconType } from 'react-icons';
+// Then use: icon: IconType (not React.ComponentType)
+\`\`\`
+
+## CRITICAL: TypeScript Type Matching
+
+When using existing interfaces/types, you MUST:
+1. READ the existing type definition first
+2. Use the EXACT property names from the type
+3. Common mistakes to avoid:
+   - Using \`multiplier\` when the type has \`value\`
+   - Using \`Symbol\` when export is \`SymbolConfig\`
+   - Using \`keyof typeof array\` (doesn't work on arrays)
+
+## CSS Modules
+
+When using CSS modules (*.module.css), the system auto-generates type declarations.
+However, if using CSS modules, make sure the .css file actually exists!
+
 ## Important
 
 - NEVER just describe changes - EXECUTE them using tools
 - NEVER assume file paths - use the EXACT paths from the file list
 - NEVER create files at paths that don't match the project structure
 - NEVER put frontend code in backend directories or vice versa
+- NEVER use react-icons without verifying they exist
+- ALWAYS read existing type definitions before using them
 - When writing files with content, put full content in quotes
 
 ## CRITICAL: Modifying package.json
@@ -738,7 +852,439 @@ Example for adding a devDependency:
 }
 \`\`\`
 
-This will ADD the field to existing package.json, preserving all other content!`;
+This will ADD the field to existing package.json, preserving all other content!
+
+## CRITICAL: Package Types that DON'T EXIST
+
+Many modern packages include their own TypeScript types. Do NOT add separate @types packages for:
+
+- ❌ @types/socket.io - socket.io v4+ includes its own types
+- ❌ @types/vite - vite includes its own types
+- ❌ @types/react-router-dom - v6+ includes its own types
+- ❌ @types/axios - axios includes its own types
+- ❌ @types/tailwindcss - tailwindcss includes its own types
+
+When using these packages:
+- socket.io: Import types directly: \`import { Server, Socket } from 'socket.io'\`
+- vite: Types are built-in
+- axios: Types are built-in
+- tailwindcss: Types are built-in
+
+If you see "npm error ETARGET No matching version found for @types/X", the package likely includes its own types - remove the @types/X dependency!
+
+## CRITICAL: Consistent Export Patterns
+
+When creating multiple related files (e.g., routes), use CONSISTENT export patterns:
+
+**Named exports (PREFERRED for multiple exports):**
+\`\`\`typescript
+// routes/auth.ts
+const router = express.Router();
+// ... route handlers ...
+export { router as authRoutes };
+export { authenticateToken }; // export any middleware too!
+
+// routes/game.ts
+const router = express.Router();
+// ... route handlers ...
+export { router as gameRoutes };
+\`\`\`
+
+**Then import consistently:**
+\`\`\`typescript
+// server.ts
+import { authRoutes } from './routes/auth';
+import { gameRoutes } from './routes/game';
+\`\`\`
+
+**NEVER mix patterns:**
+- ❌ \`export default router\` in one file and \`export { router as X }\` in another
+- ❌ \`import X from './routes/x'\` when the file uses named exports
+- ❌ \`import { X } from './routes/x'\` when the file uses default export
+
+## CRITICAL: Reference Validation
+
+Before writing code that imports a function/class/constant:
+1. Make sure you CREATE that export in the source file
+2. If you import \`{ authenticateToken }\` from \`./auth\`, you MUST export \`authenticateToken\` from auth.ts
+3. If you reference a model like \`User\`, ensure the User model is properly exported
+
+## CRITICAL: npm Package Versions
+
+Use ONLY these VERIFIED package versions in package.json:
+
+**Dependencies:**
+- express: "^4.18.2" (NOT 4.19.x)
+- cors: "^2.8.5" (NOT 2.8.13)
+- bcrypt: "^5.1.0" or "^5.1.1" (NOT 5.2.x)
+- jsonwebtoken: "^9.0.0" or "^9.0.2"
+- mongoose: "^8.0.0" or "^7.0.0"
+- socket.io: "^4.7.5" or "^4.6.0"
+- axios: "^1.6.2" or "^1.7.0"
+
+**DevDependencies:**
+- typescript: "^5.3.3" or "^5.4.0"
+- @types/node: "^20.10.0" or "^20.11.0"
+- @types/express: "^4.17.21"
+- @types/cors: "^2.8.17"
+- @types/bcrypt: "^5.0.0" (NOT 5.0.4)
+- @types/jsonwebtoken: "^9.0.5" or "^9.0.6"
+
+**DO NOT use these non-existent versions:**
+- ❌ @types/bcrypt@^5.0.4 - use ^5.0.0
+- ❌ cors@^2.8.13 - use ^2.8.5
+- ❌ @types/socket.io - doesn't exist (socket.io has built-in types)
+- ❌ Any @types package with version > what exists on npm
+
+## CRITICAL: Adding New Dependencies
+
+When you import a new package that isn't in package.json, you MUST also update package.json!
+
+**WRONG - import without adding to package.json:**
+\`\`\`tsx
+// In your code file
+import { GiCherry } from 'react-icons/gi';  // react-icons not in package.json!
+\`\`\`
+
+**CORRECT - update package.json when adding imports:**
+
+1. First, add the package to the appropriate package.json:
+\`\`\`json
+// frontend/package.json (for frontend dependencies)
+{
+  "dependencies": {
+    "react-icons": "^5.0.0"  // ADD THIS LINE
+  }
+}
+\`\`\`
+
+2. Then import in your code:
+\`\`\`tsx
+import { GiCherry } from 'react-icons/gi';  // Now this works!
+\`\`\`
+
+**Common packages to add:**
+- Frontend: react-icons, axios, react-router-dom, tailwindcss
+- Backend: mongoose, bcrypt, jsonwebtoken, socket.io
+
+**ALWAYS check:** Before importing any package, verify it's in the relevant package.json. If not, add it first!
+
+The npm install step runs automatically but ONLY installs what's in package.json.
+
+## CRITICAL: COMPLETE File Output - NO PLACEHOLDERS
+
+When outputting code files, you MUST include the COMPLETE file content. NEVER use placeholder comments like:
+- ❌ "// ... rest of the file"
+- ❌ "// ... route handlers ..."
+- ❌ "// remaining code stays the same"
+- ❌ "// ... (rest unchanged)"
+- ❌ "// etc."
+- ❌ Any variant of "..." to skip code
+
+Every file you output MUST be complete and runnable. If the file is long, still output the entire thing.
+
+**WRONG (will break the code):**
+\`\`\`typescript
+// routes/auth.ts
+import express from 'express';
+const router = express.Router();
+// ... rest of the file
+\`\`\`
+
+**CORRECT (complete file):**
+\`\`\`typescript
+// routes/auth.ts
+import express from 'express';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import { User } from '../models/User';
+
+const router = express.Router();
+
+router.post('/register', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({ email, password: hashedPassword });
+    res.status(201).json({ message: 'User registered' });
+  } catch (error) {
+    res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !await bcrypt.compare(password, user.password)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || 'secret');
+    res.json({ token });
+  } catch (error) {
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+export { router as authRoutes };
+\`\`\`
+
+REMEMBER: Every code block you output will be written to a file EXACTLY as you write it. Placeholder comments become broken code!
+
+## CRITICAL: React Component Props Consistency (TS2322 IntrinsicAttributes)
+
+When creating React components across multiple files, you MUST:
+
+1. **Define a Props interface in EVERY component that accepts props**
+2. **Apply that interface to the function parameter**
+3. **Match prop names exactly between parent and child**
+
+**WRONG (no props interface - causes TS2322 IntrinsicAttributes error):**
+\`\`\`tsx
+// Login.tsx - THIS WILL FAIL!
+function Login() {  // No props typed!
+  // ...
+}
+export default Login;
+
+// App.tsx - passes props that Login doesn't accept
+<Login onLogin={handleLogin} />  // TS2322: 'onLogin' does not exist on type 'IntrinsicAttributes'
+\`\`\`
+
+**WRONG (prop name mismatch):**
+\`\`\`tsx
+// App.tsx
+<Login onLogin={handleLogin} />  // passes "onLogin"
+
+// Login.tsx
+interface LoginProps {
+  setToken: React.Dispatch<...>;  // expects "setToken" - MISMATCH!
+}
+\`\`\`
+
+**CORRECT - Always define and apply Props interface:**
+\`\`\`tsx
+// Login.tsx
+interface LoginProps {
+  onLogin: (token: string) => void;
+}
+
+function Login({ onLogin }: LoginProps) {  // Props interface APPLIED to function!
+  const handleSubmit = () => {
+    onLogin(token);  // Use the prop
+  };
+  return <form onSubmit={handleSubmit}>...</form>;
+}
+
+export default Login;
+
+// App.tsx
+<Login onLogin={handleLogin} />  // Works! Login accepts this prop.
+\`\`\`
+
+**CHECKLIST for every component with props:**
+1. Define \`interface ComponentNameProps { ... }\`
+2. Apply it: \`function ComponentName({ prop1, prop2 }: ComponentNameProps)\`
+3. Ensure parent passes the exact prop names defined in the interface
+
+## CRITICAL: Avoid Unused Variables/Imports (TS6133)
+
+TypeScript strict mode fails on unused declarations. Follow these rules:
+
+1. **Only import hooks you ACTUALLY call:**
+   \`\`\`tsx
+   // WRONG - useEffect imported but never called
+   import { useState, useEffect } from 'react';  // TS6133: 'useEffect' is declared but never read
+
+   function MyComponent() {
+     const [state, setState] = useState(0);
+     // no useEffect() call anywhere!
+     return <div>{state}</div>;
+   }
+
+   // CORRECT - only import what you use
+   import { useState } from 'react';  // No useEffect because we don't use it
+
+   function MyComponent() {
+     const [state, setState] = useState(0);
+     return <div>{state}</div>;
+   }
+   \`\`\`
+
+2. **Don't import React explicitly with react-jsx:**
+   \`\`\`tsx
+   // WRONG - React import unused with jsx: "react-jsx"
+   import React, { useState } from 'react';
+
+   // CORRECT - only import what you use
+   import { useState } from 'react';
+   \`\`\`
+
+3. **Use all declared variables:**
+   \`\`\`tsx
+   // WRONG - newBalance declared but never used
+   const [balance, setBalance] = useState(0);
+   const newBalance = balance + 10; // unused!
+
+   // CORRECT - either use it or don't declare it
+   const [balance, setBalance] = useState(0);
+   setBalance(balance + 10);
+   \`\`\`
+
+4. **For React.FC type, import React as type only:**
+   \`\`\`tsx
+   import type { FC } from 'react';
+   import { useState } from 'react';
+
+   const MyComponent: FC<Props> = ({ ... }) => { ... };
+   \`\`\`
+
+   Or just use function components without FC:
+   \`\`\`tsx
+   import { useState } from 'react';
+
+   function MyComponent({ prop1, prop2 }: Props) { ... }
+   \`\`\`
+
+**BEFORE writing any file, scan your code and ask: "Did I import anything I don't use?"**
+
+## CRITICAL: Node.js ESM Module Configuration
+
+When creating a backend with \`"type": "module"\` in package.json, you MUST follow these rules for the application to run:
+
+### 1. Use tsx instead of ts-node for dev script
+
+\`ts-node\` does NOT work with ESM modules. Use \`tsx\` instead:
+
+\`\`\`json
+// package.json
+{
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",         // CORRECT - tsx works with ESM
+    "start": "node dist/server.js",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0"    // REQUIRED for dev script
+  }
+}
+\`\`\`
+
+**WRONG:**
+\`\`\`json
+"dev": "ts-node src/server.ts"  // ERR_UNKNOWN_FILE_EXTENSION with "type": "module"
+\`\`\`
+
+### 2. Add .js extension to ALL local imports
+
+Node.js ESM requires file extensions. TypeScript compiles imports as-is, so you MUST add \`.js\` to your TypeScript source:
+
+\`\`\`typescript
+// src/server.ts - CORRECT
+import { authRoutes } from './routes/auth.js';     // .js extension required!
+import { gameRoutes } from './routes/game.js';     // .js extension required!
+import { User } from './models/User.js';           // .js extension required!
+\`\`\`
+
+\`\`\`typescript
+// src/server.ts - WRONG (ERR_MODULE_NOT_FOUND at runtime)
+import { authRoutes } from './routes/auth';        // Missing .js!
+import { gameRoutes } from './routes/game';        // Missing .js!
+\`\`\`
+
+### 3. Configure tsconfig.json for ESM
+
+\`\`\`json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",           // Use NodeNext for proper ESM support
+    "moduleResolution": "NodeNext", // Use NodeNext (not "node")
+    "esModuleInterop": true,
+    "strict": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  }
+}
+\`\`\`
+
+### 4. Complete working example
+
+**package.json:**
+\`\`\`json
+{
+  "name": "my-backend",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.10.0",
+    "@types/express": "^4.17.21"
+  }
+}
+\`\`\`
+
+**src/server.ts:**
+\`\`\`typescript
+import express from 'express';
+import { authRoutes } from './routes/auth.js';  // Note: .js extension!
+
+const app = express();
+app.use('/api/auth', authRoutes);
+app.listen(5000, () => console.log('Server running'));
+\`\`\`
+
+**CHECKLIST before writing backend code:**
+1. ✅ Use \`tsx\` in dev script (NOT ts-node)
+2. ✅ Add \`.js\` extension to ALL local imports
+3. ✅ Use \`"module": "NodeNext"\` in tsconfig.json
+4. ✅ Include \`tsx\` in devDependencies
+
+## CRITICAL: Type setState Callback Parameters (TS7006)
+
+When using functional updates with setState, you MUST type the callback parameter:
+
+\`\`\`tsx
+// WRONG - TS7006: Parameter 'prev' implicitly has an 'any' type
+setBalance(prev => prev + 100);
+setItems(prev => [...prev, newItem]);
+
+// CORRECT - Type the callback parameter
+setBalance((prev: number) => prev + 100);
+setItems((prev: ItemType[]) => [...prev, newItem]);
+setUser((prev: User | null) => prev ? { ...prev, name: 'new' } : null);
+\`\`\`
+
+**Common patterns:**
+\`\`\`tsx
+// Numbers
+const [count, setCount] = useState(0);
+setCount((prev: number) => prev + 1);
+
+// Booleans
+const [open, setOpen] = useState(false);
+setOpen((prev: boolean) => !prev);
+
+// Arrays
+const [items, setItems] = useState<string[]>([]);
+setItems((prev: string[]) => [...prev, 'new item']);
+
+// Objects
+interface User { name: string; balance: number; }
+const [user, setUser] = useState<User | null>(null);
+setUser((prev: User | null) => prev ? { ...prev, balance: prev.balance + 10 } : null);
+\`\`\`
+
+**RULE:** Every setState callback with \`prev =>\` MUST have \`(prev: Type) =>\``;
   }
 
   /**
@@ -856,6 +1402,142 @@ When finished, say: "IMPLEMENTATION COMPLETE"
   }
 
   /**
+   * Validate react-icons imports by checking actual exports
+   * Returns list of invalid icons and suggestions for valid alternatives
+   */
+  private async validateReactIcons(workingDir: string, code: string): Promise<{
+    valid: boolean;
+    invalidIcons: string[];
+    suggestions: Record<string, string[]>;
+  }> {
+    const invalidIcons: string[] = [];
+    const suggestions: Record<string, string[]> = {};
+
+    // Extract react-icons imports
+    const importMatches = code.matchAll(/import\s*{([^}]+)}\s*from\s*['"]react-icons\/(gi|fa|md|ai|bi|bs|cg|di|fc|fi|go|gr|hi|im|io|io5|ri|si|sl|tb|ti|vsc|wi)['"]/g);
+
+    for (const match of importMatches) {
+      const icons = match[1].split(',').map(s => s.trim()).filter(s => s);
+      const iconSet = match[2];
+      const typesPath = `${workingDir}/node_modules/react-icons/${iconSet}/index.d.ts`;
+
+      try {
+        const typesContent = await fs.readFile(typesPath, 'utf-8');
+
+        for (const icon of icons) {
+          // Check if the icon is actually exported
+          const exportRegex = new RegExp(`export declare const ${icon}:\\s*IconType`);
+          if (!exportRegex.test(typesContent)) {
+            invalidIcons.push(icon);
+
+            // Find similar icons for suggestions
+            const baseName = icon.replace(/^(Gi|Fa|Md|Ai|Bi|Bs|Cg|Di|Fc|Fi|Go|Gr|Hi|Im|Io|Ri|Si|Sl|Tb|Ti|Vsc|Wi)/, '').toLowerCase();
+            const similarMatches = typesContent.matchAll(/export declare const ((?:Gi|Fa|Md|Ai|Bi|Bs|Cg|Di|Fc|Fi|Go|Gr|Hi|Im|Io|Ri|Si|Sl|Tb|Ti|Vsc|Wi)[A-Za-z0-9]+):/g);
+            const similarIcons: string[] = [];
+
+            for (const simMatch of similarMatches) {
+              const simIcon = simMatch[1];
+              const simBaseName = simIcon.replace(/^(Gi|Fa|Md|Ai|Bi|Bs|Cg|Di|Fc|Fi|Go|Gr|Hi|Im|Io|Ri|Si|Sl|Tb|Ti|Vsc|Wi)/, '').toLowerCase();
+              if (simBaseName.includes(baseName) || baseName.includes(simBaseName.substring(0, 4))) {
+                similarIcons.push(simIcon);
+                if (similarIcons.length >= 5) break;
+              }
+            }
+
+            suggestions[icon] = similarIcons;
+          }
+        }
+      } catch (error) {
+        // Can't read types file - react-icons may not be installed yet
+        console.warn(`CodingAgent: Could not validate react-icons for ${iconSet}:`, (error as Error).message);
+      }
+    }
+
+    return {
+      valid: invalidIcons.length === 0,
+      invalidIcons,
+      suggestions,
+    };
+  }
+
+  /**
+   * Ensure CSS module type declarations exist
+   * Creates a global.d.ts if needed for CSS modules
+   */
+  private async ensureCssModuleTypes(workingDir: string): Promise<void> {
+    const declarationContent = `// Auto-generated CSS module type declarations
+declare module '*.module.css' {
+  const classes: { readonly [key: string]: string };
+  export default classes;
+}
+
+declare module '*.module.scss' {
+  const classes: { readonly [key: string]: string };
+  export default classes;
+}
+
+declare module '*.css' {
+  const content: string;
+  export default content;
+}
+`;
+
+    // Check for common declaration file locations
+    const possiblePaths = [
+      path.join(workingDir, 'src', 'global.d.ts'),
+      path.join(workingDir, 'src', 'types', 'css.d.ts'),
+      path.join(workingDir, 'global.d.ts'),
+      path.join(workingDir, 'frontend', 'src', 'global.d.ts'),
+    ];
+
+    // Check if any declaration already exists
+    for (const declPath of possiblePaths) {
+      try {
+        const content = await fs.readFile(declPath, 'utf-8');
+        if (content.includes('*.module.css')) {
+          console.log(`CodingAgent: CSS module types already exist at ${declPath}`);
+          return; // Already has CSS module types
+        }
+      } catch {
+        // File doesn't exist, continue checking
+      }
+    }
+
+    // Create declaration file in src/ or root
+    const srcDir = path.join(workingDir, 'src');
+    const frontendSrcDir = path.join(workingDir, 'frontend', 'src');
+
+    let targetPath: string;
+    try {
+      await fs.access(frontendSrcDir);
+      targetPath = path.join(frontendSrcDir, 'global.d.ts');
+    } catch {
+      try {
+        await fs.access(srcDir);
+        targetPath = path.join(srcDir, 'global.d.ts');
+      } catch {
+        targetPath = path.join(workingDir, 'global.d.ts');
+      }
+    }
+
+    try {
+      // Check if file exists and append, otherwise create
+      try {
+        const existing = await fs.readFile(targetPath, 'utf-8');
+        if (!existing.includes('*.module.css')) {
+          await fs.writeFile(targetPath, existing + '\n' + declarationContent);
+          console.log(`CodingAgent: Appended CSS module types to ${targetPath}`);
+        }
+      } catch {
+        await fs.writeFile(targetPath, declarationContent);
+        console.log(`CodingAgent: Created CSS module types at ${targetPath}`);
+      }
+    } catch (error) {
+      console.warn(`CodingAgent: Could not create CSS module types:`, (error as Error).message);
+    }
+  }
+
+  /**
    * Ensure tsconfig.json excludes test files to prevent test code from breaking builds
    */
   private async ensureTsconfigExcludesTests(tsconfigPath: string): Promise<void> {
@@ -897,6 +1579,9 @@ When finished, say: "IMPLEMENTATION COMPLETE"
   private async verifyBuild(workingDir: string): Promise<{ success: boolean; error?: string }> {
     const results: string[] = [];
     let hasError = false;
+
+    // Step -2: Ensure CSS module type declarations exist
+    await this.ensureCssModuleTypes(workingDir);
 
     // Step -1: Ensure tsconfig excludes test files
     try {

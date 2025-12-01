@@ -11,21 +11,7 @@
     "build": "npm run build",
     "typecheck": "npm run typecheck"
   },
-  "pages": [
-    {
-      "path": "/workflows",
-      "component": "Workflows",
-      "label": "Workflows",
-      "icon": "Activity",
-      "navOrder": 2
-    },
-    {
-      "path": "/workflows/:id",
-      "component": "WorkflowDetail",
-      "label": "Workflow Detail",
-      "navOrder": 0
-    }
-  ],
+  "pages": [],
   "envVars": [
     {
       "key": "OPENROUTER_API_KEY",
