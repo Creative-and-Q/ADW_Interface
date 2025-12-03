@@ -98,7 +98,7 @@ export const config: AppConfig = {
 
   database: {
     host: getOptionalEnv('DB_HOST', 'localhost'),
-    port: getOptionalNumericEnv('DB_PORT', 3306),
+    port: getOptionalNumericEnv('DB_PORT', 3308),
     user: getOptionalEnv('DB_USER', 'root'),
     password: getOptionalEnv('DB_PASSWORD', ''),
     name: getOptionalEnv('DB_NAME', 'aideveloper'),

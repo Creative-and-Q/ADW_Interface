@@ -156,7 +156,6 @@ export async function createSubWorkflows(
         payload: JSON.stringify(subWorkflowPayload),
         workflow_depth: currentDepth,
         execution_order: i,
-        branch_name: parentWorkflow.branchName, // Use same branch as parent
         auto_execute_children: false, // Sub-workflows don't auto-create more children by default
       });
 

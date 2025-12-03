@@ -23,8 +23,8 @@ cp .env.example .env
 # Required: Get your API key from https://openrouter.ai/
 OPENROUTER_API_KEY=sk-or-v1-your-actual-api-key
 
-# Required: Set your workspace path
-WORKSPACE_ROOT=/Users/creativebuilds/Projects/ADW/ADW_Interface
+# Required: Set your workspace path (the directory containing AIDeveloper/ and modules/)
+WORKSPACE_ROOT=/path/to/your/project/root
 ```
 
 ### 2. Install Dependencies
