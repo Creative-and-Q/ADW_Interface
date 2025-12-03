@@ -188,6 +188,13 @@ async function autoStartModules() {
     for (const row of autoLoadModules) {
       const moduleName = row.module_name;
       try {
+        // Check if module is a library type (should not be auto-started)
+        const manifest = await readModuleManifest(moduleName);
+        if (manifest?.type === 'library') {
+          logger.info(`Skipping library module: ${moduleName}`);
+          continue;
+        }
+
         logger.info(`Auto-starting module: ${moduleName}`);
         await deploymentManager.startModule(moduleName);
         logger.info(`Auto-started module: ${moduleName}`);

@@ -1,4 +1,4 @@
-import { format, parseISO, formatDistanceToNow, differenceInSeconds } from 'date-fns';
+import { format, parseISO, differenceInSeconds } from 'date-fns';
 import {
   CheckCircle,
   XCircle,
@@ -11,7 +11,7 @@ import {
   FileCode,
   Zap,
 } from 'lucide-react';
-import { getStatusColor, formatDuration } from '../utils/workflowChartUtils';
+import { getStatusColor, formatDuration, safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import clsx from 'clsx';
 
 interface AgentExecutionTimelineProps {
@@ -140,7 +140,7 @@ export default function AgentExecutionTimeline({ agents, className = '' }: Agent
                             <div className="flex items-center space-x-1">
                               <Clock className="h-3.5 w-3.5" />
                               <span>
-                                Started {formatDistanceToNow(parseISO(agent.started_at), { addSuffix: true })}
+                                Started {safeFormatDistanceToNow(agent.started_at, { addSuffix: true })}
                               </span>
                             </div>
                           )}

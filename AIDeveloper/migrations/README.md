@@ -78,6 +78,8 @@ The system checks for these tables:
 - **20251129_add_checkpoint_tracking.sql**: Workflow checkpoint tracking
 - **20251129_add_workflow_messages.sql**: Conversation thread system
 - **20251130_add_conversation_history.sql**: Enhanced conversation history
+- **20251201_add_completed_at_to_workflows.sql**: Workflow completion timestamp
+- **20251202_add_event_type_to_execution_logs.sql**: Event type categorization and additional columns
 
 ## Best Practices
 

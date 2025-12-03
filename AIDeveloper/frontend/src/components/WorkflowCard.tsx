@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
-import { format, formatDistanceToNow, parseISO, differenceInMilliseconds } from 'date-fns';
+import { format, parseISO, differenceInMilliseconds } from 'date-fns';
 import { CheckCircle, XCircle, Clock, Play, ExternalLink, GitBranch, Layers } from 'lucide-react';
-import { getStatusColor, formatDuration } from '../utils/workflowChartUtils';
+import { getStatusColor, formatDuration, safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import clsx from 'clsx';
 
 interface WorkflowCardProps {
@@ -122,7 +122,7 @@ export default function WorkflowCard({ workflow, className = '' }: WorkflowCardP
         <div className="flex items-center space-x-4">
           <div>
             <span className="font-medium">Created:</span>{' '}
-            {formatDistanceToNow(parseISO(workflow.created_at), { addSuffix: true })}
+            {safeFormatDistanceToNow(workflow.created_at, { addSuffix: true })}
           </div>
           {duration && (
             <div>

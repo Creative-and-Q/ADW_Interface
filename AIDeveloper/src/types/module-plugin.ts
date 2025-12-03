@@ -10,6 +10,7 @@ export interface ModuleManifest {
   name: string;
   version: string;
   description: string;
+  type?: string;         // e.g., "library", "service", "agent" - library modules are not auto-started
 
   // Module organization
   category?: string;     // e.g., "AI Agents", "Game Systems", "Controllers"

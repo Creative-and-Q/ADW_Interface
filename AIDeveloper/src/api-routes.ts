@@ -1317,7 +1317,7 @@ router.post('/workflows/:id/messages', async (req: Request, res: Response) => {
       // Cancel the workflow
       await query('UPDATE workflows SET status = ? WHERE id = ?', ['failed', id]);
       await query(
-        `UPDATE agent_executions SET status = 'failed', error_message = ? WHERE workflow_id = ? AND status IN ('pending', 'running')`,
+        `UPDATE agent_executions SET status = 'failed', error = ? WHERE workflow_id = ? AND status IN ('pending', 'running')`,
         ['Cancelled by user', id]
       );
       actionTaken = 'Workflow cancelled';
@@ -1653,7 +1653,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
     // Reset any failed agents for this workflow
     await query(
       `UPDATE agent_executions
-       SET status = 'pending', error_message = NULL, completed_at = NULL
+       SET status = 'pending', error = NULL, completed_at = NULL
        WHERE workflow_id = ? AND status = 'failed'`,
       [id]
     );
@@ -1831,9 +1831,16 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
         }
 
         const targetModule = workflow.target_module;
-        const workflowDir = targetModule
-          ? getModuleDirectory(targetModule)
-          : getWorkflowDirectory(id, workflow.branchName || 'master');
+        const workflowDir = workflow.type === 'new_module'
+          ? getWorkflowDirectory(id, workflow.branchName || `new-module-${targetModule}-${id}`)
+          : targetModule
+            ? getModuleDirectory(targetModule)
+            : getWorkflowDirectory(id, workflow.branchName || 'master');
+
+        // For new_module workflows, ensure the workflow directory exists
+        if (workflow.type === 'new_module') {
+          await fs.mkdir(workflowDir, { recursive: true });
+        }
 
         await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
 

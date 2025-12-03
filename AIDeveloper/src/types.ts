@@ -424,6 +424,7 @@ export interface AppConfig {
     userName: string;
     userEmail: string;
     defaultBranch: string;
+    sshKeyName: string;
   };
   github: {
     token?: string;

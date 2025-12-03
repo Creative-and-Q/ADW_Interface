@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { formatDistanceToNow, parseISO, format } from 'date-fns';
+import { parseISO, format } from 'date-fns';
+import { safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import {
   CheckCircle,
   XCircle,
@@ -374,7 +375,7 @@ function LazyTreeNode({
                 </span>
               ) : (
                 <span>
-                  {formatDistanceToNow(parseISO(child.created_at), { addSuffix: true })}
+                  {safeFormatDistanceToNow(child.created_at, { addSuffix: true })}
                 </span>
               )}
             </div>

@@ -244,7 +244,7 @@ export async function updateAgentExecution(
     }
 
     if (errorMessage) {
-      updateData.error_message = errorMessage;
+      updateData.error = errorMessage;
     }
 
     if (status === AgentStatus.RUNNING) {
@@ -281,7 +281,7 @@ export async function getAgentExecutions(workflowId: number): Promise<AgentExecu
       status: row.status as AgentStatus,
       input: typeof row.input === 'string' ? JSON.parse(row.input) : row.input,
       output: row.output ? (typeof row.output === 'string' ? JSON.parse(row.output) : row.output) : undefined,
-      errorMessage: row.error_message,
+      errorMessage: row.error,
       retryCount: row.retry_count,
       startedAt: row.started_at,
       completedAt: row.completed_at,

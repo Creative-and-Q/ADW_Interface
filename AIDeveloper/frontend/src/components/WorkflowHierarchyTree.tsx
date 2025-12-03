@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { formatDistanceToNow, parseISO, format } from 'date-fns';
+import { parseISO, format } from 'date-fns';
+import { safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import {
   CheckCircle,
   XCircle,
@@ -205,7 +206,7 @@ function WorkflowTreeNode({
               <div className="flex items-center gap-4 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {formatDistanceToNow(parseISO(workflow.createdAt), { addSuffix: true })}
+                  {safeFormatDistanceToNow(workflow.createdAt, { addSuffix: true })}
                 </span>
                 {workflow.completedAt && (
                   <span className="text-green-600">

@@ -39,11 +39,11 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
     return env;
   } catch (error) {
     logger.warn('Could not load SSH environment, using default', error as Error);
-    // Use home directory for SSH keys, not /root
     const sshDir = path.join(homeDir, '.ssh');
+    const sshKeyName = process.env.SSH_KEY_NAME || 'id_ed25519';
     return {
       ...process.env,
-      GIT_SSH_COMMAND: `ssh -i ${path.join(sshDir, 'id_rsa')} -F ${path.join(sshDir, 'config')}`,
+      GIT_SSH_COMMAND: `ssh -i ${path.join(sshDir, sshKeyName)} -F ${path.join(sshDir, 'config')}`,
     };
   }
 }

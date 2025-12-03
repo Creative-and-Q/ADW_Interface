@@ -1,0 +1,3 @@
+[submodule "modules/ADW_ScreenshotTools"]
+	path = modules/ADW_ScreenshotTools
+	url = https://github.com/Creative-and-Q/ADW_ScreenshotTools

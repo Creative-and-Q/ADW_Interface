@@ -28,9 +28,11 @@ if [ ! -d "$SSH_DIR" ]; then
     chmod 700 "$SSH_DIR"
 fi
 
-# Detect SSH key (prefer ed25519, then rsa, then ecdsa)
+# Use SSH_KEY_NAME env var if set, otherwise auto-detect (prefer ed25519)
 SSH_KEY=""
-if [ -f "$SSH_DIR/id_ed25519" ]; then SSH_KEY="$SSH_DIR/id_ed25519"
+if [ -n "$SSH_KEY_NAME" ] && [ -f "$SSH_DIR/$SSH_KEY_NAME" ]; then
+    SSH_KEY="$SSH_DIR/$SSH_KEY_NAME"
+elif [ -f "$SSH_DIR/id_ed25519" ]; then SSH_KEY="$SSH_DIR/id_ed25519"
 elif [ -f "$SSH_DIR/id_rsa" ]; then SSH_KEY="$SSH_DIR/id_rsa"
 elif [ -f "$SSH_DIR/id_ecdsa" ]; then SSH_KEY="$SSH_DIR/id_ecdsa"
 else
@@ -38,6 +40,7 @@ else
     echo "Please generate an SSH key and add it to GitHub:"
     echo "  ssh-keygen -t ed25519 -C 'your_email@example.com'"
     echo "  cat ~/.ssh/id_ed25519.pub  # Add this to GitHub"
+    echo "Or set SSH_KEY_NAME env var to your key name"
     exit 1
 fi
 

@@ -122,6 +122,7 @@ export const config: AppConfig = {
     userName: getOptionalEnv('GIT_USER_NAME', 'AIDeveloper Bot'),
     userEmail: getOptionalEnv('GIT_USER_EMAIL', 'aideveloper@bot.local'),
     defaultBranch: getOptionalEnv('GIT_DEFAULT_BRANCH', 'main'),
+    sshKeyName: getOptionalEnv('SSH_KEY_NAME', 'id_ed25519'),
   },
 
   github: {

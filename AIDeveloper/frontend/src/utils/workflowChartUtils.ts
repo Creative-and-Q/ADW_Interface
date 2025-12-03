@@ -1,4 +1,4 @@
-import { format, parseISO, differenceInMilliseconds } from 'date-fns';
+import { format, parseISO, differenceInMilliseconds, formatDistanceToNow, isFuture } from 'date-fns';
 
 export interface TimeSeriesDataPoint {
   date: string;
@@ -216,4 +216,14 @@ export function calculateWorkflowStats(workflows: any[]) {
  */
 export function getStatusColor(status: string): string {
   return STATUS_COLORS[status] || '#6b7280';
+}
+
+/**
+ * Safe formatDistanceToNow that handles server clock being ahead of client
+ * Returns "just now" for future timestamps instead of "in X minutes"
+ */
+export function safeFormatDistanceToNow(date: Date | string, options?: { addSuffix?: boolean }): string {
+  const parsed = typeof date === 'string' ? parseISO(date) : date;
+  if (isFuture(parsed)) return 'just now';
+  return formatDistanceToNow(parsed, options);
 }

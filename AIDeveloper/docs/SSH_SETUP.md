@@ -4,11 +4,20 @@
 
 This document describes the SSH configuration setup for workflows to perform git operations reliably.
 
+## Configuration
+
+The SSH key can be configured via the `SSH_KEY_NAME` environment variable. Default: `id_ed25519`.
+
+```bash
+# In .env file
+SSH_KEY_NAME=id_ed25519
+```
+
 ## Problem
 
 Workflows were failing during git clone operations because:
 1. The server runs as the `root` user
-2. SSH config was pointing to `/home/kevin/.ssh/id_rsa` instead of `/root/.ssh/id_rsa`
+2. SSH config was pointing to an incorrect key path
 3. SSH agent was not consistently available for workflow processes
 
 ## Solution
@@ -69,9 +78,10 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
 
     return env;
   } catch (error) {
+    const sshKeyName = process.env.SSH_KEY_NAME || 'id_ed25519';
     return {
       ...process.env,
-      GIT_SSH_COMMAND: 'ssh -i /root/.ssh/id_rsa -F /root/.ssh/config',
+      GIT_SSH_COMMAND: `ssh -i /root/.ssh/${sshKeyName} -F /root/.ssh/config`,
     };
   }
 }
@@ -85,7 +95,7 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
 Host github.com
     HostName github.com
     User git
-    IdentityFile /root/.ssh/id_rsa
+    IdentityFile /root/.ssh/id_ed25519
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     UserKnownHostsFile /root/.ssh/known_hosts
@@ -94,7 +104,7 @@ Host github.com
 
 # Default for all hosts
 Host *
-    IdentityFile /root/.ssh/id_rsa
+    IdentityFile /root/.ssh/id_ed25519
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     ServerAliveInterval 60
@@ -105,7 +115,7 @@ Host *
 ```bash
 SSH_AUTH_SOCK=/tmp/ssh-xxx/agent.xxx; export SSH_AUTH_SOCK;
 SSH_AGENT_PID=xxx; export SSH_AGENT_PID;
-GIT_SSH_COMMAND='ssh -i /root/.ssh/id_rsa -F /root/.ssh/config'; export GIT_SSH_COMMAND;
+GIT_SSH_COMMAND='ssh -i /root/.ssh/id_ed25519 -F /root/.ssh/config'; export GIT_SSH_COMMAND;
 ```
 
 ## Testing

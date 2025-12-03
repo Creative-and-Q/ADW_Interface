@@ -1,6 +1,18 @@
 #!/bin/bash
 # Ensure MySQL and Redis services are running
 
+# Timeout function for macOS compatibility (timeout command not available by default)
+run_with_timeout() {
+    local timeout=$1; shift
+    "$@" & local pid=$!
+    ( sleep $timeout; kill -0 $pid 2>/dev/null && kill $pid 2>/dev/null ) &
+    local killer=$!
+    wait $pid 2>/dev/null
+    local status=$?
+    kill -0 $killer 2>/dev/null && kill $killer 2>/dev/null
+    return $status
+}
+
 echo "Checking required services..."
 
 # Check if docker-compose services are running
@@ -11,6 +23,28 @@ if ! command -v docker &> /dev/null; then
     DOCKER_AVAILABLE=false
 else
     DOCKER_AVAILABLE=true
+    echo "Checking Docker daemon health..."
+    if ! run_with_timeout 5 docker info > /dev/null 2>&1; then
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✗ ERROR: Docker daemon is not responding"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Docker is installed but the daemon is not working properly."
+        echo ""
+        echo "Please restart Docker Desktop:"
+        echo "  1. Quit Docker Desktop completely (Cmd+Q or right-click whale icon → Quit)"
+        echo "  2. Wait 10 seconds"
+        echo "  3. Open Docker Desktop again"
+        echo "  4. Wait for Docker to start (whale icon in menu bar should be steady)"
+        echo "  5. Run 'npm start' again"
+        echo ""
+        echo "If that doesn't work, try resetting Docker:"
+        echo "  Docker Desktop → Troubleshoot → Reset to factory defaults"
+        echo ""
+        exit 1
+    fi
+    echo "✓ Docker daemon is healthy"
 fi
 
 # Check MySQL
@@ -18,74 +52,100 @@ MYSQL_PORT=${DB_PORT:-3308}
 MYSQL_CONTAINER="aideveloper_mysql_dev"
 
 # Check if container exists and is running
-if [ "$DOCKER_AVAILABLE" = true ] && docker ps --format '{{.Names}}' | grep -q "^${MYSQL_CONTAINER}$"; then
-    # Container is running, check if it's healthy
-    HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
-    if [ "$HEALTH_STATUS" = "healthy" ]; then
-        echo "✓ MySQL is already running on port $MYSQL_PORT"
-    else
-        echo "⏳ MySQL container is starting, waiting for it to be healthy..."
-        for i in {1..30}; do
-            HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
-            if [ "$HEALTH_STATUS" = "healthy" ]; then
-                echo "✓ MySQL is now ready"
-                break
-            fi
-            if [ $i -eq 30 ]; then
-                echo "✗ MySQL failed to become healthy - please check: docker compose -f docker-compose.dev.yml logs mysql"
-                exit 1
-            fi
-            sleep 2
-        done
+MYSQL_RUNNING=false
+if [ "$DOCKER_AVAILABLE" = true ]; then
+    DOCKER_PS_RESULT=$(run_with_timeout 5 docker ps --format '{{.Names}}' 2>&1)
+    DOCKER_PS_EXIT=$?
+    if [ $DOCKER_PS_EXIT -ne 0 ]; then
+        echo "✗ Docker command failed - daemon may not be running"
+        echo "Please ensure Docker Desktop is running and try again"
+        exit 1
     fi
-else
-    echo "⚠ MySQL container is not running"
-    if [ "$DOCKER_AVAILABLE" = true ]; then
-        echo "Starting MySQL via Docker Compose..."
-        docker compose -f "$COMPOSE_FILE" up -d mysql
-        echo "Waiting for MySQL to initialize and be ready (this may take 30-60 seconds)..."
-        for i in {1..60}; do
-            if docker ps --format '{{.Names}}' | grep -q "^${MYSQL_CONTAINER}$"; then
-                HEALTH_STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
+    if echo "$DOCKER_PS_RESULT" | grep -q "^${MYSQL_CONTAINER}$"; then
+        MYSQL_RUNNING=true
+        HEALTH_STATUS=$(run_with_timeout 3 docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
+        if [ "$HEALTH_STATUS" = "healthy" ]; then
+            echo "✓ MySQL is already running on port $MYSQL_PORT"
+        else
+            echo "⏳ MySQL container is starting, waiting for it to be healthy..."
+            for i in {1..30}; do
+                HEALTH_STATUS=$(run_with_timeout 3 docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
                 if [ "$HEALTH_STATUS" = "healthy" ]; then
                     echo "✓ MySQL is now ready"
                     break
                 fi
-            fi
-            if [ $i -eq 60 ]; then
-                echo "✗ MySQL failed to start - please check: docker compose -f docker-compose.dev.yml logs mysql"
-                docker compose -f "$COMPOSE_FILE" logs mysql | tail -20
-                exit 1
-            fi
-            printf "."
-            sleep 2
-        done
-        echo ""
-    else
-        echo "✗ Please start MySQL manually or install Docker"
-        exit 1
+                if [ $i -eq 30 ]; then
+                    echo "✗ MySQL failed to become healthy - please check: docker compose -f docker-compose.dev.yml logs mysql"
+                    exit 1
+                fi
+                sleep 2
+            done
+        fi
     fi
 fi
 
+if [ "$DOCKER_AVAILABLE" = true ] && [ "$MYSQL_RUNNING" = false ]; then
+    echo "⚠ MySQL container is not running"
+    echo "Starting MySQL via Docker Compose..."
+    if ! run_with_timeout 30 docker compose -f "$COMPOSE_FILE" up -d mysql 2>&1; then
+        echo "✗ Failed to start MySQL container"
+        echo "Docker may not be responding. Please restart Docker Desktop and try again."
+        exit 1
+    fi
+    echo "Waiting for MySQL to initialize and be ready (max 60 seconds)..."
+    for i in {1..30}; do
+        DOCKER_PS_CHECK=$(run_with_timeout 3 docker ps --format '{{.Names}}' 2>&1)
+        if [ $? -ne 0 ]; then
+            echo ""
+            echo "✗ Docker command timed out - daemon may have stopped responding"
+            exit 1
+        fi
+        if echo "$DOCKER_PS_CHECK" | grep -q "^${MYSQL_CONTAINER}$"; then
+            HEALTH_STATUS=$(run_with_timeout 3 docker inspect --format='{{.State.Health.Status}}' "$MYSQL_CONTAINER" 2>/dev/null || echo "none")
+            if [ "$HEALTH_STATUS" = "healthy" ]; then
+                echo ""
+                echo "✓ MySQL is now ready"
+                break
+            fi
+        fi
+        if [ $i -eq 30 ]; then
+            echo ""
+            echo "✗ MySQL failed to start within timeout period"
+            echo "Check logs: docker compose -f docker-compose.dev.yml logs mysql"
+            exit 1
+        fi
+        printf "."
+        sleep 2
+    done
+elif [ "$DOCKER_AVAILABLE" = false ]; then
+    echo "✗ Docker not available - please install Docker Desktop or start MySQL manually"
+    exit 1
+fi
+
 # Check and start Redis
-if redis-cli ping > /dev/null 2>&1; then
+if run_with_timeout 3 redis-cli ping > /dev/null 2>&1; then
     echo "✓ Redis is already running"
 else
     echo "⚠ Redis is not running"
     if [ "$DOCKER_AVAILABLE" = true ]; then
         echo "Starting Redis via Docker Compose..."
-        docker compose -f "$COMPOSE_FILE" up -d redis
-        echo "Waiting for Redis to be ready..."
+        if ! run_with_timeout 30 docker compose -f "$COMPOSE_FILE" up -d redis 2>&1; then
+            echo "✗ Failed to start Redis container"
+            echo "Docker may not be responding. Please restart Docker Desktop and try again."
+            exit 1
+        fi
+        echo "Waiting for Redis to be ready (max 30 seconds)..."
         for i in {1..15}; do
-            if redis-cli ping > /dev/null 2>&1; then
+            if run_with_timeout 2 redis-cli ping > /dev/null 2>&1; then
                 echo "✓ Redis is now running"
                 break
             fi
             if [ $i -eq 15 ]; then
-                echo "✗ Redis failed to start - please check: docker compose -f docker-compose.dev.yml logs redis"
+                echo "✗ Redis failed to start within timeout period"
+                echo "Check logs: docker compose -f docker-compose.dev.yml logs redis"
                 exit 1
             fi
-            sleep 1
+            sleep 2
         done
     else
         echo "✗ Please start Redis manually or install Docker"

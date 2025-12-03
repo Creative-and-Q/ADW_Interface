@@ -142,6 +142,9 @@ if [ ${#MISSING_TABLES[@]} -gt 0 ]; then
         "$MIGRATIONS_DIR/20251129_add_checkpoint_tracking.sql"
         "$MIGRATIONS_DIR/20251129_add_workflow_messages.sql"
         "$MIGRATIONS_DIR/20251130_add_conversation_history.sql"
+        "$MIGRATIONS_DIR/20251201_add_completed_at_to_workflows.sql"
+        "$MIGRATIONS_DIR/20251202_add_event_type_to_execution_logs.sql"
+        "$MIGRATIONS_DIR/20251202_add_missing_workflow_columns.sql"
     )
     
     FAILED_MIGRATIONS=()

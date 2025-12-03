@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FileText, FileCode, File, CheckCircle, Eye } from 'lucide-react';
-import { format, parseISO, formatDistanceToNow } from 'date-fns';
+import { format, parseISO } from 'date-fns';
+import { safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import clsx from 'clsx';
 import ArtifactModal from './ArtifactModal';
 
@@ -95,7 +96,7 @@ export default function ArtifactsList({ artifacts, className = '' }: ArtifactsLi
                     </p>
                   )}
                   <div className="flex items-center justify-between text-xs opacity-75">
-                    <span>Created {formatDistanceToNow(parseISO(artifact.created_at), { addSuffix: true })}</span>
+                    <span>Created {safeFormatDistanceToNow(artifact.created_at, { addSuffix: true })}</span>
                     <time className="font-mono">
                       {format(parseISO(artifact.created_at), 'HH:mm:ss')}
                     </time>

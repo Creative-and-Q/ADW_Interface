@@ -564,7 +564,7 @@ export async function resetFailedSubWorkflows(
       // Reset any failed agents for this workflow
       await query(
         `UPDATE agent_executions
-         SET status = 'pending', error_message = NULL, completed_at = NULL
+         SET status = 'pending', error = NULL, completed_at = NULL
          WHERE workflow_id = ? AND status = 'failed'`,
         [childWorkflowId]
       );

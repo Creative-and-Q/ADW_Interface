@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
-import { formatDistanceToNow, parseISO } from 'date-fns';
 import { CheckCircle, XCircle, Clock, GitBranch, ArrowRight, AlertCircle } from 'lucide-react';
+import { safeFormatDistanceToNow } from '../utils/workflowChartUtils';
 import clsx from 'clsx';
 
 interface SubWorkflow {
@@ -162,11 +162,11 @@ export default function SubWorkflowList({
                     
                     <div className="flex items-center space-x-3 mt-2 text-xs text-gray-600">
                       <span>
-                        Created {formatDistanceToNow(parseISO(subWorkflow.createdAt), { addSuffix: true })}
+                        Created {safeFormatDistanceToNow(subWorkflow.createdAt, { addSuffix: true })}
                       </span>
                       {subWorkflow.completedAt && (
                         <span>
-                          Completed {formatDistanceToNow(parseISO(subWorkflow.completedAt), { addSuffix: true })}
+                          Completed {safeFormatDistanceToNow(subWorkflow.completedAt!, { addSuffix: true })}
                         </span>
                       )}
                     </div>

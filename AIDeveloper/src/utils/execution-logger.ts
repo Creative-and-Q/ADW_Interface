@@ -414,7 +414,7 @@ export async function getExecutionLogs(
     params.push(agentExecutionId);
   }
 
-  sql += ' ORDER BY created_at ASC';
+  sql += ' ORDER BY timestamp ASC';
 
   if (limit) {
     sql += ` LIMIT ${limit}`;

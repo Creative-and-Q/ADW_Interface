@@ -54,9 +54,11 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
 
     return env;
   } catch {
+    const homeDir = process.env.HOME || '/root';
+    const sshKeyPath = path.join(homeDir, '.ssh', config.git.sshKeyName);
     return {
       ...process.env,
-      GIT_SSH_COMMAND: 'ssh -i /root/.ssh/id_rsa -F /root/.ssh/config',
+      GIT_SSH_COMMAND: `ssh -i ${sshKeyPath} -F ${path.join(homeDir, '.ssh', 'config')}`,
     };
   }
 }
@@ -82,6 +84,15 @@ async function createGitHubRepo(
   }
 
   try {
+    const requestBody = {
+      name: repoName,
+      description: description.substring(0, 200),
+      private: isPrivate,
+      auto_init: false,
+    };
+    
+    logger.info('Sending GitHub API request', { repoName, descriptionLength: description.length, isPrivate, requestBody });
+    
     const response = await fetch('https://api.github.com/user/repos', {
       method: 'POST',
       headers: {
@@ -90,17 +101,17 @@ async function createGitHubRepo(
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        name: repoName,
-        description: description.substring(0, 200),
-        private: isPrivate,
-        auto_init: false,  // We'll push our own initial commit
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { message?: string };
+      const errorData = await response.json().catch(() => ({})) as { 
+        message?: string; 
+        errors?: Array<{ resource?: string; code?: string; field?: string; message?: string }>;
+        documentation_url?: string;
+      };
       const errorMessage = errorData.message || response.statusText;
+      const errorDetails = errorData.errors?.map(e => `${e.field || e.resource}: ${e.message || e.code}`).join(', ') || '';
 
       if (response.status === 401) {
         throw new Error(
@@ -112,7 +123,14 @@ async function createGitHubRepo(
         throw new Error(`Repository ${repoName} already exists on GitHub`);
       }
 
-      throw new Error(`GitHub API error (${response.status}): ${errorMessage}`);
+      const fullError = errorDetails ? `${errorMessage} - Details: ${errorDetails}` : errorMessage;
+      logger.info('GitHub API error details', { 
+        httpStatus: response.status, 
+        message: errorMessage, 
+        errorDetails,
+        repoName 
+      });
+      throw new Error(`GitHub API error (${response.status}): ${fullError}`);
     }
 
     const repoData = await response.json() as { ssh_url?: string; full_name: string; html_url: string };
@@ -731,6 +749,7 @@ export async function createNewModule(
 
     // Step 3: Initialize git
     execSync('git init', { cwd: workflowPath, encoding: 'utf-8' });
+    execSync('git checkout -b master', { cwd: workflowPath, encoding: 'utf-8' });
     execSync('git add .', { cwd: workflowPath, encoding: 'utf-8' });
     execSync(`git commit -m "Initial commit: ${moduleConfig.name} module scaffold"`, {
       cwd: workflowPath,
