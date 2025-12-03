@@ -16,6 +16,8 @@ export enum WorkflowType {
 // Workflow statuses
 export enum WorkflowStatus {
   PENDING = 'pending',
+  PENDING_FIX = 'pending_fix',  // Waiting for bugfix sub-workflow to complete
+  RUNNING = 'running',
   PLANNING = 'planning',
   CODING = 'coding',
   SECURITY_LINTING = 'security_linting',
@@ -23,6 +25,7 @@ export enum WorkflowStatus {
   REVIEWING = 'reviewing',
   DOCUMENTING = 'documenting',
   COMPLETED = 'completed',
+  COMPLETED_WITH_WARNINGS = 'completed_with_warnings',  // Non-critical issues (review/doc failures)
   FAILED = 'failed',
   CANCELLED = 'cancelled',  // Workflow was cancelled (e.g., by checkpoint resume)
 }

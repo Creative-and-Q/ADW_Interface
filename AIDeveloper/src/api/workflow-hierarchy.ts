@@ -55,6 +55,217 @@ async function saveWorkflowArtifacts(workflowId: number, artifacts: Array<{ type
   }
 }
 
+/**
+ * Helper function to execute a feature workflow and recursively advance the queue
+ * This avoids code duplication between the main advance-queue endpoint and auto-advance logic
+ *
+ * IMPORTANT: Only advances to next workflow on SUCCESS. On failure, the queue is paused
+ * and a bugfix sub-workflow should be created to fix the issue.
+ */
+async function executeFeatureWorkflow(
+  workflowId: number,
+  parentWorkflowId: number,
+  getOrchestratorPath: () => string,
+  getModuleDir: (moduleName: string) => string
+): Promise<void> {
+  try {
+    const { getWorkflow } = await import('../workflow-state.js');
+    const workflow = await getWorkflow(workflowId);
+
+    if (!workflow) {
+      logger.error('Workflow not found for execution', new Error(`Workflow ${workflowId} not found`));
+      return;
+    }
+
+    if (workflow.type !== 'feature') {
+      logger.warn('executeFeatureWorkflow called with non-feature workflow', { workflowId, type: workflow.type });
+      return;
+    }
+
+    logger.info('Auto-executing feature workflow', { workflowId });
+
+    // Import WorkflowOrchestrator dynamically
+    // @ts-ignore - Dynamic import path resolved at runtime
+    const { WorkflowOrchestrator } = await import(getOrchestratorPath());
+    const { getWorkflowDirectory } = await import('../utils/workflow-directory-manager.js');
+
+    // Get or create workflow directory - use the target module directory for feature workflows
+    const targetModule = workflow.target_module;
+    const workflowDir = targetModule
+      ? getModuleDir(targetModule)
+      : getWorkflowDirectory(workflowId, workflow.branchName || 'master');
+
+    // Update workflow status to planning (workflow is starting)
+    await updateWorkflowStatus(workflowId, WorkflowStatus.PLANNING);
+
+    // Execute WorkflowOrchestrator
+    const orchestrator = new WorkflowOrchestrator();
+    const payload = typeof workflow.payload === 'string' ? JSON.parse(workflow.payload) : workflow.payload;
+
+    const result = await orchestrator.execute({
+      workflowId,
+      workflowType: 'feature',
+      targetModule: workflow.target_module,
+      taskDescription: payload.taskDescription || payload.title || '',
+      workingDir: workflowDir,
+      metadata: payload.metadata || {},
+    });
+
+    // Save artifacts from the workflow result
+    await saveWorkflowArtifacts(workflowId, result.artifacts);
+
+    // Check current workflow status before updating - don't overwrite if orchestrator set special status
+    // Special statuses: pending_fix (bugfix sub-workflow created), completed, failed, completed_with_warnings
+    // Also: running (if sub-workflows were created and we're waiting for them to complete)
+    const currentWorkflow = await getWorkflow(workflowId);
+    const skipStatusUpdate = currentWorkflow && ['pending_fix', 'completed', 'failed', 'completed_with_warnings', 'running'].includes(currentWorkflow.status);
+
+    let finalStatus: string;
+    if (!skipStatusUpdate) {
+      // Update workflow status based on result
+      finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+      await updateWorkflowStatus(workflowId, finalStatus as any);
+    } else {
+      finalStatus = currentWorkflow?.status || 'unknown';
+      logger.info('Skipping status update - workflow already has final status', {
+        workflowId,
+        currentStatus: currentWorkflow?.status
+      });
+    }
+
+    // Update sub-workflow queue status based on workflow's final status
+    const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock, advanceSubWorkflowQueue: advanceNext } = await import('../sub-workflow-queue.js');
+
+    // Determine queue status based on final workflow status
+    // If pending_fix or running (waiting for children), the queue entry should stay in_progress
+    let queueStatus: 'completed' | 'failed' | 'in_progress' = 'failed';
+    if (finalStatus === 'completed' || finalStatus === 'completed_with_warnings') {
+      queueStatus = 'completed';
+    } else if (finalStatus === 'pending_fix' || finalStatus === 'running') {
+      queueStatus = 'in_progress'; // Keep in progress while fix is being attempted or children are running
+    }
+
+    if (queueStatus !== 'in_progress') {
+      await updateSubWorkflowStatus(workflowId, queueStatus, queueStatus === 'failed' ? result.summary : undefined);
+    }
+    await releaseLock(workflowId);
+
+    logger.info('Feature workflow execution completed', { workflowId, status: finalStatus, queueStatus });
+
+    // ONLY advance to next workflow on SUCCESS
+    // On failure or pending_fix, the queue pauses - a bugfix workflow will handle it
+    if (finalStatus === 'completed' || finalStatus === 'completed_with_warnings') {
+      const nextInQueue = await advanceNext(parentWorkflowId);
+      if (nextInQueue) {
+        logger.info('Auto-advancing to next workflow in queue', { parentWorkflowId, nextWorkflowId: nextInQueue });
+        const nextWorkflow = await getWorkflow(nextInQueue);
+        if (nextWorkflow && nextWorkflow.type === 'feature') {
+          // Recursively execute the next workflow
+          await executeFeatureWorkflow(nextInQueue, parentWorkflowId, getOrchestratorPath, getModuleDir);
+        }
+      }
+    } else if (finalStatus === 'running') {
+      // Workflow created sub-workflows and is waiting for them - execute children of THIS workflow
+      logger.info('Workflow has sub-workflows to execute - advancing child queue', { workflowId });
+      const childNext = await advanceNext(workflowId); // Note: advancing workflowId's queue, not parentWorkflowId
+      if (childNext) {
+        logger.info('Auto-executing child sub-workflow', { parentWorkflowId: workflowId, nextWorkflowId: childNext });
+        const childWorkflow = await getWorkflow(childNext);
+        if (childWorkflow && ['feature', 'bugfix', 'refactor', 'documentation', 'review'].includes(childWorkflow.type)) {
+          // Recursively execute the child workflow
+          await executeFeatureWorkflow(childNext, workflowId, getOrchestratorPath, getModuleDir);
+        }
+      } else {
+        // No more children to execute - all children completed
+        // advanceNext already updated the workflow status to COMPLETED
+        // Now update queue entry and advance parent's queue
+        const updatedWorkflow = await getWorkflow(workflowId);
+        if (updatedWorkflow?.status === 'completed') {
+          logger.info('All child sub-workflows completed - updating queue and advancing parent', { workflowId, parentWorkflowId });
+          await updateSubWorkflowStatus(workflowId, 'completed');
+
+          // Now advance the parent's queue
+          const siblingNext = await advanceNext(parentWorkflowId);
+          if (siblingNext) {
+            logger.info('Auto-advancing to next sibling workflow in queue', { parentWorkflowId, nextWorkflowId: siblingNext });
+            const siblingWorkflow = await getWorkflow(siblingNext);
+            if (siblingWorkflow && ['feature', 'bugfix', 'refactor', 'documentation', 'review'].includes(siblingWorkflow.type)) {
+              await executeFeatureWorkflow(siblingNext, parentWorkflowId, getOrchestratorPath, getModuleDir);
+            }
+          }
+        }
+      }
+    } else {
+      logger.info('Workflow did not complete successfully - NOT advancing queue', {
+        workflowId,
+        finalStatus,
+        message: 'Queue paused. Fix the issue or create a bugfix sub-workflow to retry.'
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to execute feature workflow', error as Error, { workflowId });
+    const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
+    const { getWorkflow } = await import('../workflow-state.js');
+
+    // Check if the workflow was set to pending_fix by the orchestrator before the error
+    const currentWorkflow = await getWorkflow(workflowId);
+    if (currentWorkflow?.status === WorkflowStatus.PENDING_FIX) {
+      // A bugfix sub-workflow was created - don't mark as failed
+      logger.info('Workflow has pending_fix status - bugfix sub-workflow is handling the error', { workflowId });
+      await releaseLock(workflowId);
+      return;
+    }
+
+    // Mark as failed and update workflow status
+    await updateSubWorkflowStatus(workflowId, 'failed', (error as Error).message);
+    await updateWorkflowStatus(workflowId, WorkflowStatus.FAILED);
+    await releaseLock(workflowId);
+
+    // DO NOT advance to next workflow on failure
+    // The queue is now paused - manual intervention or a bugfix workflow is needed
+    logger.warn('Workflow failed - queue paused, not advancing to next workflow', {
+      workflowId,
+      parentWorkflowId,
+      error: (error as Error).message,
+      message: 'Create a bugfix sub-workflow or manually fix and retry.'
+    });
+  }
+}
+
+/**
+ * Helper function to execute children of a workflow recursively
+ * Used when a workflow creates sub-workflows and needs to wait for them to complete
+ */
+async function executeChildrenRecursively(
+  workflowId: number,
+  getOrchestratorPath: () => string,
+  getModuleDir: (moduleName: string) => string
+): Promise<void> {
+  const { advanceSubWorkflowQueue, updateSubWorkflowStatus } = await import('../sub-workflow-queue.js');
+  const { getWorkflow } = await import('../workflow-state.js');
+
+  let childNext = await advanceSubWorkflowQueue(workflowId);
+  while (childNext) {
+    logger.info('Executing child sub-workflow', { parentWorkflowId: workflowId, childWorkflowId: childNext });
+    const childWorkflow = await getWorkflow(childNext);
+    if (childWorkflow && ['feature', 'bugfix', 'refactor', 'documentation', 'review'].includes(childWorkflow.type)) {
+      await executeFeatureWorkflow(childNext, workflowId, getOrchestratorPath, getModuleDir);
+    }
+
+    // Check if workflow is now complete (advanceSubWorkflowQueue updates parent status)
+    const updatedParent = await getWorkflow(workflowId);
+    if (updatedParent?.status === 'completed') {
+      // Parent is complete, update its queue entry
+      await updateSubWorkflowStatus(workflowId, 'completed');
+      break;
+    }
+
+    childNext = await advanceSubWorkflowQueue(workflowId);
+  }
+
+  logger.info('Finished executing children of workflow', { workflowId });
+}
+
 const router = Router();
 
 /**
@@ -133,19 +344,64 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
             // Save artifacts from the workflow result
             await saveWorkflowArtifacts(nextWorkflowId, result.artifacts);
 
-            // Update workflow status based on result
-            const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
-            await updateWorkflowStatus(nextWorkflowId, finalStatus);
+            // Check current workflow status before updating - don't overwrite if orchestrator set special status
+            // Also: running (if sub-workflows were created and we're waiting for them to complete)
+            const currentWorkflow = await getWorkflow(nextWorkflowId);
+            const skipStatusUpdate = currentWorkflow && ['pending_fix', 'completed', 'failed', 'completed_with_warnings', 'running'].includes(currentWorkflow.status);
 
-            // Update sub-workflow queue status
-            await updateSubWorkflowStatus(nextWorkflowId, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+            let subWorkflowFinalStatus: string;
+            if (!skipStatusUpdate) {
+              // Update workflow status based on result
+              subWorkflowFinalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+              await updateWorkflowStatus(nextWorkflowId, subWorkflowFinalStatus as any);
+            } else {
+              subWorkflowFinalStatus = currentWorkflow?.status || 'unknown';
+              logger.info('Skipping status update - workflow already has final status', {
+                workflowId: nextWorkflowId,
+                currentStatus: currentWorkflow?.status
+              });
+            }
+
+            // Determine queue status based on final workflow status
+            // If pending_fix or running (waiting for children), keep queue in_progress
+            let queueStatus: 'completed' | 'failed' | 'in_progress' = 'failed';
+            if (subWorkflowFinalStatus === 'completed' || subWorkflowFinalStatus === 'completed_with_warnings') {
+              queueStatus = 'completed';
+            } else if (subWorkflowFinalStatus === 'pending_fix' || subWorkflowFinalStatus === 'running') {
+              queueStatus = 'in_progress';
+            }
+
+            if (queueStatus !== 'in_progress') {
+              await updateSubWorkflowStatus(nextWorkflowId, queueStatus, queueStatus === 'failed' ? result.summary : undefined);
+            }
 
             // Release the tree lock so the next workflow can be started
             await releaseWorkflowTreeLock(nextWorkflowId);
 
-            logger.info('Sub-workflow execution completed', { workflowId: nextWorkflowId, status: finalStatus });
+            logger.info('Sub-workflow execution completed', { workflowId: nextWorkflowId, status: subWorkflowFinalStatus, queueStatus });
 
-            // After completion, continue executing remaining sub-workflows in a loop
+            // ONLY continue if workflow succeeded - on failure or pending_fix, stop the loop
+            if (subWorkflowFinalStatus !== 'completed' && subWorkflowFinalStatus !== 'completed_with_warnings') {
+              // Special handling for 'running' status - workflow has sub-children to execute
+              if (subWorkflowFinalStatus === 'running') {
+                logger.info('Sub-workflow has its own children - executing them recursively', {
+                  workflowId: nextWorkflowId,
+                  status: subWorkflowFinalStatus
+                });
+                // Execute children of this workflow
+                await executeChildrenRecursively(nextWorkflowId, getWorkflowOrchestratorPath, getModuleDirectory);
+                // After children complete, continue with siblings
+              } else {
+                logger.info('Sub-workflow did not complete successfully - stopping queue processing', {
+                  workflowId: nextWorkflowId,
+                  status: subWorkflowFinalStatus,
+                  message: 'Queue paused. Fix the issue or create a bugfix sub-workflow to retry.'
+                });
+                return; // Exit the async function - don't process more workflows
+              }
+            }
+
+            // After successful completion (or after children completed), continue executing remaining sub-workflows in a loop
             let currentNext = await advanceSubWorkflowQueue(parentWorkflowId);
             while (currentNext) {
               logger.info('Auto-advancing to next sub-workflow', { nextWorkflowId: currentNext });
@@ -180,34 +436,101 @@ router.post('/:id/sub-workflows', async (req: Request, res: Response): Promise<v
                 // Save artifacts from the workflow result
                 await saveWorkflowArtifacts(currentNext, nextResult.artifacts);
 
-                const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
-                await updateWorkflowStatus(currentNext, nextFinalStatus);
-                await updateSubWorkflowStatus(currentNext, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
+                // Check current workflow status before updating - don't overwrite if orchestrator set special status
+                // Also: running (if sub-workflows were created and we're waiting for them to complete)
+                const loopWorkflow = await getWorkflow(currentNext);
+                const loopSkipStatusUpdate = loopWorkflow && ['pending_fix', 'completed', 'failed', 'completed_with_warnings', 'running'].includes(loopWorkflow.status);
+
+                let nextFinalStatus: string;
+                if (!loopSkipStatusUpdate) {
+                  nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+                  await updateWorkflowStatus(currentNext, nextFinalStatus as any);
+                } else {
+                  nextFinalStatus = loopWorkflow?.status || 'unknown';
+                  logger.info('Skipping status update in loop - workflow already has final status', {
+                    workflowId: currentNext,
+                    currentStatus: loopWorkflow?.status
+                  });
+                }
+
+                // Determine queue status for this iteration
+                // If pending_fix or running (waiting for children), keep queue in_progress
+                let loopQueueStatus: 'completed' | 'failed' | 'in_progress' = 'failed';
+                if (nextFinalStatus === 'completed' || nextFinalStatus === 'completed_with_warnings') {
+                  loopQueueStatus = 'completed';
+                } else if (nextFinalStatus === 'pending_fix' || nextFinalStatus === 'running') {
+                  loopQueueStatus = 'in_progress';
+                }
+
+                if (loopQueueStatus !== 'in_progress') {
+                  await updateSubWorkflowStatus(currentNext, loopQueueStatus, loopQueueStatus === 'failed' ? nextResult.summary : undefined);
+                }
 
                 // Release the tree lock so the next workflow can be started
                 await releaseWorkflowTreeLock(currentNext);
 
-                logger.info('Sub-workflow in queue completed', { workflowId: currentNext, status: nextFinalStatus });
+                logger.info('Sub-workflow in queue completed', { workflowId: currentNext, status: nextFinalStatus, queueStatus: loopQueueStatus });
 
-                // Advance to next workflow in queue
+                // ONLY continue if workflow succeeded
+                if (nextFinalStatus !== 'completed' && nextFinalStatus !== 'completed_with_warnings') {
+                  // Special handling for 'running' status - workflow has sub-children to execute
+                  if (nextFinalStatus === 'running') {
+                    logger.info('Sub-workflow in loop has its own children - executing them recursively', {
+                      workflowId: currentNext,
+                      status: nextFinalStatus
+                    });
+                    // Execute children of this workflow
+                    await executeChildrenRecursively(currentNext as number, getWorkflowOrchestratorPath, getModuleDirectory);
+                    // After children complete, continue with next sibling
+                  } else {
+                    logger.info('Sub-workflow in loop did not complete successfully - stopping queue processing', {
+                      workflowId: currentNext,
+                      status: nextFinalStatus,
+                      message: 'Queue paused. Fix the issue or create a bugfix sub-workflow to retry.'
+                    });
+                    break; // Exit the loop - don't process more workflows
+                  }
+                }
+
+                // Advance to next workflow in queue only on success (or after children completed)
                 currentNext = await advanceSubWorkflowQueue(parentWorkflowId);
               } catch (loopError) {
                 logger.error('Failed to execute sub-workflow in queue', loopError as Error, { workflowId: currentNext });
-                if (currentNext !== null) {
-                  await updateSubWorkflowStatus(currentNext, 'failed', (loopError as Error).message);
-                  await releaseWorkflowTreeLock(currentNext);
+                // Check if pending_fix was set before the error
+                // currentNext is never null inside the while loop (loop condition ensures it)
+                const errorWorkflow = await getWorkflow(currentNext as number);
+                if (errorWorkflow?.status === WorkflowStatus.PENDING_FIX) {
+                  logger.info('Workflow has pending_fix status in loop - bugfix sub-workflow is handling it', { workflowId: currentNext });
+                  await releaseWorkflowTreeLock(currentNext as number);
+                } else {
+                  await updateSubWorkflowStatus(currentNext as number, 'failed', (loopError as Error).message);
+                  await updateWorkflowStatus(currentNext as number, WorkflowStatus.FAILED);
+                  await releaseWorkflowTreeLock(currentNext as number);
                 }
+                // DO NOT continue on failure
+                logger.warn('Sub-workflow in loop failed - queue paused', { workflowId: currentNext });
                 break;
               }
             }
 
-            logger.info('All sub-workflows completed for parent', { parentWorkflowId });
+            logger.info('Sub-workflow queue processing finished for parent', { parentWorkflowId });
           }
         } catch (error) {
           logger.error('Failed to auto-execute sub-workflow', error as Error, { workflowId: nextWorkflowId });
           const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
-          await updateSubWorkflowStatus(nextWorkflowId, 'failed', (error as Error).message);
-          await releaseLock(nextWorkflowId);
+          const { getWorkflow } = await import('../workflow-state.js');
+
+          // Check if pending_fix was set
+          const errorWorkflow = await getWorkflow(nextWorkflowId);
+          if (errorWorkflow?.status === WorkflowStatus.PENDING_FIX) {
+            logger.info('Workflow has pending_fix status - bugfix sub-workflow is handling it', { workflowId: nextWorkflowId });
+            await releaseLock(nextWorkflowId);
+          } else {
+            await updateSubWorkflowStatus(nextWorkflowId, 'failed', (error as Error).message);
+            await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.FAILED);
+            await releaseLock(nextWorkflowId);
+          }
+          // DO NOT advance on failure - queue is paused
         }
       })().catch((error) => {
         logger.error('Unhandled error in sub-workflow auto-execution', error as Error);
@@ -270,6 +593,76 @@ router.get('/:id/queue-status', async (req: Request, res: Response): Promise<voi
 });
 
 /**
+ * POST /api/workflows/:id/reset-and-retry
+ * Reset a failed or stuck workflow and retry it
+ * This clears previous agent executions and resets workflow status
+ */
+router.post('/:id/reset-and-retry', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const workflowId = parseInt(req.params.id, 10);
+
+    // Get the workflow to validate it exists and check its state
+    const { getWorkflow } = await import('../workflow-state.js');
+    const workflow = await getWorkflow(workflowId);
+
+    if (!workflow) {
+      res.status(404).json({
+        success: false,
+        error: 'Workflow not found',
+      });
+      return;
+    }
+
+    // Only allow reset for failed, stuck (planning/coding/etc), or pending_fix workflows
+    const resettableStatuses = ['failed', 'planning', 'coding', 'testing', 'reviewing', 'documenting', 'pending_fix'];
+    if (!resettableStatuses.includes(workflow.status)) {
+      res.status(400).json({
+        success: false,
+        error: `Cannot reset workflow with status '${workflow.status}'. Only failed or stuck workflows can be reset.`,
+      });
+      return;
+    }
+
+    // Reset workflow and agent_executions in database
+    await query(
+      `UPDATE workflows SET status = 'pending', error_message = NULL, updated_at = NOW() WHERE id = ?`,
+      [workflowId]
+    );
+
+    // Delete old agent executions so they don't trigger duplicate detection
+    await query(
+      `DELETE FROM agent_executions WHERE workflow_id = ?`,
+      [workflowId]
+    );
+
+    // If workflow is part of a sub-workflow queue, reset queue entry too
+    await query(
+      `UPDATE sub_workflow_queue SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL WHERE child_workflow_id = ?`,
+      [workflowId]
+    );
+
+    logger.info('Workflow reset for retry', { workflowId, previousStatus: workflow.status });
+
+    res.json({
+      success: true,
+      message: `Workflow ${workflowId} has been reset and is ready to retry`,
+      data: {
+        workflowId,
+        previousStatus: workflow.status,
+        newStatus: 'pending',
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to reset workflow', error as Error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to reset workflow',
+      message: (error as Error).message,
+    });
+  }
+});
+
+/**
  * POST /api/workflows/:id/advance-queue
  * Manually advance the sub-workflow queue and execute the next workflow
  */
@@ -279,66 +672,12 @@ router.post('/:id/advance-queue', async (req: Request, res: Response): Promise<v
     const nextWorkflowId = await advanceSubWorkflowQueue(parentWorkflowId);
 
     if (nextWorkflowId) {
-      // Automatically execute the workflow if it's a feature workflow
-      (async () => {
-        try {
-          const { getWorkflow } = await import('../workflow-state.js');
-          const workflow = await getWorkflow(nextWorkflowId);
-          
-          if (workflow && workflow.type === 'feature') {
-            logger.info('Auto-executing feature workflow', { workflowId: nextWorkflowId });
-            
-            // Import WorkflowOrchestrator dynamically
-            // @ts-ignore - Dynamic import path resolved at runtime
-            const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-            const { getWorkflowDirectory } = await import('../utils/workflow-directory-manager.js');
+      // Execute the workflow asynchronously using the helper function
+      executeFeatureWorkflow(nextWorkflowId, parentWorkflowId, getWorkflowOrchestratorPath, getModuleDirectory)
+        .catch((error) => {
+          logger.error('Unhandled error in workflow auto-execution', error as Error);
+        });
 
-            // Get or create workflow directory - use the target module directory for feature workflows
-            const targetModule = workflow.target_module;
-            const workflowDir = targetModule
-              ? getModuleDirectory(targetModule)
-              : getWorkflowDirectory(nextWorkflowId, workflow.branchName || 'master');
-            
-            // Update workflow status to planning (workflow is starting)
-            await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
-            
-            // Execute WorkflowOrchestrator
-            const orchestrator = new WorkflowOrchestrator();
-            const payload = typeof workflow.payload === 'string' ? JSON.parse(workflow.payload) : workflow.payload;
-            
-            const result = await orchestrator.execute({
-              workflowId: nextWorkflowId,
-              workflowType: 'feature',
-              targetModule: workflow.target_module,
-              taskDescription: payload.taskDescription || payload.title || '',
-              workingDir: workflowDir,
-              metadata: payload.metadata || {},
-            });
-
-            // Save artifacts from the workflow result
-            await saveWorkflowArtifacts(nextWorkflowId, result.artifacts);
-
-            // Update workflow status based on result
-            const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
-            await updateWorkflowStatus(nextWorkflowId, finalStatus);
-
-            // Update sub-workflow queue status
-            const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
-            await updateSubWorkflowStatus(nextWorkflowId, finalStatus, result.success ? undefined : result.summary);
-            await releaseLock(nextWorkflowId);
-
-            logger.info('Feature workflow execution completed', { workflowId: nextWorkflowId, status: finalStatus });
-          }
-        } catch (error) {
-          logger.error('Failed to auto-execute feature workflow', error as Error, { workflowId: nextWorkflowId });
-          const { updateSubWorkflowStatus, releaseWorkflowTreeLock: releaseLock } = await import('../sub-workflow-queue.js');
-          await updateSubWorkflowStatus(nextWorkflowId, 'failed', (error as Error).message);
-          await releaseLock(nextWorkflowId);
-        }
-      })().catch((error) => {
-        logger.error('Unhandled error in workflow auto-execution', error as Error);
-      });
-      
       res.json({
         success: true,
         data: {

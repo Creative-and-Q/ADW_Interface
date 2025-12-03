@@ -83,8 +83,11 @@ async function getRootMasterWorkflowId(workflowId: number): Promise<number> {
 }
 
 /**
- * Check if any workflow in the master workflow tree is currently running
+ * Check if any workflow in the master workflow tree is currently ACTIVELY running
  * Uses recursive CTE to find all workflows in the tree
+ *
+ * NOTE: 'running' status means "waiting for children to complete" - it is NOT actively executing.
+ * Only the agent execution statuses (planning, coding, etc.) indicate active execution.
  */
 async function hasRunningWorkflowInTree(masterWorkflowId: number): Promise<boolean> {
   const result = await queryOne<{ count: number }>(
@@ -99,7 +102,7 @@ async function hasRunningWorkflowInTree(masterWorkflowId: number): Promise<boole
     )
     SELECT COUNT(*) as count
     FROM workflow_tree
-    WHERE status IN ('running', 'planning', 'coding', 'testing', 'reviewing', 'documenting', 'security_linting')
+    WHERE status IN ('planning', 'coding', 'testing', 'reviewing', 'documenting', 'security_linting')
       AND id != ?`,
     [masterWorkflowId, masterWorkflowId]
   );
