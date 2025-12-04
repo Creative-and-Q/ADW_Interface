@@ -16,7 +16,7 @@ import { initializeDatabase, checkDatabaseHealth, query } from './database.js';
 import { setSocketIo } from './websocket-emitter.js';
 import apiRoutes from './api-routes.js';
 import { deploymentManager } from './utils/deployment-manager.js';
-import { cleanupStuckAgents, getRunningAgentCount } from './workflow-state.js';
+import { cleanupStuckAgents, getRunningAgentCount, resumeInterruptedWorkflows } from './workflow-state.js';
 import { discoverModules, readModuleManifest, getModulesPath } from './utils/module-manager.js';
 import { getAllModuleEnvVarValues, writeEnvFile } from './utils/module-env-manager.js';
 
@@ -210,6 +210,124 @@ async function autoStartModules() {
     logger.info('Auto-load complete');
   } catch (error) {
     logger.error('Failed to auto-start modules', error as Error);
+  }
+}
+
+/**
+ * Clear stale Redis workflow locks from previous server instances
+ * This prevents locks from blocking workflow execution after restart
+ */
+async function clearStaleWorkflowLocks() {
+  try {
+    const { createClient } = await import('redis');
+    const client = createClient({
+      url: `redis://${config.redis.host}:${config.redis.port}`,
+      password: config.redis.password || undefined,
+    });
+    await client.connect();
+
+    const keys = await client.keys('workflow_tree_lock:*');
+
+    if (keys.length > 0) {
+      await client.del(keys);
+      logger.info(`Cleared ${keys.length} stale workflow lock(s) from previous server instance`, {
+        clearedLocks: keys,
+      });
+    }
+
+    await client.disconnect();
+  } catch (error) {
+    logger.error('Failed to clear stale workflow locks', error as Error);
+    // Don't throw - this shouldn't prevent server startup
+  }
+}
+
+/**
+ * Resume workflows that were interrupted by server restart/power outage
+ * This runs after database connection is established
+ */
+async function resumeInterruptedWorkflowsOnStartup() {
+  try {
+    // First, clear any stale Redis locks from previous server instances
+    await clearStaleWorkflowLocks();
+
+    logger.info('Checking for interrupted workflows to resume...');
+
+    const result = await resumeInterruptedWorkflows(30); // 30 minutes threshold
+
+    if (result.recoveredWorkflows > 0) {
+      console.log(`\n${'!'.repeat(60)}`);
+      console.log(`⚠️  RECOVERED ${result.recoveredWorkflows} INTERRUPTED WORKFLOW(S)`);
+      console.log(`${'!'.repeat(60)}`);
+      console.log(`Workflows: ${result.workflowIds.join(', ')}`);
+      console.log(`Agents recovered: ${result.recoveredAgents}`);
+      console.log(`These workflows have been reset to 'pending' status.`);
+      console.log(`Use the advance-queue API to restart execution.`);
+      console.log(`${'!'.repeat(60)}\n`);
+
+      // Auto-advance the queue for parent workflows that have recovered children
+      // This will restart the execution chain
+      await autoAdvanceRecoveredWorkflows(result.workflowIds);
+    } else {
+      logger.info('No interrupted workflows found - clean startup');
+    }
+  } catch (error) {
+    logger.error('Failed to resume interrupted workflows', error as Error);
+    // Don't throw - we still want the server to start
+  }
+}
+
+/**
+ * Auto-advance the sub-workflow queue for recovered workflows
+ * This restarts execution for workflows that were interrupted mid-execution
+ */
+async function autoAdvanceRecoveredWorkflows(workflowIds: number[]) {
+  if (workflowIds.length === 0) return;
+
+  try {
+    // Import the advance function dynamically to avoid circular imports
+    const { advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+    const { getWorkflow } = await import('./workflow-state.js');
+
+    // Find parent workflows that need their queues advanced
+    const parentWorkflowIds = new Set<number>();
+
+    for (const workflowId of workflowIds) {
+      const workflow = await getWorkflow(workflowId);
+      if (!workflow) continue;
+
+      // Check if this workflow has a parent (it's a sub-workflow)
+      const parentResult = await query<any[]>(
+        `SELECT parent_workflow_id FROM sub_workflow_queue WHERE child_workflow_id = ?`,
+        [workflowId]
+      );
+
+      if (parentResult.length > 0 && parentResult[0].parent_workflow_id) {
+        parentWorkflowIds.add(parentResult[0].parent_workflow_id);
+      }
+    }
+
+    // Advance the queue for each parent workflow
+    for (const parentId of parentWorkflowIds) {
+      try {
+        logger.info(`Auto-advancing queue for parent workflow ${parentId} after recovery`);
+        const nextWorkflowId = await advanceSubWorkflowQueue(parentId);
+
+        if (nextWorkflowId) {
+          logger.info(`Advanced to next workflow in queue`, {
+            parentWorkflowId: parentId,
+            nextWorkflowId,
+          });
+        } else {
+          logger.info(`No pending workflows to advance for parent ${parentId}`);
+        }
+      } catch (advanceError) {
+        logger.error(`Failed to advance queue for parent ${parentId}`, advanceError as Error);
+        // Continue with other parents
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to auto-advance recovered workflows', error as Error);
   }
 }
 
@@ -418,6 +536,9 @@ async function initialize() {
 
       // Start periodic cleanup of stuck agents
       startPeriodicCleanup();
+
+      // Resume any workflows that were interrupted by server restart/power outage
+      await resumeInterruptedWorkflowsOnStartup();
 
       // Auto-start modules with auto_load enabled
       await autoStartModules();

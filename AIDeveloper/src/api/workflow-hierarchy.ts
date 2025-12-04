@@ -21,7 +21,7 @@ import path from 'path';
 
 // Helper function to get WorkflowOrchestrator path
 function getWorkflowOrchestratorPath(): string {
-  return `file://${path.join(getModulesPath(), 'WorkflowOrchestrator', 'index.js')}`;
+  return `file://${path.join(getModulesPath(), 'WorkflowOrchestrator', 'dist', 'index.js')}`;
 }
 
 // Helper function to get module directory path

@@ -514,6 +514,71 @@ export async function checkParentWorkflowCompletion(
 }
 
 /**
+ * Check if any sub-workflows have failed (including checking the workflow status itself)
+ * This is used to determine if a parent workflow should be marked as failed
+ * Returns details about the failure if one exists
+ */
+export async function checkForFailedChildren(
+  parentWorkflowId: number
+): Promise<{ hasFailed: boolean; failedWorkflowId?: number; failedQueueEntry?: any }> {
+  // Check if any immediate queue entries are failed
+  const failedEntry = await queryOne<any>(
+    `SELECT * FROM sub_workflow_queue
+     WHERE parent_workflow_id = ? AND status = 'failed'
+     ORDER BY execution_order ASC
+     LIMIT 1`,
+    [parentWorkflowId]
+  );
+
+  if (failedEntry) {
+    return {
+      hasFailed: true,
+      failedWorkflowId: failedEntry.child_workflow_id,
+      failedQueueEntry: failedEntry,
+    };
+  }
+
+  // Also check if any children have 'failed' workflow status even if queue entry isn't marked failed yet
+  const failedWorkflow = await queryOne<any>(
+    `SELECT w.id, swq.* FROM workflows w
+     INNER JOIN sub_workflow_queue swq ON w.id = swq.child_workflow_id
+     WHERE swq.parent_workflow_id = ? AND w.status = 'failed'
+     ORDER BY swq.execution_order ASC
+     LIMIT 1`,
+    [parentWorkflowId]
+  );
+
+  if (failedWorkflow) {
+    return {
+      hasFailed: true,
+      failedWorkflowId: failedWorkflow.id,
+      failedQueueEntry: failedWorkflow,
+    };
+  }
+
+  // Recursively check children with sub-workflows
+  const childrenWithSubWorkflows = await query<any[]>(
+    `SELECT DISTINCT swq.child_workflow_id
+     FROM sub_workflow_queue swq
+     WHERE swq.parent_workflow_id = ?
+     AND EXISTS (
+       SELECT 1 FROM sub_workflow_queue child_swq
+       WHERE child_swq.parent_workflow_id = swq.child_workflow_id
+     )`,
+    [parentWorkflowId]
+  );
+
+  for (const child of childrenWithSubWorkflows) {
+    const childFailure = await checkForFailedChildren(child.child_workflow_id);
+    if (childFailure.hasFailed) {
+      return childFailure;
+    }
+  }
+
+  return { hasFailed: false };
+}
+
+/**
  * Reset all failed/in_progress sub-workflows back to pending state
  * This allows the workflow to be resumed from the earliest failure point
  * Also resets any failed agents for those workflows
@@ -623,12 +688,95 @@ export async function advanceSubWorkflowQueue(
     const nextWorkflow = await getNextExecutableSubWorkflow(parentWorkflowId);
 
     if (!nextWorkflow) {
-      // Check if queue is complete
+      // CRITICAL: Check for failed children BEFORE marking parent as completed
+      // This handles the case where a bugfix sub-workflow failed
+      const failureCheck = await checkForFailedChildren(parentWorkflowId);
+
+      if (failureCheck.hasFailed) {
+        // A child workflow failed - we need to propagate the failure
+        // Check the parent's status to see if it was waiting for a fix
+        const parentWorkflow = await getWorkflow(parentWorkflowId);
+
+        logger.warn('Child workflow failed - propagating failure to parent', {
+          parentWorkflowId,
+          parentStatus: parentWorkflow?.status,
+          failedWorkflowId: failureCheck.failedWorkflowId,
+        });
+
+        // If parent was in pending_fix status (waiting for bugfix), mark it as failed
+        // This prevents subsequent siblings from running
+        if (parentWorkflow?.status === WorkflowStatus.PENDING_FIX ||
+            parentWorkflow?.status === WorkflowStatus.RUNNING) {
+          logger.info('Parent was waiting for fix/children - marking as FAILED due to child failure', {
+            parentWorkflowId,
+            previousStatus: parentWorkflow.status,
+            failedChildId: failureCheck.failedWorkflowId,
+          });
+
+          await updateWorkflowStatus(parentWorkflowId, WorkflowStatus.FAILED);
+          await updateSubWorkflowStatus(parentWorkflowId, 'failed',
+            `Child workflow ${failureCheck.failedWorkflowId} failed`);
+
+          // Check if this workflow has a grandparent that needs to be notified of the failure
+          const grandparentEntry = await queryOne<any>(
+            `SELECT parent_workflow_id FROM sub_workflow_queue WHERE child_workflow_id = ?`,
+            [parentWorkflowId]
+          );
+
+          if (grandparentEntry?.parent_workflow_id) {
+            logger.info('Propagating failure to grandparent queue', {
+              grandparentWorkflowId: grandparentEntry.parent_workflow_id,
+              failedWorkflowId: parentWorkflowId,
+            });
+
+            // Release lock before recursive call
+            await releaseTreeLock(masterWorkflowId);
+
+            // Trigger grandparent to check for failures and potentially fail as well
+            await advanceSubWorkflowQueue(grandparentEntry.parent_workflow_id);
+            return null;
+          }
+        }
+
+        await releaseTreeLock(masterWorkflowId);
+        return null;
+      }
+
+      // Check if queue is complete (no failures, all children done)
       const isComplete = await checkParentWorkflowCompletion(parentWorkflowId);
       if (isComplete) {
-        logger.info(`All sub-workflows completed for parent ${parentWorkflowId}`);
+        logger.info(`All sub-workflows completed successfully for parent ${parentWorkflowId}`);
         // Update parent workflow status
         await updateWorkflowStatus(parentWorkflowId, WorkflowStatus.COMPLETED);
+
+        // CRITICAL: Update this workflow's entry in the grandparent's queue
+        // This ensures the grandparent can advance to the next workflow
+        await updateSubWorkflowStatus(parentWorkflowId, 'completed');
+        logger.info(`Updated parent workflow ${parentWorkflowId} queue entry to completed`);
+
+        // Check if this workflow has a grandparent that needs advancing
+        const grandparentEntry = await queryOne<any>(
+          `SELECT parent_workflow_id FROM sub_workflow_queue WHERE child_workflow_id = ?`,
+          [parentWorkflowId]
+        );
+
+        if (grandparentEntry?.parent_workflow_id) {
+          logger.info(`Triggering grandparent queue advancement`, {
+            grandparentWorkflowId: grandparentEntry.parent_workflow_id,
+            completedWorkflowId: parentWorkflowId,
+          });
+
+          // Release lock before recursive call to avoid deadlock
+          await releaseTreeLock(masterWorkflowId);
+
+          // Recursively advance the grandparent's queue
+          // This will cascade up the tree as needed
+          const nextGrandparentWorkflow = await advanceSubWorkflowQueue(grandparentEntry.parent_workflow_id);
+          if (nextGrandparentWorkflow) {
+            logger.info(`Advanced grandparent queue to workflow ${nextGrandparentWorkflow}`);
+          }
+          return null;
+        }
       }
       await releaseTreeLock(masterWorkflowId);
       return null;

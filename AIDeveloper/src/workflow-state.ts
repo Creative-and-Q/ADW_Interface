@@ -514,6 +514,201 @@ export async function getRunningAgentCount(): Promise<number> {
 }
 
 /**
+ * Resume workflows that were interrupted (e.g., by power outage or server crash)
+ * Called on server startup to recover interrupted workflows.
+ *
+ * This function:
+ * 1. Finds workflows in active states (planning, coding, testing, etc.)
+ * 2. Checks if they have stuck agent executions (no activity for threshold time)
+ * 3. Marks stuck agents as failed with a recovery message
+ * 4. Resets workflows and their queue entries to pending for retry
+ *
+ * @param inactiveThresholdMinutes - Time after which a running agent is considered stuck
+ * @returns Object with counts of recovered workflows and agents
+ */
+export async function resumeInterruptedWorkflows(
+  inactiveThresholdMinutes: number = 30
+): Promise<{
+  recoveredWorkflows: number;
+  recoveredAgents: number;
+  workflowIds: number[];
+}> {
+  try {
+    const cutoffTime = new Date(Date.now() - inactiveThresholdMinutes * 60 * 1000);
+
+    // Find workflows that are in active execution states
+    // These statuses indicate a workflow that was actively being processed
+    const activeStatuses = ['planning', 'coding', 'testing', 'reviewing', 'documenting', 'security_linting'];
+    const statusPlaceholders = activeStatuses.map(() => '?').join(',');
+
+    // Find interrupted workflows that have stuck agents
+    const interruptedWorkflows = await query<any[]>(
+      `SELECT DISTINCT w.id, w.status, w.target_module, w.workflow_type
+       FROM workflows w
+       INNER JOIN agent_executions ae ON ae.workflow_id = w.id
+       WHERE w.status IN (${statusPlaceholders})
+         AND ae.status = 'running'
+         AND ae.started_at < ?`,
+      [...activeStatuses, cutoffTime]
+    );
+
+    if (interruptedWorkflows.length === 0) {
+      logger.info('No interrupted workflows found on startup');
+      return { recoveredWorkflows: 0, recoveredAgents: 0, workflowIds: [] };
+    }
+
+    logger.warn(`Found ${interruptedWorkflows.length} interrupted workflow(s) to recover`, {
+      workflowIds: interruptedWorkflows.map(w => w.id),
+      thresholdMinutes: inactiveThresholdMinutes,
+    });
+
+    const workflowIds: number[] = [];
+    let totalAgentsRecovered = 0;
+
+    for (const workflow of interruptedWorkflows) {
+      try {
+        // Mark all running agents for this workflow as failed
+        const result = await query<any>(
+          `UPDATE agent_executions
+           SET status = 'failed',
+               error_message = 'Server interrupted - workflow will be automatically retried',
+               completed_at = NOW()
+           WHERE workflow_id = ? AND status = 'running'`,
+          [workflow.id]
+        );
+
+        const agentsRecovered = (result as any).affectedRows || 0;
+        totalAgentsRecovered += agentsRecovered;
+
+        // Reset the workflow to pending
+        await update(
+          'workflows',
+          { status: WorkflowStatus.PENDING, updated_at: new Date() },
+          'id = ?',
+          [workflow.id]
+        );
+
+        // Reset sub_workflow_queue entry if this is a child workflow
+        await query(
+          `UPDATE sub_workflow_queue
+           SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL
+           WHERE child_workflow_id = ?`,
+          [workflow.id]
+        );
+
+        workflowIds.push(workflow.id);
+
+        logger.info(`Recovered interrupted workflow ${workflow.id}`, {
+          type: workflow.workflow_type,
+          targetModule: workflow.target_module,
+          previousStatus: workflow.status,
+          agentsRecovered,
+        });
+      } catch (error) {
+        logger.error(`Failed to recover workflow ${workflow.id}`, error as Error);
+        // Continue with other workflows
+      }
+    }
+
+    // Also check for 'running' workflows that might have been waiting for children
+    // These don't have stuck agents but may need their queue to be restarted
+    const runningWorkflows = await query<any[]>(
+      `SELECT w.id, w.target_module, w.workflow_type
+       FROM workflows w
+       WHERE w.status = 'running'
+         AND w.updated_at < ?
+         AND NOT EXISTS (
+           SELECT 1 FROM agent_executions ae
+           WHERE ae.workflow_id = w.id AND ae.status = 'running'
+         )`,
+      [cutoffTime]
+    );
+
+    for (const workflow of runningWorkflows) {
+      // Check if this workflow has pending children that need to be advanced
+      const pendingChildren = await queryOne<{ count: number }>(
+        `SELECT COUNT(*) as count FROM sub_workflow_queue
+         WHERE parent_workflow_id = ? AND status = 'pending'`,
+        [workflow.id]
+      );
+
+      if (pendingChildren && pendingChildren.count > 0) {
+        logger.info(`Workflow ${workflow.id} has ${pendingChildren.count} pending children - queue will be advanced`, {
+          type: workflow.workflow_type,
+          targetModule: workflow.target_module,
+        });
+        workflowIds.push(workflow.id);
+      }
+    }
+
+    // Check for sub_workflow_queue entries stuck in 'in_progress' status
+    // This catches workflows that were being executed when the server crashed
+    const stuckQueueEntries = await query<any[]>(
+      `SELECT sq.parent_workflow_id, sq.child_workflow_id, w.status as workflow_status, w.target_module, w.workflow_type
+       FROM sub_workflow_queue sq
+       JOIN workflows w ON w.id = sq.child_workflow_id
+       WHERE sq.status = 'in_progress'
+         AND sq.started_at < ?`,
+      [cutoffTime]
+    );
+
+    for (const entry of stuckQueueEntries) {
+      // Skip if already in workflowIds
+      if (workflowIds.includes(entry.child_workflow_id)) {
+        continue;
+      }
+
+      logger.info(`Found stuck queue entry for workflow ${entry.child_workflow_id} - resetting for retry`, {
+        parentWorkflowId: entry.parent_workflow_id,
+        workflowStatus: entry.workflow_status,
+        targetModule: entry.target_module,
+      });
+
+      // Delete old agent executions to prevent duplicate detection
+      await query('DELETE FROM agent_executions WHERE workflow_id = ?', [entry.child_workflow_id]);
+
+      // Reset workflow to pending
+      await update(
+        'workflows',
+        { status: WorkflowStatus.PENDING, updated_at: new Date() },
+        'id = ?',
+        [entry.child_workflow_id]
+      );
+
+      // Reset sub_workflow_queue entry
+      await query(
+        `UPDATE sub_workflow_queue
+         SET status = 'pending', started_at = NULL, completed_at = NULL, error_message = NULL
+         WHERE child_workflow_id = ?`,
+        [entry.child_workflow_id]
+      );
+
+      workflowIds.push(entry.child_workflow_id);
+
+      // Also track parent workflow for queue advancement
+      if (!workflowIds.includes(entry.parent_workflow_id)) {
+        workflowIds.push(entry.parent_workflow_id);
+      }
+    }
+
+    logger.info('Workflow recovery complete', {
+      recoveredWorkflows: workflowIds.length,
+      recoveredAgents: totalAgentsRecovered,
+      workflowIds,
+    });
+
+    return {
+      recoveredWorkflows: workflowIds.length,
+      recoveredAgents: totalAgentsRecovered,
+      workflowIds,
+    };
+  } catch (error) {
+    logger.error('Failed to resume interrupted workflows', error as Error);
+    throw error;
+  }
+}
+
+/**
  * Get workflow resume state for checkpoint restoration
  * Returns all completed agent outputs and metadata needed to resume execution
  */
