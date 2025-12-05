@@ -9,6 +9,7 @@ import Modules from './pages/Modules';
 import ModulePrompts from './pages/ModulePrompts';
 import ModuleHistory from './pages/ModuleHistory';
 import ModuleSettings from './pages/ModuleSettings';
+import ModuleCleanup from './pages/ModuleCleanup';
 import Workflows from './pages/Workflows';
 import WorkflowDetail from './pages/WorkflowDetail';
 import BranchSwitcher from './components/BranchSwitcher';
@@ -161,6 +162,7 @@ function App() {
             <Route path="/workflows/:id" element={<WorkflowDetail />} />
             <Route path="/modules" element={<Modules />} />
             <Route path="/modules/settings" element={<ModuleSettings />} />
+            <Route path="/modules/cleanup" element={<ModuleCleanup />} />
             <Route path="/modules/:moduleName/prompts" element={<ModulePrompts />} />
             <Route path="/modules/:moduleName/commits" element={<ModuleHistory />} />
             <Route path="/prompts" element={<Prompts />} />

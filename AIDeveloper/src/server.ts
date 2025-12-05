@@ -19,6 +19,7 @@ import { deploymentManager } from './utils/deployment-manager.js';
 import { cleanupStuckAgents, getRunningAgentCount, resumeInterruptedWorkflows } from './workflow-state.js';
 import { discoverModules, readModuleManifest, getModulesPath } from './utils/module-manager.js';
 import { getAllModuleEnvVarValues, writeEnvFile } from './utils/module-env-manager.js';
+import { startAutoUpdateCheck, stopAutoUpdateCheck } from './utils/module-auto-updater.js';
 
 // ES Module dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -545,6 +546,9 @@ async function initialize() {
 
       // Check for modules missing manifests and trigger ModuleImportAgent
       await checkModuleManifests();
+
+      // Start module auto-update check (every 2 minutes for modules with autoUpdate=true)
+      startAutoUpdateCheck();
     });
 
   } catch (error) {
@@ -563,6 +567,9 @@ async function shutdown() {
   try {
     // Stop periodic cleanup
     stopPeriodicCleanup();
+
+    // Stop module auto-update check
+    stopAutoUpdateCheck();
 
     // Close HTTP server (wait for it to fully close)
     await new Promise<void>((resolve) => {

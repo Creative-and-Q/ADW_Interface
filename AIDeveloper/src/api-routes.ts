@@ -17,6 +17,8 @@ import {
   updateModulePrompt,
   getModuleStats,
   importModule,
+  deleteModule,
+  getModuleRemoteInfo,
   getModulesPath,
 } from './utils/module-manager.js';
 import { deploymentManager } from './utils/deployment-manager.js';
@@ -2182,6 +2184,63 @@ router.post('/modules/import', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/modules/:name/remote
+ * Get remote repository info for a module
+ */
+router.get('/modules/:name/remote', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const remoteInfo = await getModuleRemoteInfo(name);
+
+    if (remoteInfo === null) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+
+    return res.json({ remoteInfo });
+  } catch (error) {
+    logger.error('Failed to get module remote info', error as Error);
+    return res.status(500).json({ error: 'Failed to get module remote info' });
+  }
+});
+
+/**
+ * DELETE /api/modules/:name
+ * Delete a module (local files and optionally remote repository)
+ */
+router.delete('/modules/:name', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { deleteRemoteRepo, githubToken } = req.body;
+
+    const result = await deleteModule({
+      moduleName: name,
+      deleteRemoteRepo: deleteRemoteRepo === true,
+      githubToken,
+    });
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        message: result.message,
+        localDeleted: result.localDeleted,
+        remoteDeleted: result.remoteDeleted,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: result.message,
+      });
+    }
+  } catch (error: any) {
+    logger.error('Failed to delete module', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to delete module',
+    });
+  }
+});
+
+/**
  * GET /api/modules/:name
  * Get detailed information about a specific module
  */
@@ -2460,6 +2519,59 @@ router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Failed to update auto-load setting', error as Error);
     return res.status(500).json({ error: 'Failed to update auto-load setting' });
+  }
+});
+
+/**
+ * GET /api/modules/:name/auto-update
+ * Get auto-update setting for a module
+ */
+router.get('/modules/:name/auto-update', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const result = await query(
+      'SELECT auto_update FROM module_settings WHERE module_name = ?',
+      [name]
+    );
+
+    const autoUpdate = result.length > 0 ? result[0].auto_update : false;
+    return res.json({ moduleName: name, autoUpdate: Boolean(autoUpdate) });
+  } catch (error) {
+    logger.error('Failed to get auto-update setting', error as Error);
+    return res.status(500).json({ error: 'Failed to get auto-update setting' });
+  }
+});
+
+/**
+ * PUT /api/modules/:name/auto-update
+ * Update auto-update setting for a module
+ */
+router.put('/modules/:name/auto-update', async (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+    const { autoUpdate } = req.body;
+
+    if (typeof autoUpdate !== 'boolean') {
+      return res.status(400).json({ error: 'autoUpdate must be a boolean' });
+    }
+
+    // Insert or update the setting
+    await query(
+      `INSERT INTO module_settings (module_name, auto_update)
+       VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE auto_update = ?, updated_at = CURRENT_TIMESTAMP`,
+      [name, autoUpdate, autoUpdate]
+    );
+
+    logger.info('Module auto-update setting updated', { module: name, autoUpdate });
+    return res.json({
+      moduleName: name,
+      autoUpdate,
+      message: `Auto-update ${autoUpdate ? 'enabled' : 'disabled'}`
+    });
+  } catch (error) {
+    logger.error('Failed to update auto-update setting', error as Error);
+    return res.status(500).json({ error: 'Failed to update auto-update setting' });
   }
 });
 

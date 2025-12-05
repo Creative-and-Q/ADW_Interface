@@ -17,6 +17,9 @@ export interface ModuleManifest {
   project?: string;      // e.g., "Ex Nihilo", "AIDeveloper"
   tags?: string[];       // Additional searchable tags
 
+  // Auto-update settings
+  autoUpdate?: boolean;  // If true, check for updates every 2 minutes and pull from master
+
   // Frontend pages this module provides
   pages?: ModulePage[];
 

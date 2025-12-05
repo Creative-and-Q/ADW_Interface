@@ -135,9 +135,30 @@ export const modulesAPI = {
   getAutoLoad: (name: string) => api.get(`/modules/${name}/auto-load`),
   setAutoLoad: (name: string, autoLoad: boolean) =>
     api.put(`/modules/${name}/auto-load`, { autoLoad }),
+  getAutoUpdate: (name: string) => api.get<{ moduleName: string; autoUpdate: boolean }>(`/modules/${name}/auto-update`),
+  setAutoUpdate: (name: string, autoUpdate: boolean) =>
+    api.put<{ moduleName: string; autoUpdate: boolean; message: string }>(`/modules/${name}/auto-update`, { autoUpdate }),
   // New package.json scripts API
   getScripts: (name: string) => api.get<{ success: boolean; moduleName: string; scripts: Record<string, string> }>(`/modules/${name}/scripts`),
   runScript: (name: string, scriptName: string) => api.post<{ success: boolean; operationId: string; message: string }>(`/modules/${name}/run-script`, { scriptName }),
+  // Module deletion API
+  getRemoteInfo: (name: string) => api.get<{
+    remoteInfo: {
+      hasRemote: boolean;
+      remoteUrl?: string;
+      owner?: string;
+      repo?: string;
+      isGitHub?: boolean;
+    };
+  }>(`/modules/${name}/remote`),
+  delete: (name: string, options?: { deleteRemoteRepo?: boolean; githubToken?: string }) =>
+    api.delete<{
+      success: boolean;
+      message: string;
+      localDeleted?: boolean;
+      remoteDeleted?: boolean;
+      error?: string;
+    }>(`/modules/${name}`, { data: options }),
 };
 
 export const deploymentsAPI = {

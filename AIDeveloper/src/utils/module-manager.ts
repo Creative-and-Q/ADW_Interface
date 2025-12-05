@@ -735,3 +735,173 @@ export async function importModule(options: ImportModuleOptions): Promise<{
     };
   }
 }
+
+/**
+ * Delete module options
+ */
+export interface DeleteModuleOptions {
+  moduleName: string;
+  deleteRemoteRepo?: boolean;
+  githubToken?: string;
+}
+
+/**
+ * Get the remote repository URL and info for a module
+ */
+export async function getModuleRemoteInfo(moduleName: string): Promise<{
+  hasRemote: boolean;
+  remoteUrl?: string;
+  owner?: string;
+  repo?: string;
+  isGitHub?: boolean;
+} | null> {
+  try {
+    const modulePath = path.join(getModulesPath(), moduleName);
+
+    // Check if module exists
+    try {
+      await fs.access(modulePath);
+    } catch {
+      return null;
+    }
+
+    // Check if it's a git repo
+    try {
+      await fs.access(path.join(modulePath, '.git'));
+    } catch {
+      return { hasRemote: false };
+    }
+
+    // Get remote URL
+    try {
+      const { stdout } = await execAsync('git remote get-url origin', {
+        cwd: modulePath,
+      });
+      const remoteUrl = stdout.trim();
+
+      // Parse GitHub URL
+      // Supports: git@github.com:user/repo.git, https://github.com/user/repo.git
+      const sshMatch = remoteUrl.match(/git@github\.com:([^/]+)\/([^.]+)(\.git)?$/);
+      const httpsMatch = remoteUrl.match(/https:\/\/github\.com\/([^/]+)\/([^.]+?)(\.git)?$/);
+
+      const match = sshMatch || httpsMatch;
+      if (match) {
+        return {
+          hasRemote: true,
+          remoteUrl,
+          owner: match[1],
+          repo: match[2],
+          isGitHub: true,
+        };
+      }
+
+      return {
+        hasRemote: true,
+        remoteUrl,
+        isGitHub: false,
+      };
+    } catch {
+      return { hasRemote: false };
+    }
+  } catch (error) {
+    logger.error(`Failed to get remote info for ${moduleName}`, error as Error);
+    return null;
+  }
+}
+
+/**
+ * Delete a module (local files and optionally remote repository)
+ */
+export async function deleteModule(options: DeleteModuleOptions): Promise<{
+  success: boolean;
+  message: string;
+  localDeleted?: boolean;
+  remoteDeleted?: boolean;
+}> {
+  const { moduleName, deleteRemoteRepo, githubToken } = options;
+
+  try {
+    const modulePath = path.join(getModulesPath(), moduleName);
+
+    // Check if module exists
+    try {
+      await fs.access(modulePath);
+    } catch {
+      return {
+        success: false,
+        message: `Module '${moduleName}' does not exist`,
+      };
+    }
+
+    let remoteDeleted = false;
+
+    // Delete remote repository if requested
+    if (deleteRemoteRepo && githubToken) {
+      const remoteInfo = await getModuleRemoteInfo(moduleName);
+
+      if (remoteInfo?.isGitHub && remoteInfo.owner && remoteInfo.repo) {
+        try {
+          const axios = (await import('axios')).default;
+
+          logger.info(`Deleting GitHub repository: ${remoteInfo.owner}/${remoteInfo.repo}`);
+
+          await axios.delete(
+            `https://api.github.com/repos/${remoteInfo.owner}/${remoteInfo.repo}`,
+            {
+              headers: {
+                Authorization: `token ${githubToken}`,
+                Accept: 'application/vnd.github.v3+json',
+              },
+            }
+          );
+
+          remoteDeleted = true;
+          logger.info(`Successfully deleted GitHub repository: ${remoteInfo.owner}/${remoteInfo.repo}`);
+        } catch (error: any) {
+          const status = error.response?.status;
+          const message = error.response?.data?.message || error.message;
+
+          if (status === 404) {
+            logger.warn(`GitHub repository not found (may already be deleted): ${remoteInfo.owner}/${remoteInfo.repo}`);
+            remoteDeleted = true; // Consider it deleted if not found
+          } else if (status === 403) {
+            return {
+              success: false,
+              message: `Permission denied: Token lacks delete_repo scope or you don't own this repository`,
+              localDeleted: false,
+              remoteDeleted: false,
+            };
+          } else {
+            return {
+              success: false,
+              message: `Failed to delete remote repository: ${message}`,
+              localDeleted: false,
+              remoteDeleted: false,
+            };
+          }
+        }
+      } else if (remoteInfo?.hasRemote && !remoteInfo.isGitHub) {
+        logger.warn(`Remote repository is not on GitHub, skipping remote deletion: ${remoteInfo.remoteUrl}`);
+      }
+    }
+
+    // Delete local files
+    logger.info(`Deleting local module directory: ${modulePath}`);
+    await fs.rm(modulePath, { recursive: true, force: true });
+
+    return {
+      success: true,
+      message: deleteRemoteRepo && remoteDeleted
+        ? `Successfully deleted module '${moduleName}' and its GitHub repository`
+        : `Successfully deleted module '${moduleName}' locally`,
+      localDeleted: true,
+      remoteDeleted,
+    };
+  } catch (error: any) {
+    logger.error(`Failed to delete module ${moduleName}`, error);
+    return {
+      success: false,
+      message: `Delete failed: ${error.message}`,
+    };
+  }
+}

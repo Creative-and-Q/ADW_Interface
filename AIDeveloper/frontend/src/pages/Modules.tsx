@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { modulesAPI, moduleProcessesAPI, chainsAPI, modulePluginsAPI } from '../services/api';
 import type { ModuleProcessInfo } from '../types/aicontroller';
@@ -26,6 +26,7 @@ import {
   Pencil,
   X,
   Lock,
+  Trash2,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -72,6 +73,7 @@ export default function Modules() {
   const [aiControllerAvailable, setAIControllerAvailable] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState<string | null>(null);
   const [autoLoadSettings, setAutoLoadSettings] = useState<{ [key: string]: boolean }>({});
+  const [autoUpdateSettings, setAutoUpdateSettings] = useState<{ [key: string]: boolean }>({});
   const [groupBy, setGroupBy] = useState<GroupByMode>('project');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [showImportModal, setShowImportModal] = useState(false);
@@ -110,18 +112,25 @@ export default function Modules() {
       const { data } = await modulesAPI.list();
       setModules(data.modules);
 
-      // Load auto-load settings for each module
+      // Load auto-load and auto-update settings for each module
       const autoLoadMap: { [key: string]: boolean } = {};
+      const autoUpdateMap: { [key: string]: boolean } = {};
       for (const module of data.modules) {
         try {
-          const autoLoadRes = await modulesAPI.getAutoLoad(module.name);
+          const [autoLoadRes, autoUpdateRes] = await Promise.all([
+            modulesAPI.getAutoLoad(module.name),
+            modulesAPI.getAutoUpdate(module.name),
+          ]);
           autoLoadMap[module.name] = autoLoadRes.data.autoLoad;
+          autoUpdateMap[module.name] = autoUpdateRes.data.autoUpdate;
         } catch (error) {
           // If error, assume false
           autoLoadMap[module.name] = false;
+          autoUpdateMap[module.name] = false;
         }
       }
       setAutoLoadSettings(autoLoadMap);
+      setAutoUpdateSettings(autoUpdateMap);
 
       // Try to load module processes from AIController
       try {
@@ -493,6 +502,25 @@ export default function Modules() {
     }
   };
 
+  const handleToggleAutoUpdate = async (moduleName: string) => {
+    try {
+      const currentSetting = autoUpdateSettings[moduleName] || false;
+      const newSetting = !currentSetting;
+
+      await modulesAPI.setAutoUpdate(moduleName, newSetting);
+
+      setAutoUpdateSettings((prev) => ({
+        ...prev,
+        [moduleName]: newSetting,
+      }));
+
+      toast.success(`Auto-update ${newSetting ? 'enabled' : 'disabled'} for ${moduleName}`);
+    } catch (error: any) {
+      console.error('Failed to toggle auto-update:', error);
+      toast.error(`Failed to update auto-update: ${error.response?.data?.error || error.message}`);
+    }
+  };
+
   const handleEnvVarChange = (key: string, value: string) => {
     setEnvVarChanges((prev) => ({ ...prev, [key]: value }));
   };
@@ -699,6 +727,13 @@ export default function Modules() {
             <Plus className="h-4 w-4" />
             <span>Import Module</span>
           </button>
+          <Link
+            to="/modules/cleanup"
+            className="btn bg-red-600 hover:bg-red-700 text-white flex items-center space-x-2"
+          >
+            <Trash2 className="h-4 w-4" />
+            <span>Cleanup</span>
+          </Link>
           <div className="bg-primary-100 text-primary-700 px-4 py-2 rounded-full text-sm font-medium">
             {modules.length} Module{modules.length !== 1 ? 's' : ''}
           </div>
@@ -898,6 +933,20 @@ export default function Modules() {
                           title={`Click to ${autoLoadSettings[module.name] ? 'disable' : 'enable'} auto-load`}
                         >
                           {autoLoadSettings[module.name] ? '✓ Auto-load' : 'Auto-load'}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleAutoUpdate(module.name);
+                          }}
+                          className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                            autoUpdateSettings[module.name]
+                              ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                          title={`Click to ${autoUpdateSettings[module.name] ? 'disable' : 'enable'} auto-update (pulls from master every 2 min)`}
+                        >
+                          {autoUpdateSettings[module.name] ? '✓ Auto-update' : 'Auto-update'}
                         </button>
                       </div>
                     </div>
