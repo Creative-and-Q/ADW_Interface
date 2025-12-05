@@ -1178,3 +1178,181 @@ export async function resumeFromCheckpoint(
     throw error;
   }
 }
+
+/**
+ * Clean up stuck workflows that have been in 'running' status for too long
+ * without any active agent executions.
+ *
+ * A workflow is considered stuck if:
+ * 1. It's in 'running' status
+ * 2. It has no running agent executions
+ * 3. It's been in this state for longer than the timeout
+ *
+ * @param timeoutHours - Hours after which a workflow is considered stuck (default: 2)
+ * @returns Number of workflows cleaned up
+ */
+export async function cleanupStuckWorkflows(timeoutHours: number = 2): Promise<number> {
+  try {
+    const cutoffTime = new Date(Date.now() - timeoutHours * 60 * 60 * 1000);
+
+    // Find workflows that are stuck in 'running' status with no active agents
+    const stuckWorkflows = await query<any[]>(
+      `SELECT w.id, w.workflow_type, w.target_module, w.created_at,
+              TIMESTAMPDIFF(HOUR, w.created_at, NOW()) as age_hours
+       FROM workflows w
+       WHERE w.status = 'running'
+       AND w.created_at < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM agent_executions ae
+         WHERE ae.workflow_id = w.id
+         AND ae.status = 'running'
+       )`,
+      [cutoffTime]
+    );
+
+    if (stuckWorkflows.length === 0) {
+      logger.debug('No stuck workflows found');
+      return 0;
+    }
+
+    logger.warn(`Found ${stuckWorkflows.length} stuck workflow(s) running longer than ${timeoutHours} hours`);
+
+    for (const workflow of stuckWorkflows) {
+      // Check if this workflow has pending children that should complete it
+      const pendingChildren = await queryOne<{ count: number }>(
+        `SELECT COUNT(*) as count FROM sub_workflow_queue
+         WHERE parent_workflow_id = ? AND status IN ('pending', 'in_progress')`,
+        [workflow.id]
+      );
+
+      // Check if it has failed children
+      const failedChildren = await queryOne<{ count: number }>(
+        `SELECT COUNT(*) as count FROM sub_workflow_queue
+         WHERE parent_workflow_id = ? AND status = 'failed'`,
+        [workflow.id]
+      );
+
+      let newStatus: WorkflowStatus;
+      let reason: string;
+
+      if (failedChildren && failedChildren.count > 0) {
+        // Has failed children - mark as failed
+        newStatus = WorkflowStatus.FAILED;
+        reason = `Stuck workflow with ${failedChildren.count} failed child workflow(s)`;
+      } else if (pendingChildren && pendingChildren.count > 0) {
+        // Has pending children but stuck - might be a queue issue, mark as failed
+        newStatus = WorkflowStatus.FAILED;
+        reason = `Stuck workflow with ${pendingChildren.count} pending child workflow(s) that never executed`;
+      } else {
+        // Check if all children completed successfully
+        const completedChildren = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) as count FROM sub_workflow_queue
+           WHERE parent_workflow_id = ? AND status = 'completed'`,
+          [workflow.id]
+        );
+
+        if (completedChildren && completedChildren.count > 0) {
+          // All children completed - this workflow should be completed
+          newStatus = WorkflowStatus.COMPLETED;
+          reason = `Workflow stuck in running but all ${completedChildren.count} children completed`;
+        } else {
+          // No children, just stuck - mark as failed
+          newStatus = WorkflowStatus.FAILED;
+          reason = `Workflow stuck in running for ${workflow.age_hours} hours with no progress`;
+        }
+      }
+
+      await updateWorkflowStatus(workflow.id, newStatus);
+
+      // Update sub-workflow queue entry if this is a child workflow
+      await update(
+        'sub_workflow_queue',
+        {
+          status: newStatus === WorkflowStatus.COMPLETED ? 'completed' : 'failed',
+          completed_at: new Date(),
+          error_message: newStatus === WorkflowStatus.FAILED ? reason : null,
+        },
+        'child_workflow_id = ?',
+        [workflow.id]
+      );
+
+      logger.info(`Cleaned up stuck workflow ${workflow.id}`, {
+        workflowType: workflow.workflow_type,
+        targetModule: workflow.target_module,
+        ageHours: workflow.age_hours,
+        newStatus,
+        reason,
+      });
+    }
+
+    return stuckWorkflows.length;
+  } catch (error) {
+    logger.error('Failed to cleanup stuck workflows', error as Error);
+    throw error;
+  }
+}
+
+/**
+ * Clean up orphan pending children of failed parent workflows.
+ *
+ * When a parent workflow fails, its pending children should be marked as skipped
+ * since they will never be executed.
+ *
+ * @returns Number of orphan workflows cleaned up
+ */
+export async function cleanupOrphanWorkflows(): Promise<number> {
+  try {
+    // Find pending child workflows whose parent has failed
+    const orphanWorkflows = await query<any[]>(
+      `SELECT c.id, c.workflow_type, c.target_module, c.parent_workflow_id,
+              p.status as parent_status
+       FROM workflows c
+       JOIN workflows p ON c.parent_workflow_id = p.id
+       WHERE c.status = 'pending'
+       AND p.status = 'failed'`
+    );
+
+    if (orphanWorkflows.length === 0) {
+      logger.debug('No orphan workflows found');
+      return 0;
+    }
+
+    logger.info(`Found ${orphanWorkflows.length} orphan pending workflow(s) with failed parents`);
+
+    for (const workflow of orphanWorkflows) {
+      // Mark the workflow as skipped (not failed, since it was never attempted)
+      await update(
+        'workflows',
+        {
+          status: 'completed_with_warnings',
+          completed_at: new Date(),
+        },
+        'id = ?',
+        [workflow.id]
+      );
+
+      // Update sub-workflow queue entry
+      await update(
+        'sub_workflow_queue',
+        {
+          status: 'skipped',
+          completed_at: new Date(),
+          error_message: 'Skipped due to parent workflow failure',
+        },
+        'child_workflow_id = ?',
+        [workflow.id]
+      );
+
+      logger.info(`Marked orphan workflow ${workflow.id} as skipped`, {
+        workflowType: workflow.workflow_type,
+        targetModule: workflow.target_module,
+        parentWorkflowId: workflow.parent_workflow_id,
+      });
+    }
+
+    return orphanWorkflows.length;
+  } catch (error) {
+    logger.error('Failed to cleanup orphan workflows', error as Error);
+    throw error;
+  }
+}

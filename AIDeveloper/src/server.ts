@@ -16,7 +16,7 @@ import { initializeDatabase, checkDatabaseHealth, query } from './database.js';
 import { setSocketIo } from './websocket-emitter.js';
 import apiRoutes from './api-routes.js';
 import { deploymentManager } from './utils/deployment-manager.js';
-import { cleanupStuckAgents, getRunningAgentCount, resumeInterruptedWorkflows } from './workflow-state.js';
+import { cleanupStuckAgents, getRunningAgentCount, resumeInterruptedWorkflows, cleanupStuckWorkflows, cleanupOrphanWorkflows } from './workflow-state.js';
 import { discoverModules, readModuleManifest, getModulesPath } from './utils/module-manager.js';
 import { getAllModuleEnvVarValues, writeEnvFile } from './utils/module-env-manager.js';
 import { startAutoUpdateCheck, stopAutoUpdateCheck } from './utils/module-auto-updater.js';
@@ -407,45 +407,68 @@ async function checkModuleManifests() {
 }
 
 /**
- * Start periodic cleanup of stuck agent executions
- * Runs every 15 minutes to clean up agents that have been running for over 60 minutes
+ * Start periodic cleanup of stuck agents, workflows, and orphans
+ * Runs every 15 minutes to clean up:
+ * - Agents that have been running for over 60 minutes
+ * - Workflows stuck in 'running' for over 2 hours without progress
+ * - Pending children of failed parent workflows (orphans)
  */
 function startPeriodicCleanup() {
   const cleanupIntervalMs = 15 * 60 * 1000; // 15 minutes
   const agentTimeoutMinutes = 60; // Mark agents as stuck after 60 minutes
+  const workflowTimeoutHours = 2; // Mark workflows as stuck after 2 hours
 
-  logger.info('Starting periodic agent cleanup job', {
+  logger.info('Starting periodic cleanup job', {
     intervalMinutes: 15,
     agentTimeoutMinutes,
+    workflowTimeoutHours,
   });
 
   // Run initial cleanup
-  cleanupStuckAgents(agentTimeoutMinutes).catch(error => {
-    logger.error('Initial agent cleanup failed', error as Error);
+  runAllCleanups(agentTimeoutMinutes, workflowTimeoutHours).catch(error => {
+    logger.error('Initial cleanup failed', error as Error);
   });
 
   // Schedule periodic cleanup
   cleanupInterval = setInterval(async () => {
-    try {
-      const runningCount = await getRunningAgentCount();
-
-      if (runningCount > 0) {
-        logger.debug('Running periodic agent cleanup check', {
-          runningAgents: runningCount,
-        });
-
-        const cleanedUp = await cleanupStuckAgents(agentTimeoutMinutes);
-
-        if (cleanedUp > 0) {
-          logger.warn(`Periodic cleanup: marked ${cleanedUp} stuck agent(s) as failed`);
-        }
-      }
-    } catch (error) {
-      logger.error('Periodic agent cleanup failed', error as Error);
-    }
+    await runAllCleanups(agentTimeoutMinutes, workflowTimeoutHours);
   }, cleanupIntervalMs);
 
-  logger.info('Periodic agent cleanup job started');
+  logger.info('Periodic cleanup job started');
+}
+
+/**
+ * Run all cleanup tasks
+ */
+async function runAllCleanups(agentTimeoutMinutes: number, workflowTimeoutHours: number) {
+  try {
+    // 1. Clean up stuck agents
+    const runningCount = await getRunningAgentCount();
+    if (runningCount > 0) {
+      logger.debug('Running periodic agent cleanup check', {
+        runningAgents: runningCount,
+      });
+
+      const cleanedAgents = await cleanupStuckAgents(agentTimeoutMinutes);
+      if (cleanedAgents > 0) {
+        logger.warn(`Periodic cleanup: marked ${cleanedAgents} stuck agent(s) as failed`);
+      }
+    }
+
+    // 2. Clean up stuck workflows (running for too long without progress)
+    const cleanedWorkflows = await cleanupStuckWorkflows(workflowTimeoutHours);
+    if (cleanedWorkflows > 0) {
+      logger.warn(`Periodic cleanup: cleaned up ${cleanedWorkflows} stuck workflow(s)`);
+    }
+
+    // 3. Clean up orphan workflows (pending children of failed parents)
+    const cleanedOrphans = await cleanupOrphanWorkflows();
+    if (cleanedOrphans > 0) {
+      logger.warn(`Periodic cleanup: marked ${cleanedOrphans} orphan workflow(s) as skipped`);
+    }
+  } catch (error) {
+    logger.error('Periodic cleanup failed', error as Error);
+  }
 }
 
 /**

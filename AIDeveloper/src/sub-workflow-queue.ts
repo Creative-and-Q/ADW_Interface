@@ -465,10 +465,11 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
 }
 
 /**
- * Check if parent workflow has completed all sub-workflows (including grandchildren)
+ * Check if parent workflow has SUCCESSFULLY completed all sub-workflows (including grandchildren)
  * A workflow is only complete when:
  * 1. All immediate children are in terminal state (completed, failed, or skipped)
- * 2. All children that are "completed" have no pending/in-progress grandchildren
+ * 2. NO children have failed (failed children mean parent should also fail)
+ * 3. All children that are "completed" have no pending/in-progress grandchildren
  */
 export async function checkParentWorkflowCompletion(
   parentWorkflowId: number
@@ -480,7 +481,14 @@ export async function checkParentWorkflowCompletion(
     return false;
   }
 
-  // Second check: verify that "completed" children don't have incomplete grandchildren
+  // Second check: if any children failed, parent is NOT successfully complete
+  // This is critical - a parent with failed children should be marked as failed, not completed
+  if (status.failed > 0) {
+    logger.debug(`Parent ${parentWorkflowId} not complete: has ${status.failed} failed children`);
+    return false;
+  }
+
+  // Third check: verify that "completed" children don't have incomplete grandchildren
   // Get all completed child workflow IDs
   const completedChildren = await query<any[]>(
     `SELECT child_workflow_id FROM sub_workflow_queue
