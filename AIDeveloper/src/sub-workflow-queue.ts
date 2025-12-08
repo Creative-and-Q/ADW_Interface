@@ -782,6 +782,8 @@ export async function advanceSubWorkflowQueue(
           const nextGrandparentWorkflow = await advanceSubWorkflowQueue(grandparentEntry.parent_workflow_id);
           if (nextGrandparentWorkflow) {
             logger.info(`Advanced grandparent queue to workflow ${nextGrandparentWorkflow}`);
+            // Return the grandparent's next workflow so the caller can execute it
+            return nextGrandparentWorkflow;
           }
           return null;
         }
