@@ -3,53 +3,79 @@
  * Centralized module for emitting real-time updates via Socket.io
  */
 
-import * as logger from './utils/logger.js';
+import { Server as SocketIOServer } from "socket.io";
+import * as logger from "./utils/logger.js";
+import { WorkflowStatus, AgentType, AgentStatus, ArtifactType } from "./types.js";
 
-let ioInstance: any = null;
+// Event data interfaces
+export interface WorkflowUpdateData {
+  status?: WorkflowStatus;
+  currentAgent?: AgentType;
+  progress?: number;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface AgentUpdateData {
+  type?: AgentType;
+  status?: AgentStatus;
+  progress?: number;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface ArtifactData {
+  type?: ArtifactType;
+  filePath?: string;
+  content?: string;
+  [key: string]: unknown;
+}
+
+let ioInstance: SocketIOServer | null = null;
 
 /**
  * Set the Socket.io instance
  */
-export function setSocketIo(io: any) {
+export function setSocketIo(io: SocketIOServer) {
   ioInstance = io;
-  logger.info('Socket.io instance set for WebSocket emitter');
+  logger.info("Socket.io instance set for WebSocket emitter");
 }
 
 /**
  * Emit workflow updated event
  */
-export function emitWorkflowUpdated(workflowId: number, data: any) {
+export function emitWorkflowUpdated(workflowId: number, data: WorkflowUpdateData) {
   if (!ioInstance) return;
 
-  ioInstance.to(`workflow-${workflowId}`).emit('workflow:updated', {
+  ioInstance.to(`workflow-${workflowId}`).emit("workflow:updated", {
     workflowId,
     ...data,
     timestamp: new Date().toISOString(),
   });
 
   // Also emit to general workflow channel
-  ioInstance.emit('workflows:updated', {
+  ioInstance.emit("workflows:updated", {
     workflowId,
     ...data,
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted workflow:updated event', { workflowId });
+  logger.debug("Emitted workflow:updated event", { workflowId });
 }
 
 /**
  * Emit agent status update event
  */
-export function emitAgentUpdated(workflowId: number, agentData: any) {
+export function emitAgentUpdated(workflowId: number, agentData: AgentUpdateData) {
   if (!ioInstance) return;
 
-  ioInstance.to(`workflow-${workflowId}`).emit('agent:updated', {
+  ioInstance.to(`workflow-${workflowId}`).emit("agent:updated", {
     workflowId,
     ...agentData,
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted agent:updated event', {
+  logger.debug("Emitted agent:updated event", {
     workflowId,
     agentType: agentData.type,
   });
@@ -58,16 +84,16 @@ export function emitAgentUpdated(workflowId: number, agentData: any) {
 /**
  * Emit artifact created event
  */
-export function emitArtifactCreated(workflowId: number, artifactData: any) {
+export function emitArtifactCreated(workflowId: number, artifactData: ArtifactData) {
   if (!ioInstance) return;
 
-  ioInstance.to(`workflow-${workflowId}`).emit('artifact:created', {
+  ioInstance.to(`workflow-${workflowId}`).emit("artifact:created", {
     workflowId,
     ...artifactData,
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted artifact:created event', {
+  logger.debug("Emitted artifact:created event", {
     workflowId,
     artifactType: artifactData.type,
   });
@@ -79,18 +105,18 @@ export function emitArtifactCreated(workflowId: number, artifactData: any) {
 export function emitWorkflowCompleted(workflowId: number) {
   if (!ioInstance) return;
 
-  ioInstance.to(`workflow-${workflowId}`).emit('workflow:completed', {
+  ioInstance.to(`workflow-${workflowId}`).emit("workflow:completed", {
     workflowId,
     timestamp: new Date().toISOString(),
   });
 
-  ioInstance.emit('workflows:updated', {
+  ioInstance.emit("workflows:updated", {
     workflowId,
-    status: 'completed',
+    status: "completed",
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted workflow:completed event', { workflowId });
+  logger.debug("Emitted workflow:completed event", { workflowId });
 }
 
 /**
@@ -99,20 +125,20 @@ export function emitWorkflowCompleted(workflowId: number) {
 export function emitWorkflowFailed(workflowId: number, error: string) {
   if (!ioInstance) return;
 
-  ioInstance.to(`workflow-${workflowId}`).emit('workflow:failed', {
+  ioInstance.to(`workflow-${workflowId}`).emit("workflow:failed", {
     workflowId,
     error,
     timestamp: new Date().toISOString(),
   });
 
-  ioInstance.emit('workflows:updated', {
+  ioInstance.emit("workflows:updated", {
     workflowId,
-    status: 'failed',
+    status: "failed",
     error,
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted workflow:failed event', { workflowId });
+  logger.debug("Emitted workflow:failed event", { workflowId });
 }
 
 /**
@@ -121,17 +147,17 @@ export function emitWorkflowFailed(workflowId: number, error: string) {
 export function emitStatsUpdated() {
   if (!ioInstance) return;
 
-  ioInstance.emit('stats:updated', {
+  ioInstance.emit("stats:updated", {
     timestamp: new Date().toISOString(),
   });
 
-  logger.debug('Emitted stats:updated event');
+  logger.debug("Emitted stats:updated event");
 }
 
 /**
  * Emit event to all connected clients
  */
-export function emitToClients(event: string, data: any) {
+export function emitToClients(event: string, data: Record<string, unknown>) {
   if (!ioInstance) return;
 
   ioInstance.emit(event, {

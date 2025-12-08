@@ -3,8 +3,15 @@
  * Provides MySQL connection pool and query utilities
  */
 
-import mysql from 'mysql2/promise';
-import { config } from './config.js';
+import mysql from "mysql2/promise";
+import { config } from "./config.js";
+
+// Type for SQL query parameters - matches mysql2's expected parameter types
+type SqlParameterValue = string | number | boolean | null | Buffer | Date | undefined;
+type SqlParameter = SqlParameterValue | SqlParameterValue[];
+
+// Type for database record values
+type DbRecordValue = string | number | boolean | null | Buffer | Date;
 
 // Connection pool
 let pool: mysql.Pool | null = null;
@@ -55,7 +62,7 @@ export async function checkDatabaseHealth(): Promise<boolean> {
     connection.release();
     return true;
   } catch (error) {
-    console.error('Database health check failed:', error);
+    console.error("Database health check failed:", error);
     return false;
   }
 }
@@ -63,18 +70,15 @@ export async function checkDatabaseHealth(): Promise<boolean> {
 /**
  * Execute a query with automatic error handling
  */
-export async function query<T = any>(
-  sql: string,
-  params?: any[]
-): Promise<T> {
+export async function query<T = unknown>(sql: string, params?: SqlParameter[]): Promise<T> {
   const db = getDatabase();
   try {
     const [rows] = await db.execute(sql, params);
     return rows as T;
   } catch (error) {
-    console.error('Database query error:', error);
-    console.error('SQL:', sql);
-    console.error('Params:', params);
+    console.error("Database query error:", error);
+    console.error("SQL:", sql);
+    console.error("Params:", params);
     throw error;
   }
 }
@@ -82,10 +86,7 @@ export async function query<T = any>(
 /**
  * Execute a query and return the first result
  */
-export async function queryOne<T = any>(
-  sql: string,
-  params?: any[]
-): Promise<T | null> {
+export async function queryOne<T = unknown>(sql: string, params?: SqlParameter[]): Promise<T | null> {
   const results = await query<T[]>(sql, params);
   return results.length > 0 ? results[0] : null;
 }
@@ -103,9 +104,7 @@ export async function beginTransaction(): Promise<mysql.PoolConnection> {
 /**
  * Commit a transaction
  */
-export async function commitTransaction(
-  connection: mysql.PoolConnection
-): Promise<void> {
+export async function commitTransaction(connection: mysql.PoolConnection): Promise<void> {
   try {
     await connection.commit();
   } finally {
@@ -116,9 +115,7 @@ export async function commitTransaction(
 /**
  * Rollback a transaction
  */
-export async function rollbackTransaction(
-  connection: mysql.PoolConnection
-): Promise<void> {
+export async function rollbackTransaction(connection: mysql.PoolConnection): Promise<void> {
   try {
     await connection.rollback();
   } finally {
@@ -146,15 +143,12 @@ export async function executeInTransaction<T>(
 /**
  * Insert a record and return the insert ID
  */
-export async function insert(
-  table: string,
-  data: Record<string, any>
-): Promise<number> {
+export async function insert(table: string, data: Record<string, DbRecordValue>): Promise<number> {
   const fields = Object.keys(data);
   const values = Object.values(data);
-  const placeholders = fields.map(() => '?').join(', ');
+  const placeholders = fields.map(() => "?").join(", ");
 
-  const sql = `INSERT INTO ${table} (${fields.join(', ')}) VALUES (${placeholders})`;
+  const sql = `INSERT INTO ${table} (${fields.join(", ")}) VALUES (${placeholders})`;
   const db = getDatabase();
   const [result] = await db.execute(sql, values);
 
@@ -166,13 +160,13 @@ export async function insert(
  */
 export async function update(
   table: string,
-  data: Record<string, any>,
+  data: Record<string, DbRecordValue>,
   where: string,
-  whereParams: any[]
+  whereParams: SqlParameter[]
 ): Promise<number> {
   const fields = Object.keys(data);
   const values = Object.values(data);
-  const setClause = fields.map(field => `${field} = ?`).join(', ');
+  const setClause = fields.map((field) => `${field} = ?`).join(", ");
 
   const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`;
   const db = getDatabase();
@@ -187,7 +181,7 @@ export async function update(
 export async function deleteFrom(
   table: string,
   where: string,
-  whereParams: any[]
+  whereParams: SqlParameter[]
 ): Promise<number> {
   const sql = `DELETE FROM ${table} WHERE ${where}`;
   const db = getDatabase();
@@ -203,7 +197,7 @@ export async function closeDatabase(): Promise<void> {
   if (pool) {
     await pool.end();
     pool = null;
-    console.log('Database pool closed');
+    console.log("Database pool closed");
   }
 }
 

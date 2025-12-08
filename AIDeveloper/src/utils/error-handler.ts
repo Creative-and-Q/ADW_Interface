@@ -3,7 +3,7 @@
  * Implements DRY principles for consistent error logging and handling
  */
 
-import * as logger from './logger.js';
+import * as logger from "./logger.js";
 
 export interface ErrorContext {
   operation: string;
@@ -52,19 +52,19 @@ export function handleError(error: Error | AppError, context?: ErrorContext): vo
   }
 
   // Log to console for development
-  if (process.env.NODE_ENV === 'development') {
-    console.error('='.repeat(80));
-    console.error('ERROR OCCURRED:');
-    console.error('-'.repeat(80));
-    console.error('Message:', error.message);
+  if (process.env.NODE_ENV === "development") {
+    console.error("=".repeat(80));
+    console.error("ERROR OCCURRED:");
+    console.error("-".repeat(80));
+    console.error("Message:", error.message);
     if (context) {
-      console.error('Operation:', context.operation);
-      if (context.module) console.error('Module:', context.module);
-      if (context.metadata) console.error('Metadata:', context.metadata);
+      console.error("Operation:", context.operation);
+      if (context.module) console.error("Module:", context.module);
+      if (context.metadata) console.error("Metadata:", context.metadata);
     }
-    console.error('-'.repeat(80));
-    console.error('Stack:', error.stack);
-    console.error('='.repeat(80));
+    console.error("-".repeat(80));
+    console.error("Stack:", error.stack);
+    console.error("=".repeat(80));
   }
 
   // Log using winston logger
@@ -75,9 +75,9 @@ export function handleError(error: Error | AppError, context?: ErrorContext): vo
  * Wrap async functions with error handling
  */
 export function asyncHandler(
-  fn: Function,
+  fn: (...args: unknown[]) => Promise<unknown>,
   context?: ErrorContext
-): (req: any, res: any, next: any) => Promise<void> {
+): (req: unknown, res: unknown, next: unknown) => Promise<void> {
   return async (req: any, res: any, next: any) => {
     try {
       await fn(req, res, next);
@@ -111,15 +111,10 @@ export function validateRequired(params: Record<string, any>, required: string[]
   const missing = required.filter((key) => params[key] === undefined || params[key] === null);
 
   if (missing.length > 0) {
-    throw new AppError(
-      `Missing required parameters: ${missing.join(', ')}`,
-      400,
-      true,
-      {
-        operation: 'validation',
-        metadata: { missing, provided: Object.keys(params) },
-      }
-    );
+    throw new AppError(`Missing required parameters: ${missing.join(", ")}`, 400, true, {
+      operation: "validation",
+      metadata: { missing, provided: Object.keys(params) },
+    });
   }
 }
 
@@ -141,9 +136,7 @@ export function createErrorResponse(error: Error | AppError): {
 
   // Don't expose internal errors in production
   const message =
-    process.env.NODE_ENV === 'production'
-      ? 'An internal error occurred'
-      : error.message;
+    process.env.NODE_ENV === "production" ? "An internal error occurred" : error.message;
 
   return {
     error: message,
@@ -157,8 +150,8 @@ export function createErrorResponse(error: Error | AppError): {
 export function logOperation(context: ErrorContext): void {
   logger.info(`Starting operation: ${context.operation}`, context);
 
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`▶ ${context.operation}`, context.metadata || '');
+  if (process.env.NODE_ENV === "development") {
+    console.log(`▶ ${context.operation}`, context.metadata || "");
   }
 }
 
@@ -174,7 +167,7 @@ export function logSuccess(context: ErrorContext, result?: any): void {
 
   logger.info(`Operation successful: ${context.operation}`, logData);
 
-  if (process.env.NODE_ENV === 'development') {
+  if (process.env.NODE_ENV === "development") {
     console.log(`✓ ${context.operation} completed`);
   }
 }

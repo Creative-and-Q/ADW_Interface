@@ -3,11 +3,11 @@
  * REST API endpoints for the web dashboard
  */
 
-import { Router, Request, Response } from 'express';
-import { query } from './database.js';
-import { WorkflowStatus, AgentStatus } from './types.js';
-import * as logger from './utils/logger.js';
-import { getExecutionLogs } from './utils/execution-logger.js';
+import { Router, Request, Response } from "express";
+import { query } from "./database.js";
+import { WorkflowStatus, AgentStatus } from "./types.js";
+import * as logger from "./utils/logger.js";
+import { getExecutionLogs } from "./utils/execution-logger.js";
 import {
   discoverModules,
   getModuleInfo,
@@ -20,18 +20,47 @@ import {
   deleteModule,
   getModuleRemoteInfo,
   getModulesPath,
-} from './utils/module-manager.js';
-import { deploymentManager } from './utils/deployment-manager.js';
-import modulePluginsRouter from './api/module-plugins.js';
-import workflowHierarchyRouter from './api/workflow-hierarchy.js';
-import fs from 'fs/promises';
-import path from 'path';
+} from "./utils/module-manager.js";
+import { deploymentManager } from "./utils/deployment-manager.js";
+import modulePluginsRouter from "./api/module-plugins.js";
+import workflowHierarchyRouter from "./api/workflow-hierarchy.js";
+import fs from "fs/promises";
+import path from "path";
 
 const router = Router();
 
+// Database row interfaces for type safety
+interface WorkflowRow {
+  id: number;
+  webhook_id?: string;
+  workflow_type: string;
+  target_module?: string;
+  task_description?: string;
+  status: string;
+  payload?: string;
+  branch_name?: string;
+  created_at: Date;
+  updated_at?: Date;
+  completed_at?: Date;
+  parent_workflow_id?: number;
+  workflow_depth?: number;
+  execution_order?: number;
+  plan_json?: string;
+  auto_execute_children?: boolean;
+  sub_workflow_count?: number;
+}
+
+interface CountRow {
+  total: number;
+}
+
+interface PayloadRow {
+  payload?: string | Record<string, unknown>;
+}
+
 // Helper function to get WorkflowOrchestrator path
 function getWorkflowOrchestratorPath(): string {
-  return `file://${path.join(getModulesPath(), 'WorkflowOrchestrator', 'dist', 'index.js')}`;
+  return `file://${path.join(getModulesPath(), "WorkflowOrchestrator", "dist", "index.js")}`;
 }
 
 // Helper function to get module directory path
@@ -43,13 +72,13 @@ function getModuleDirectory(moduleName: string): string {
 // Module Plugin Routes (MUST BE BEFORE PROXY ROUTES)
 // ============================================================================
 
-router.use('/modules', modulePluginsRouter);
+router.use("/modules", modulePluginsRouter);
 
 // ============================================================================
 // Workflow Hierarchy Routes
 // ============================================================================
 
-router.use('/workflows', workflowHierarchyRouter);
+router.use("/workflows", workflowHierarchyRouter);
 
 // ============================================================================
 // AIController Proxy Routes (MUST BE FIRST)
@@ -60,23 +89,23 @@ router.use('/workflows', workflowHierarchyRouter);
  * This avoids CORS issues and allows remote access
  * IMPORTANT: This route must be registered before other routes to avoid conflicts
  */
-router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void> => {
+router.all("/aicontroller/*", async (req: Request, res: Response): Promise<void> => {
   try {
-    const axios = (await import('axios')).default;
+    const axios = (await import("axios")).default;
     // The route is /aicontroller/*, so req.path will be /aicontroller/something
     // We want to forward to http://localhost:3035/something
-    const aiControllerPath = req.path.replace('/aicontroller', '');
+    const aiControllerPath = req.path.replace("/aicontroller", "");
     const aiControllerURL = `http://localhost:3035${aiControllerPath}`;
 
     logger.info(`Proxying ${req.method} request to AIController: ${aiControllerURL}`);
 
     const response = await axios({
-      method: req.method as any,
+      method: req.method as "get" | "post" | "put" | "patch" | "delete" | "head" | "options",
       url: aiControllerURL,
       data: req.body,
       params: req.query,
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       timeout: 10000,
       validateStatus: () => true, // Don't throw on any status
@@ -85,23 +114,25 @@ router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void>
     // Forward the response
     res.status(response.status).json(response.data);
     return;
-  } catch (error: any) {
-    logger.error('AIController proxy error', error);
+  } catch (error: unknown) {
+    const axiosError = error as { code?: string; message?: string };
+    logger.error("AIController proxy error", error as Error);
 
     // Check if it's a connection error (AIController not running)
-    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+    if (axiosError.code === "ECONNREFUSED" || axiosError.code === "ETIMEDOUT") {
       res.status(503).json({
         success: false,
-        error: 'AIController is not running',
-        message: 'The AIController service is not available. Please start it from the Modules page.',
+        error: "AIController is not running",
+        message:
+          "The AIController service is not available. Please start it from the Modules page.",
       });
       return;
     }
 
     res.status(500).json({
       success: false,
-      error: 'Proxy error',
-      message: error.message,
+      error: "Proxy error",
+      message: axiosError.message || "Unknown error",
     });
     return;
   }
@@ -117,74 +148,76 @@ router.all('/aicontroller/*', async (req: Request, res: Response): Promise<void>
  * By default excludes sub-workflows (those with parent_workflow_id)
  * Use ?include_children=true to include sub-workflows
  */
-router.get('/workflows', async (req: Request, res: Response) => {
+router.get("/workflows", async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
     const status = req.query.status as WorkflowStatus | undefined;
-    const includeChildren = req.query.include_children === 'true';
+    const includeChildren = req.query.include_children === "true";
 
     // Build query - by default exclude sub-workflows (parent_workflow_id IS NULL)
     let sql = `SELECT w.*,
                (SELECT COUNT(*) FROM workflows sub WHERE sub.parent_workflow_id = w.id) as sub_workflow_count
                FROM workflows w`;
-    const params: any[] = [];
+    const params: (string | number)[] = [];
     const conditions: string[] = [];
 
     // Exclude sub-workflows by default
     if (!includeChildren) {
-      conditions.push('w.parent_workflow_id IS NULL');
+      conditions.push("w.parent_workflow_id IS NULL");
     }
 
     if (status) {
-      conditions.push('w.status = ?');
+      conditions.push("w.status = ?");
       params.push(status);
     }
 
     if (conditions.length > 0) {
-      sql += ' WHERE ' + conditions.join(' AND ');
+      sql += " WHERE " + conditions.join(" AND ");
     }
 
     sql += ` ORDER BY w.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
-    const workflowsRaw = await query<any>(sql, params);
+    const workflowsRaw = await query<WorkflowRow[]>(sql, params);
 
     // Helper to extract description from payload or task_description
-    const extractDescription = (wf: any): string | null => {
+    const extractDescription = (wf: WorkflowRow): string | null => {
       if (wf.task_description) return wf.task_description;
       if (wf.payload) {
         try {
-          const payload = typeof wf.payload === 'string' ? JSON.parse(wf.payload) : wf.payload;
+          const payload = typeof wf.payload === "string" ? JSON.parse(wf.payload) : wf.payload;
           return payload.taskDescription || payload.title || payload.description || null;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       }
       return null;
     };
 
     // Map workflows to include extracted description
-    const workflows = workflowsRaw.map((wf: any) => ({
+    const workflows = workflowsRaw.map((wf: WorkflowRow) => ({
       ...wf,
       task_description: extractDescription(wf),
     }));
 
     // Get count (only root workflows unless include_children is true)
-    let countSql = 'SELECT COUNT(*) as total FROM workflows';
+    let countSql = "SELECT COUNT(*) as total FROM workflows";
     const countConditions: string[] = [];
-    const countParams: any[] = [];
+    const countParams: (string | number)[] = [];
 
     if (!includeChildren) {
-      countConditions.push('parent_workflow_id IS NULL');
+      countConditions.push("parent_workflow_id IS NULL");
     }
     if (status) {
-      countConditions.push('status = ?');
+      countConditions.push("status = ?");
       countParams.push(status);
     }
 
     if (countConditions.length > 0) {
-      countSql += ' WHERE ' + countConditions.join(' AND ');
+      countSql += " WHERE " + countConditions.join(" AND ");
     }
 
-    const [countResult] = await query<any>(countSql, countParams);
+    const [countResult] = await query<CountRow[]>(countSql, countParams);
 
     return res.json({
       workflows,
@@ -193,8 +226,8 @@ router.get('/workflows', async (req: Request, res: Response) => {
       offset,
     });
   } catch (error) {
-    logger.error('Failed to fetch workflows', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch workflows' });
+    logger.error("Failed to fetch workflows", error as Error);
+    return res.status(500).json({ error: "Failed to fetch workflows" });
   }
 });
 
@@ -202,22 +235,20 @@ router.get('/workflows', async (req: Request, res: Response) => {
  * GET /api/workflows/:id
  * Get workflow details with all related data including sub-workflows
  */
-router.get('/workflows/:id', async (req: Request, res: Response) => {
+router.get("/workflows/:id", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Get workflow
-    const [workflow] = await query<any>(
-      'SELECT * FROM workflows WHERE id = ?',
-      [id]
-    );
+    const [workflow] = await query<any>("SELECT * FROM workflows WHERE id = ?", [id]);
 
     if (!workflow) {
-      return res.status(404).json({ error: 'Workflow not found' });
+      return res.status(404).json({ error: "Workflow not found" });
     }
 
     // Compute effective status by checking all descendants
-    const [descendantStats] = await query<any>(`
+    const [descendantStats] = await query<any>(
+      `
       WITH RECURSIVE descendants AS (
         SELECT id, status FROM workflows WHERE id = ?
         UNION ALL
@@ -228,18 +259,20 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
         SUM(CASE WHEN status IN ('pending', 'running', 'in_progress', 'planning') THEN 1 ELSE 0 END) as incomplete_count
       FROM descendants WHERE id != ?
-    `, [id, id]);
+    `,
+      [id, id]
+    );
 
-    const failedDescendants = parseInt(descendantStats?.failed_count || '0');
-    const incompleteDescendants = parseInt(descendantStats?.incomplete_count || '0');
+    const failedDescendants = parseInt(descendantStats?.failed_count || "0");
+    const incompleteDescendants = parseInt(descendantStats?.incomplete_count || "0");
 
     // Determine effective status
     let effectiveStatus = workflow.status;
-    if (workflow.status === 'completed') {
+    if (workflow.status === "completed") {
       if (failedDescendants > 0) {
-        effectiveStatus = 'failed';
+        effectiveStatus = "failed";
       } else if (incompleteDescendants > 0) {
-        effectiveStatus = 'in_progress';
+        effectiveStatus = "in_progress";
       }
     }
 
@@ -250,7 +283,7 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
 
     // Get agent executions
     const agents = await query<any>(
-      'SELECT * FROM agent_executions WHERE workflow_id = ? ORDER BY started_at ASC',
+      "SELECT * FROM agent_executions WHERE workflow_id = ? ORDER BY started_at ASC",
       [id]
     );
 
@@ -285,9 +318,11 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       if (wf.task_description) return wf.task_description;
       if (wf.payload) {
         try {
-          const payload = typeof wf.payload === 'string' ? JSON.parse(wf.payload) : wf.payload;
+          const payload = typeof wf.payload === "string" ? JSON.parse(wf.payload) : wf.payload;
           return payload.taskDescription || payload.title || payload.description || null;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       }
       return null;
     };
@@ -305,8 +340,8 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
       subWorkflows,
     });
   } catch (error) {
-    logger.error('Failed to fetch workflow details', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch workflow details' });
+    logger.error("Failed to fetch workflow details", error as Error);
+    return res.status(500).json({ error: "Failed to fetch workflow details" });
   }
 });
 
@@ -314,7 +349,7 @@ router.get('/workflows/:id', async (req: Request, res: Response) => {
  * GET /api/workflows/:id/logs
  * Get execution logs for a workflow
  */
-router.get('/workflows/:id/logs', async (req: Request, res: Response) => {
+router.get("/workflows/:id/logs", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const agentExecutionId = req.query.agentExecutionId
@@ -326,8 +361,8 @@ router.get('/workflows/:id/logs', async (req: Request, res: Response) => {
 
     return res.json({ logs });
   } catch (error) {
-    logger.error('Failed to fetch execution logs', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch execution logs' });
+    logger.error("Failed to fetch execution logs", error as Error);
+    return res.status(500).json({ error: "Failed to fetch execution logs" });
   }
 });
 
@@ -335,29 +370,26 @@ router.get('/workflows/:id/logs', async (req: Request, res: Response) => {
  * GET /api/agents/:id/logs
  * Get execution logs for a specific agent execution
  */
-router.get('/agents/:id/logs', async (req: Request, res: Response) => {
+router.get("/agents/:id/logs", async (req: Request, res: Response) => {
   try {
     const agentExecutionId = parseInt(req.params.id);
 
     // Get the agent execution to find the workflow ID
     const [agentExecution] = await query<any>(
-      'SELECT workflow_id FROM agent_executions WHERE id = ?',
+      "SELECT workflow_id FROM agent_executions WHERE id = ?",
       [agentExecutionId]
     );
 
     if (!agentExecution) {
-      return res.status(404).json({ error: 'Agent execution not found' });
+      return res.status(404).json({ error: "Agent execution not found" });
     }
 
-    const logs = await getExecutionLogs(
-      agentExecution.workflow_id,
-      agentExecutionId
-    );
+    const logs = await getExecutionLogs(agentExecution.workflow_id, agentExecutionId);
 
     return res.json({ logs });
   } catch (error) {
-    logger.error('Failed to fetch agent execution logs', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch agent execution logs' });
+    logger.error("Failed to fetch agent execution logs", error as Error);
+    return res.status(500).json({ error: "Failed to fetch agent execution logs" });
   }
 });
 
@@ -365,17 +397,17 @@ router.get('/agents/:id/logs', async (req: Request, res: Response) => {
  * GET /api/agents
  * List all agent executions
  */
-router.get('/agents', async (req: Request, res: Response) => {
+router.get("/agents", async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
     const status = req.query.status as AgentStatus | undefined;
 
-    let sql = 'SELECT * FROM agent_executions';
+    let sql = "SELECT * FROM agent_executions";
     const params: any[] = [];
 
     if (status) {
-      sql += ' WHERE status = ?';
+      sql += " WHERE status = ?";
       params.push(status);
     }
 
@@ -385,8 +417,8 @@ router.get('/agents', async (req: Request, res: Response) => {
 
     return res.json({ agents });
   } catch (error) {
-    logger.error('Failed to fetch agents', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch agents' });
+    logger.error("Failed to fetch agents", error as Error);
+    return res.status(500).json({ error: "Failed to fetch agents" });
   }
 });
 
@@ -398,10 +430,10 @@ router.get('/agents', async (req: Request, res: Response) => {
  * GET /api/workflows/:id/checkpoints
  * Get all checkpoints in a workflow tree
  */
-router.get('/workflows/:id/checkpoints', async (req: Request, res: Response) => {
+router.get("/workflows/:id/checkpoints", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { getWorkflowCheckpoints } = await import('./workflow-state.js');
+    const { getWorkflowCheckpoints } = await import("./workflow-state.js");
     const checkpoints = await getWorkflowCheckpoints(id);
 
     return res.json({
@@ -412,10 +444,10 @@ router.get('/workflows/:id/checkpoints', async (req: Request, res: Response) => 
       },
     });
   } catch (error) {
-    logger.error('Failed to get workflow checkpoints', error as Error);
+    logger.error("Failed to get workflow checkpoints", error as Error);
     return res.status(500).json({
       success: false,
-      error: 'Failed to get workflow checkpoints',
+      error: "Failed to get workflow checkpoints",
       message: (error as Error).message,
     });
   }
@@ -425,10 +457,10 @@ router.get('/workflows/:id/checkpoints', async (req: Request, res: Response) => 
  * GET /api/workflows/:id/last-checkpoint
  * Get the most recent checkpoint in a workflow tree
  */
-router.get('/workflows/:id/last-checkpoint', async (req: Request, res: Response) => {
+router.get("/workflows/:id/last-checkpoint", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { getLastCheckpoint } = await import('./workflow-state.js');
+    const { getLastCheckpoint } = await import("./workflow-state.js");
     const checkpoint = await getLastCheckpoint(id);
 
     return res.json({
@@ -436,10 +468,10 @@ router.get('/workflows/:id/last-checkpoint', async (req: Request, res: Response)
       data: checkpoint,
     });
   } catch (error) {
-    logger.error('Failed to get last checkpoint', error as Error);
+    logger.error("Failed to get last checkpoint", error as Error);
     return res.status(500).json({
       success: false,
-      error: 'Failed to get last checkpoint',
+      error: "Failed to get last checkpoint",
       message: (error as Error).message,
     });
   }
@@ -449,13 +481,13 @@ router.get('/workflows/:id/last-checkpoint', async (req: Request, res: Response)
  * POST /api/workflows/:id/resume-from-checkpoint
  * Resume a workflow tree from a checkpoint
  */
-router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: Response) => {
+router.post("/workflows/:id/resume-from-checkpoint", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const { checkpointWorkflowId } = req.body;
 
-    const { resumeFromCheckpoint } = await import('./workflow-state.js');
-    const { advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+    const { resumeFromCheckpoint } = await import("./workflow-state.js");
+    const { advanceSubWorkflowQueue } = await import("./sub-workflow-queue.js");
 
     // Resume from checkpoint
     const result = await resumeFromCheckpoint(id, checkpointWorkflowId);
@@ -463,15 +495,21 @@ router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: R
     // Git reset to checkpoint commit if needed
     if (result.checkpointCommit && result.targetModule) {
       try {
-        const { exec } = await import('child_process');
-        const { promisify } = await import('util');
+        const { exec } = await import("child_process");
+        const { promisify } = await import("util");
         const execAsync = promisify(exec);
 
         const moduleDir = getModuleDirectory(result.targetModule);
-        await execAsync(`cd "${moduleDir}" && git checkout ${result.checkpointCommit}`, { timeout: 30000 });
-        logger.info(`Git reset to checkpoint commit ${result.checkpointCommit} in ${result.targetModule}`);
+        await execAsync(`cd "${moduleDir}" && git checkout ${result.checkpointCommit}`, {
+          timeout: 30000,
+        });
+        logger.info(
+          `Git reset to checkpoint commit ${result.checkpointCommit} in ${result.targetModule}`
+        );
       } catch (gitError) {
-        logger.warn('Failed to reset git to checkpoint (may not be a git repo)', { error: (gitError as Error).message });
+        logger.warn("Failed to reset git to checkpoint (may not be a git repo)", {
+          error: (gitError as Error).message,
+        });
       }
     }
 
@@ -490,10 +528,10 @@ router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: R
       message: `Resumed from checkpoint. Reset ${result.resetWorkflowIds.length} workflow(s), removed ${result.removedWorkflowIds.length} sub-workflow(s).`,
     });
   } catch (error) {
-    logger.error('Failed to resume from checkpoint', error as Error);
+    logger.error("Failed to resume from checkpoint", error as Error);
     return res.status(500).json({
       success: false,
-      error: 'Failed to resume from checkpoint',
+      error: "Failed to resume from checkpoint",
       message: (error as Error).message,
     });
   }
@@ -503,7 +541,7 @@ router.post('/workflows/:id/resume-from-checkpoint', async (req: Request, res: R
  * GET /api/stats
  * Dashboard statistics
  */
-router.get('/stats', async (_req: Request, res: Response) => {
+router.get("/stats", async (_req: Request, res: Response) => {
   try {
     // Workflow stats
     const [workflowStats] = await query<any>(`
@@ -553,8 +591,8 @@ router.get('/stats', async (_req: Request, res: Response) => {
       artifacts: artifactStats,
     });
   } catch (error) {
-    logger.error('Failed to fetch stats', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch stats' });
+    logger.error("Failed to fetch stats", error as Error);
+    return res.status(500).json({ error: "Failed to fetch stats" });
   }
 });
 
@@ -562,26 +600,23 @@ router.get('/stats', async (_req: Request, res: Response) => {
  * GET /api/prompts
  * List all available AI prompts
  */
-router.get('/prompts', async (_req: Request, res: Response) => {
+router.get("/prompts", async (_req: Request, res: Response) => {
   try {
-    const promptsDir = path.join(process.cwd(), 'config', 'agent-prompts');
+    const promptsDir = path.join(process.cwd(), "config", "agent-prompts");
     const files = await fs.readdir(promptsDir);
 
     const prompts = await Promise.all(
       files
-        .filter((f) => f.endsWith('.md'))
+        .filter((f) => f.endsWith(".md"))
         .map(async (file) => {
-          const content = await fs.readFile(
-            path.join(promptsDir, file),
-            'utf-8'
-          );
+          const content = await fs.readFile(path.join(promptsDir, file), "utf-8");
           const stats = await fs.stat(path.join(promptsDir, file));
 
           return {
             name: file,
             path: file,
             size: content.length,
-            lines: content.split('\n').length,
+            lines: content.split("\n").length,
             modified: stats.mtime,
           };
         })
@@ -589,8 +624,8 @@ router.get('/prompts', async (_req: Request, res: Response) => {
 
     return res.json({ prompts });
   } catch (error) {
-    logger.error('Failed to fetch prompts', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch prompts' });
+    logger.error("Failed to fetch prompts", error as Error);
+    return res.status(500).json({ error: "Failed to fetch prompts" });
   }
 });
 
@@ -598,22 +633,17 @@ router.get('/prompts', async (_req: Request, res: Response) => {
  * GET /api/prompts/:name
  * Get prompt content
  */
-router.get('/prompts/:name', async (req: Request, res: Response) => {
+router.get("/prompts/:name", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const promptPath = path.join(
-      process.cwd(),
-      'config',
-      'agent-prompts',
-      name
-    );
+    const promptPath = path.join(process.cwd(), "config", "agent-prompts", name);
 
-    const content = await fs.readFile(promptPath, 'utf-8');
+    const content = await fs.readFile(promptPath, "utf-8");
 
     return res.json({ name, content });
   } catch (error) {
-    logger.error('Failed to fetch prompt', error as Error);
-    return res.status(404).json({ error: 'Prompt not found' });
+    logger.error("Failed to fetch prompt", error as Error);
+    return res.status(404).json({ error: "Prompt not found" });
   }
 });
 
@@ -621,30 +651,25 @@ router.get('/prompts/:name', async (req: Request, res: Response) => {
  * PUT /api/prompts/:name
  * Update prompt content
  */
-router.put('/prompts/:name', async (req: Request, res: Response) => {
+router.put("/prompts/:name", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const { content } = req.body;
 
     if (!content) {
-      return res.status(400).json({ error: 'Content is required' });
+      return res.status(400).json({ error: "Content is required" });
     }
 
-    const promptPath = path.join(
-      process.cwd(),
-      'config',
-      'agent-prompts',
-      name
-    );
+    const promptPath = path.join(process.cwd(), "config", "agent-prompts", name);
 
-    await fs.writeFile(promptPath, content, 'utf-8');
+    await fs.writeFile(promptPath, content, "utf-8");
 
-    logger.info('Prompt updated', { name });
+    logger.info("Prompt updated", { name });
 
     return res.json({ success: true, name });
   } catch (error) {
-    logger.error('Failed to update prompt', error as Error);
-    return res.status(500).json({ error: 'Failed to update prompt' });
+    logger.error("Failed to update prompt", error as Error);
+    return res.status(500).json({ error: "Failed to update prompt" });
   }
 });
 
@@ -652,7 +677,7 @@ router.put('/prompts/:name', async (req: Request, res: Response) => {
  * GET /api/errors
  * Get error logs
  */
-router.get('/errors', async (req: Request, res: Response) => {
+router.get("/errors", async (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string) || 100;
 
@@ -672,8 +697,8 @@ router.get('/errors', async (req: Request, res: Response) => {
       agents: failedAgents,
     });
   } catch (error) {
-    logger.error('Failed to fetch errors', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch errors' });
+    logger.error("Failed to fetch errors", error as Error);
+    return res.status(500).json({ error: "Failed to fetch errors" });
   }
 });
 
@@ -681,13 +706,13 @@ router.get('/errors', async (req: Request, res: Response) => {
  * POST /api/workflows/manual
  * Submit manual workflow (same as webhook but via REST)
  */
-router.post('/workflows/manual', async (req: Request, res: Response) => {
+router.post("/workflows/manual", async (req: Request, res: Response) => {
   try {
     const { workflowType, targetModule, targetModules, taskDescription } = req.body;
 
     if (!workflowType || !taskDescription) {
       return res.status(400).json({
-        error: 'workflowType and taskDescription are required',
+        error: "workflowType and taskDescription are required",
       });
     }
 
@@ -696,35 +721,35 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 
     if (!resolvedModule) {
       return res.status(400).json({
-        error: 'targetModule or targetModules is required',
+        error: "targetModule or targetModules is required",
       });
     }
 
     // Import dynamically to avoid circular dependencies
-    const { createWorkflow } = await import('./workflow-state.js');
-    const { WorkflowType } = await import('./types.js');
+    const { createWorkflow } = await import("./workflow-state.js");
+    const { WorkflowType } = await import("./types.js");
 
     // Map workflowType string to enum
     const workflowTypeLower = workflowType.toLowerCase();
-    let mappedType: typeof WorkflowType[keyof typeof WorkflowType];
+    let mappedType: (typeof WorkflowType)[keyof typeof WorkflowType];
 
     switch (workflowTypeLower) {
-      case 'feature':
+      case "feature":
         mappedType = WorkflowType.FEATURE;
         break;
-      case 'bugfix':
+      case "bugfix":
         mappedType = WorkflowType.BUGFIX;
         break;
-      case 'documentation':
+      case "documentation":
         mappedType = WorkflowType.DOCUMENTATION;
         break;
-      case 'refactor':
+      case "refactor":
         mappedType = WorkflowType.REFACTOR;
         break;
-      case 'review':
+      case "review":
         mappedType = WorkflowType.REVIEW;
         break;
-      case 'new_module':
+      case "new_module":
         mappedType = WorkflowType.NEW_MODULE;
         break;
       default:
@@ -735,7 +760,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 
     // Create payload
     const payload = {
-      source: 'manual' as const,
+      source: "manual" as const,
       workflowType: workflowType.toLowerCase(),
       targetModule: resolvedModule,
       taskDescription,
@@ -746,7 +771,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       autoExecuteChildren: true,
     });
 
-    logger.info('Manual workflow created', {
+    logger.info("Manual workflow created", {
       workflowId,
       workflowType: mappedType,
       targetModule: resolvedModule,
@@ -756,28 +781,32 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
     // Execute the workflow asynchronously
     (async () => {
       try {
-        logger.info('Starting workflow execution', { workflowId, targetModule: resolvedModule });
+        logger.info("Starting workflow execution", { workflowId, targetModule: resolvedModule });
 
-        const { createWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
-        // @ts-ignore - Dynamic import path resolved at runtime
+        const { createWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
 
         // Create a branch name for the workflow
         const sanitizedDescription = taskDescription
           .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/[^a-z0-9]+/g, "-")
           .substring(0, 30);
         const branchName = `workflow-${workflowType.toLowerCase()}-${workflowId}-${sanitizedDescription}`;
 
         // Create workflow directory (clones repo)
-        const workflowDir = await createWorkflowDirectory(workflowId, branchName, mappedType, resolvedModule);
+        const workflowDir = await createWorkflowDirectory(
+          workflowId,
+          branchName,
+          mappedType,
+          resolvedModule
+        );
 
-        logger.info('Workflow directory created', { workflowId, workflowDir, branchName });
+        logger.info("Workflow directory created", { workflowId, workflowDir, branchName });
 
         // Update workflow status to running
-        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
+        await query("UPDATE workflows SET status = ? WHERE id = ?", ["running", workflowId]);
 
-        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType });
+        logger.info("Executing WorkflowOrchestrator", { workflowId, workflowType });
 
         // Execute WorkflowOrchestrator
         const orchestrator = new WorkflowOrchestrator();
@@ -791,7 +820,7 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
 
         // Save artifacts from the workflow result
         if (result.artifacts && result.artifacts.length > 0) {
-          const { saveArtifact } = await import('./workflow-state.js');
+          const { saveArtifact } = await import("./workflow-state.js");
           for (const artifact of result.artifacts) {
             try {
               await saveArtifact(
@@ -802,9 +831,9 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
                 artifact.filePath,
                 artifact.metadata
               );
-              logger.debug('Saved artifact', { workflowId, type: artifact.type });
+              logger.debug("Saved artifact", { workflowId, type: artifact.type });
             } catch (artifactError) {
-              logger.error('Failed to save artifact', artifactError as Error, {
+              logger.error("Failed to save artifact", artifactError as Error, {
                 workflowId,
                 type: artifact.type,
               });
@@ -813,55 +842,59 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
         }
 
         // Update workflow status based on result
-        const finalStatus = result.success ? 'completed' : 'failed';
+        const finalStatus = result.success ? "completed" : "failed";
         if (!result.success) {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
           // Handle both string and object payloads (MySQL JSON columns may already be parsed)
-          const payloadData = rawPayload
-            ? typeof rawPayload === 'string'
+          const payloadData: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payloadData.error = result.summary;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
             finalStatus,
             JSON.stringify(payloadData),
             workflowId,
           ]);
         } else {
-          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+          await query("UPDATE workflows SET status = ? WHERE id = ?", [finalStatus, workflowId]);
         }
 
-        logger.info('Workflow execution completed', { workflowId, status: finalStatus });
+        logger.info("Workflow execution completed", { workflowId, status: finalStatus });
       } catch (error) {
-        logger.error('Failed to execute manual workflow', error as Error, {
+        logger.error("Failed to execute manual workflow", error as Error, {
           workflowId,
           errorMessage: (error as Error).message,
           errorStack: (error as Error).stack,
         });
         // Update workflow status to failed
         try {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
           // Handle both string and object payloads (MySQL JSON columns may already be parsed)
-          const payloadData = rawPayload
-            ? typeof rawPayload === 'string'
+          const payloadData: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payloadData.error = (error as Error).message;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
-            'failed',
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
+            "failed",
             JSON.stringify(payloadData),
             workflowId,
           ]);
         } catch (updateError) {
-          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+          logger.error("Failed to update workflow status", updateError as Error, { workflowId });
         }
       }
     })().catch((error) => {
-      logger.error('Unhandled error in workflow execution', error as Error, { workflowId });
+      logger.error("Unhandled error in workflow execution", error as Error, { workflowId });
     });
 
     return res.json({
@@ -870,8 +903,8 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
       message: `Workflow started for ${resolvedModule}: ${taskDescription}`,
     });
   } catch (error) {
-    logger.error('Failed to submit workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to submit workflow' });
+    logger.error("Failed to submit workflow", error as Error);
+    return res.status(500).json({ error: "Failed to submit workflow" });
   }
 });
 
@@ -879,12 +912,12 @@ router.post('/workflows/manual', async (req: Request, res: Response) => {
  * POST /api/workflows/new-module
  * Create a new module with workflow orchestration
  */
-router.post('/workflows/new-module', async (req: Request, res: Response) => {
+router.post("/workflows/new-module", async (req: Request, res: Response) => {
   try {
     const {
       moduleName,
       description,
-      moduleType = 'service',
+      moduleType = "service",
       port,
       hasFrontend = true,
       frontendPort,
@@ -894,17 +927,17 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
 
     if (!moduleName || !description) {
       return res.status(400).json({
-        error: 'moduleName and description are required',
+        error: "moduleName and description are required",
       });
     }
 
     // Import dynamically to avoid circular dependencies
-    const { createWorkflow } = await import('./workflow-state.js');
+    const { createWorkflow } = await import("./workflow-state.js");
 
     // Create payload in WebhookPayload format
     const payload = {
-      source: 'manual' as const,
-      workflowType: 'new_module',
+      source: "manual" as const,
+      workflowType: "new_module",
       targetModule: moduleName,
       taskDescription: taskDescription || description,
       metadata: {
@@ -917,14 +950,14 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
     };
 
     // Import workflow types
-    const { WorkflowType } = await import('./types.js');
-    
+    const { WorkflowType } = await import("./types.js");
+
     // Create workflow record with auto_execute_children enabled for new_module workflows
     const workflowId = await createWorkflow(WorkflowType.NEW_MODULE, payload, moduleName, {
       autoExecuteChildren: true,
     });
 
-    logger.info('New module workflow created', {
+    logger.info("New module workflow created", {
       workflowId,
       moduleName,
       moduleType,
@@ -937,30 +970,29 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
     // The ModuleScaffoldAgent will handle module creation
     (async () => {
       try {
-        logger.info('Starting workflow execution', { workflowId, moduleName });
-        
-        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
-        // @ts-ignore - Dynamic import path resolved at runtime
+        logger.info("Starting workflow execution", { workflowId, moduleName });
+
+        const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-        
+
         // Create a temporary workflow directory for the scaffold agent
         // For new_module, we don't need to clone a repo - ModuleScaffoldAgent creates it
         const branchName = `new-module-${moduleName}-${workflowId}`;
         const workflowDir = getWorkflowDirectory(workflowId, branchName);
-        
-        logger.info('Creating workflow directory', { workflowId, workflowDir });
+
+        logger.info("Creating workflow directory", { workflowId, workflowDir });
         await fs.mkdir(workflowDir, { recursive: true });
-        
+
         // Update workflow status to running
-        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
-        
-        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType: 'new_module' });
-        
+        await query("UPDATE workflows SET status = ? WHERE id = ?", ["running", workflowId]);
+
+        logger.info("Executing WorkflowOrchestrator", { workflowId, workflowType: "new_module" });
+
         // Execute WorkflowOrchestrator
         const orchestrator = new WorkflowOrchestrator();
         const result = await orchestrator.execute({
           workflowId,
-          workflowType: 'new_module',
+          workflowType: "new_module",
           targetModule: moduleName,
           taskDescription: taskDescription || description,
           workingDir: workflowDir,
@@ -975,7 +1007,7 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
 
         // Save artifacts from the workflow result
         if (result.artifacts && result.artifacts.length > 0) {
-          const { saveArtifact } = await import('./workflow-state.js');
+          const { saveArtifact } = await import("./workflow-state.js");
           for (const artifact of result.artifacts) {
             try {
               await saveArtifact(
@@ -986,9 +1018,9 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
                 artifact.filePath,
                 artifact.metadata
               );
-              logger.debug('Saved artifact', { workflowId, type: artifact.type });
+              logger.debug("Saved artifact", { workflowId, type: artifact.type });
             } catch (artifactError) {
-              logger.error('Failed to save artifact', artifactError as Error, {
+              logger.error("Failed to save artifact", artifactError as Error, {
                 workflowId,
                 type: artifact.type,
               });
@@ -997,56 +1029,60 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
         }
 
         // Update workflow status based on result
-        const finalStatus = result.success ? 'completed' : 'failed';
+        const finalStatus = result.success ? "completed" : "failed";
         // Store error in payload if failed
         if (!result.success) {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
           // Handle both string and object payloads (MySQL JSON columns may already be parsed)
-          const payload = rawPayload
-            ? typeof rawPayload === 'string'
+          const payload: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payload.error = result.summary;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
             finalStatus,
             JSON.stringify(payload),
             workflowId,
           ]);
         } else {
-          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+          await query("UPDATE workflows SET status = ? WHERE id = ?", [finalStatus, workflowId]);
         }
-        
-        logger.info('Workflow execution completed', { workflowId, status: finalStatus });
+
+        logger.info("Workflow execution completed", { workflowId, status: finalStatus });
       } catch (error) {
-        logger.error('Failed to execute new module workflow', error as Error, { 
+        logger.error("Failed to execute new module workflow", error as Error, {
           workflowId,
           errorMessage: (error as Error).message,
           errorStack: (error as Error).stack,
         });
         // Update workflow status to failed and store error in payload
         try {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
           // Handle both string and object payloads (MySQL JSON columns may already be parsed)
-          const payload = rawPayload
-            ? typeof rawPayload === 'string'
+          const payload: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payload.error = (error as Error).message;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
-            'failed',
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
+            "failed",
             JSON.stringify(payload),
             workflowId,
           ]);
         } catch (updateError) {
-          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+          logger.error("Failed to update workflow status", updateError as Error, { workflowId });
         }
       }
     })().catch((error) => {
-      logger.error('Unhandled error in workflow execution', error as Error, { workflowId });
+      logger.error("Unhandled error in workflow execution", error as Error, { workflowId });
     });
 
     return res.json({
@@ -1055,9 +1091,9 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
       message: `Module creation workflow started for ${moduleName}`,
     });
   } catch (error) {
-    logger.error('Failed to create new module workflow', error as Error);
+    logger.error("Failed to create new module workflow", error as Error);
     return res.status(500).json({
-      error: 'Failed to create module workflow',
+      error: "Failed to create module workflow",
       message: (error as Error).message,
     });
   }
@@ -1067,19 +1103,13 @@ router.post('/workflows/new-module', async (req: Request, res: Response) => {
  * POST /api/workflows/dockerize
  * Add Docker configuration to an existing module
  */
-router.post('/workflows/dockerize', async (req: Request, res: Response) => {
+router.post("/workflows/dockerize", async (req: Request, res: Response) => {
   try {
-    const {
-      moduleName,
-      databaseType = 'none',
-      port,
-      frontendPort,
-      hasFrontend,
-    } = req.body;
+    const { moduleName, databaseType = "none", port, frontendPort, hasFrontend } = req.body;
 
     if (!moduleName) {
       return res.status(400).json({
-        error: 'moduleName is required',
+        error: "moduleName is required",
       });
     }
 
@@ -1094,12 +1124,12 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
     }
 
     // Import dynamically to avoid circular dependencies
-    const { createWorkflow } = await import('./workflow-state.js');
+    const { createWorkflow } = await import("./workflow-state.js");
 
     // Create payload in WebhookPayload format
     const payload = {
-      source: 'manual' as const,
-      workflowType: 'dockerize',
+      source: "manual" as const,
+      workflowType: "dockerize",
       targetModule: moduleName,
       taskDescription: `Add Docker configuration to ${moduleName}`,
       metadata: {
@@ -1111,37 +1141,36 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
     };
 
     // Import workflow types
-    const { WorkflowType } = await import('./types.js');
+    const { WorkflowType } = await import("./types.js");
 
     // Create workflow record
     const workflowId = await createWorkflow(WorkflowType.DOCKERIZE, payload, moduleName);
 
-    logger.info('Dockerize workflow created', { workflowId, moduleName, databaseType });
+    logger.info("Dockerize workflow created", { workflowId, moduleName, databaseType });
 
     // Execute the workflow asynchronously
     (async () => {
       try {
-        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
-        // @ts-ignore - Dynamic import path resolved at runtime
+        const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
 
         // Create workflow directory
         const branchName = `dockerize-${moduleName}-${workflowId}`;
         const workflowDir = getWorkflowDirectory(workflowId, branchName);
 
-        logger.info('Creating workflow directory', { workflowId, workflowDir });
+        logger.info("Creating workflow directory", { workflowId, workflowDir });
         await fs.mkdir(workflowDir, { recursive: true });
 
         // Update workflow status to running
-        await query('UPDATE workflows SET status = ? WHERE id = ?', ['running', workflowId]);
+        await query("UPDATE workflows SET status = ? WHERE id = ?", ["running", workflowId]);
 
-        logger.info('Executing WorkflowOrchestrator', { workflowId, workflowType: 'dockerize' });
+        logger.info("Executing WorkflowOrchestrator", { workflowId, workflowType: "dockerize" });
 
         // Execute WorkflowOrchestrator
         const orchestrator = new WorkflowOrchestrator();
         const result = await orchestrator.execute({
           workflowId,
-          workflowType: 'dockerize',
+          workflowType: "dockerize",
           targetModule: moduleName,
           taskDescription: `Add Docker configuration to ${moduleName}`,
           workingDir: workflowDir,
@@ -1155,58 +1184,69 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
 
         // Save artifacts from the workflow result
         if (result.artifacts && result.artifacts.length > 0) {
-          const { saveArtifact } = await import('./workflow-state.js');
+          const { saveArtifact } = await import("./workflow-state.js");
           for (const artifact of result.artifacts) {
-            await saveArtifact(workflowId, artifact.filePath || `docker-${artifact.type}`, artifact.content, artifact.type);
+            await saveArtifact(
+              workflowId,
+              artifact.filePath || `docker-${artifact.type}`,
+              artifact.content,
+              artifact.type
+            );
           }
         }
 
         // Update workflow status based on result
-        const finalStatus = result.success ? 'completed' : 'failed';
+        const finalStatus = result.success ? "completed" : "failed";
         if (!result.success) {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
-          const payload = rawPayload
-            ? typeof rawPayload === 'string'
+          const payload: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payload.error = result.summary;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
             finalStatus,
             JSON.stringify(payload),
             workflowId,
           ]);
         } else {
-          await query('UPDATE workflows SET status = ? WHERE id = ?', [finalStatus, workflowId]);
+          await query("UPDATE workflows SET status = ? WHERE id = ?", [finalStatus, workflowId]);
         }
 
-        logger.info('Dockerize workflow completed', { workflowId, status: finalStatus });
+        logger.info("Dockerize workflow completed", { workflowId, status: finalStatus });
       } catch (error) {
-        logger.error('Failed to execute dockerize workflow', error as Error, {
+        logger.error("Failed to execute dockerize workflow", error as Error, {
           workflowId,
           errorMessage: (error as Error).message,
         });
         try {
-          const currentPayload = await query('SELECT payload FROM workflows WHERE id = ?', [workflowId]);
+          const currentPayload = await query<PayloadRow[]>("SELECT payload FROM workflows WHERE id = ?", [
+            workflowId,
+          ]);
           const rawPayload = currentPayload[0]?.payload;
-          const payload = rawPayload
-            ? typeof rawPayload === 'string'
+          const payload: Record<string, unknown> = rawPayload
+            ? typeof rawPayload === "string"
               ? JSON.parse(rawPayload)
-              : rawPayload
+              : (rawPayload as Record<string, unknown>)
             : {};
           payload.error = (error as Error).message;
-          await query('UPDATE workflows SET status = ?, payload = ? WHERE id = ?', [
-            'failed',
+          await query("UPDATE workflows SET status = ?, payload = ? WHERE id = ?", [
+            "failed",
             JSON.stringify(payload),
             workflowId,
           ]);
         } catch (updateError) {
-          logger.error('Failed to update workflow status', updateError as Error, { workflowId });
+          logger.error("Failed to update workflow status", updateError as Error, { workflowId });
         }
       }
     })().catch((error) => {
-      logger.error('Unhandled error in dockerize workflow execution', error as Error, { workflowId });
+      logger.error("Unhandled error in dockerize workflow execution", error as Error, {
+        workflowId,
+      });
     });
 
     return res.json({
@@ -1215,9 +1255,9 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
       message: `Docker configuration workflow started for ${moduleName}`,
     });
   } catch (error) {
-    logger.error('Failed to create dockerize workflow', error as Error);
+    logger.error("Failed to create dockerize workflow", error as Error);
     return res.status(500).json({
-      error: 'Failed to create dockerize workflow',
+      error: "Failed to create dockerize workflow",
       message: (error as Error).message,
     });
   }
@@ -1227,29 +1267,29 @@ router.post('/workflows/dockerize', async (req: Request, res: Response) => {
  * DELETE /api/workflows/:id
  * Cancel a workflow
  */
-router.delete('/workflows/:id', async (req: Request, res: Response) => {
+router.delete("/workflows/:id", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Update workflow status to failed
-    await query('UPDATE workflows SET status = ?, error = ? WHERE id = ?', [
-      'failed',
-      'Cancelled by user',
+    await query("UPDATE workflows SET status = ?, error = ? WHERE id = ?", [
+      "failed",
+      "Cancelled by user",
       id,
     ]);
 
     // Update any running agents
     await query(
       `UPDATE agent_executions SET status = ?, error = ? WHERE workflow_id = ? AND status IN ('pending', 'running')`,
-      ['failed', 'Workflow cancelled', id]
+      ["failed", "Workflow cancelled", id]
     );
 
-    logger.info('Workflow cancelled', { workflowId: id });
+    logger.info("Workflow cancelled", { workflowId: id });
 
     return res.json({ success: true });
   } catch (error) {
-    logger.error('Failed to cancel workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to cancel workflow' });
+    logger.error("Failed to cancel workflow", error as Error);
+    return res.status(500).json({ error: "Failed to cancel workflow" });
   }
 });
 
@@ -1261,10 +1301,10 @@ router.delete('/workflows/:id', async (req: Request, res: Response) => {
  * GET /api/workflows/:id/messages
  * Get all messages in the workflow conversation thread (includes sub-workflow messages)
  */
-router.get('/workflows/:id/messages', async (req: Request, res: Response) => {
+router.get("/workflows/:id/messages", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { getMessages, getRootWorkflowId } = await import('./workflow-messages.js');
+    const { getMessages, getRootWorkflowId } = await import("./workflow-messages.js");
 
     // Get root workflow ID to determine if this is a sub-workflow
     const rootWorkflowId = await getRootWorkflowId(id);
@@ -1283,8 +1323,8 @@ router.get('/workflows/:id/messages', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    logger.error('Failed to get workflow messages', error as Error);
-    return res.status(500).json({ error: 'Failed to get workflow messages' });
+    logger.error("Failed to get workflow messages", error as Error);
+    return res.status(500).json({ error: "Failed to get workflow messages" });
   }
 });
 
@@ -1292,46 +1332,46 @@ router.get('/workflows/:id/messages', async (req: Request, res: Response) => {
  * POST /api/workflows/:id/messages
  * Send a message to the workflow conversation thread
  */
-router.post('/workflows/:id/messages', async (req: Request, res: Response) => {
+router.post("/workflows/:id/messages", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
-    const { content, action_type = 'comment', metadata } = req.body;
+    const { content, action_type = "comment", metadata } = req.body;
 
-    if (!content || typeof content !== 'string') {
+    if (!content || typeof content !== "string") {
       return res.status(400).json({
         success: false,
-        error: 'Message content is required',
+        error: "Message content is required",
       });
     }
 
-    const { addMessage, pauseWorkflow, unpauseWorkflow } = await import('./workflow-messages.js');
+    const { addMessage, pauseWorkflow, unpauseWorkflow } = await import("./workflow-messages.js");
 
     // Handle special action types
     let actionTaken: string | undefined;
 
-    if (action_type === 'pause') {
+    if (action_type === "pause") {
       await pauseWorkflow(id, content);
-      actionTaken = 'Workflow pause requested';
-    } else if (action_type === 'resume') {
+      actionTaken = "Workflow pause requested";
+    } else if (action_type === "resume") {
       await unpauseWorkflow(id);
-      actionTaken = 'Workflow resumed';
-    } else if (action_type === 'cancel') {
+      actionTaken = "Workflow resumed";
+    } else if (action_type === "cancel") {
       // Cancel the workflow
-      await query('UPDATE workflows SET status = ? WHERE id = ?', ['failed', id]);
+      await query("UPDATE workflows SET status = ? WHERE id = ?", ["failed", id]);
       await query(
         `UPDATE agent_executions SET status = 'failed', error = ? WHERE workflow_id = ? AND status IN ('pending', 'running')`,
-        ['Cancelled by user', id]
+        ["Cancelled by user", id]
       );
-      actionTaken = 'Workflow cancelled';
+      actionTaken = "Workflow cancelled";
     }
 
     // Add the user message
-    const messageId = await addMessage(id, 'user', content, {
+    const messageId = await addMessage(id, "user", content, {
       actionType: action_type,
       metadata,
     });
 
-    logger.info('User message added to workflow', {
+    logger.info("User message added to workflow", {
       workflowId: id,
       messageId,
       actionType: action_type,
@@ -1345,8 +1385,8 @@ router.post('/workflows/:id/messages', async (req: Request, res: Response) => {
       },
     });
   } catch (error) {
-    logger.error('Failed to add workflow message', error as Error);
-    return res.status(500).json({ error: 'Failed to add workflow message' });
+    logger.error("Failed to add workflow message", error as Error);
+    return res.status(500).json({ error: "Failed to add workflow message" });
   }
 });
 
@@ -1354,23 +1394,23 @@ router.post('/workflows/:id/messages', async (req: Request, res: Response) => {
  * POST /api/workflows/:id/pause
  * Pause a running workflow
  */
-router.post('/workflows/:id/pause', async (req: Request, res: Response) => {
+router.post("/workflows/:id/pause", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const { reason } = req.body;
 
-    const { pauseWorkflow } = await import('./workflow-messages.js');
-    await pauseWorkflow(id, reason || 'User requested pause');
+    const { pauseWorkflow } = await import("./workflow-messages.js");
+    await pauseWorkflow(id, reason || "User requested pause");
 
-    logger.info('Workflow pause requested', { workflowId: id, reason });
+    logger.info("Workflow pause requested", { workflowId: id, reason });
 
     return res.json({
       success: true,
-      message: 'Workflow pause requested',
+      message: "Workflow pause requested",
     });
   } catch (error) {
-    logger.error('Failed to pause workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to pause workflow' });
+    logger.error("Failed to pause workflow", error as Error);
+    return res.status(500).json({ error: "Failed to pause workflow" });
   }
 });
 
@@ -1378,28 +1418,28 @@ router.post('/workflows/:id/pause', async (req: Request, res: Response) => {
  * POST /api/workflows/:id/force-fail
  * Force a workflow to fail immediately
  */
-router.post('/workflows/:id/force-fail', async (req: Request, res: Response) => {
+router.post("/workflows/:id/force-fail", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
     const { reason } = req.body;
 
     // Get workflow to check current status
-    const workflows = await query('SELECT status FROM workflows WHERE id = ?', [id]);
+    const workflows = await query("SELECT status FROM workflows WHERE id = ?", [id]);
     if (!workflows || workflows.length === 0) {
-      return res.status(404).json({ error: 'Workflow not found' });
+      return res.status(404).json({ error: "Workflow not found" });
     }
 
     const workflow = workflows[0];
-    if (workflow.status === 'failed' || workflow.status === 'completed') {
+    if (workflow.status === "failed" || workflow.status === "completed") {
       return res.status(400).json({
         error: `Cannot force fail workflow in '${workflow.status}' state`,
       });
     }
 
-    const errorMessage = reason || 'Manually forced to fail by user';
+    const errorMessage = reason || "Manually forced to fail by user";
 
     // Get current payload to add error info
-    const currentPayloadResult = await query('SELECT payload FROM workflows WHERE id = ?', [id]);
+    const currentPayloadResult = await query("SELECT payload FROM workflows WHERE id = ?", [id]);
     const currentPayload = currentPayloadResult[0]?.payload || {};
     const updatedPayload = {
       ...currentPayload,
@@ -1408,10 +1448,11 @@ router.post('/workflows/:id/force-fail', async (req: Request, res: Response) => 
     };
 
     // Update workflow status to failed (store error in payload JSON since there's no error_message column)
-    await query(
-      'UPDATE workflows SET status = ?, payload = ?, is_paused = false WHERE id = ?',
-      ['failed', JSON.stringify(updatedPayload), id]
-    );
+    await query("UPDATE workflows SET status = ?, payload = ?, is_paused = false WHERE id = ?", [
+      "failed",
+      JSON.stringify(updatedPayload),
+      id,
+    ]);
 
     // Fail any running agent executions
     await query(
@@ -1427,19 +1468,19 @@ router.post('/workflows/:id/force-fail', async (req: Request, res: Response) => 
       [id]
     );
 
-    logger.info('Workflow force-failed', { workflowId: id, reason: errorMessage });
+    logger.info("Workflow force-failed", { workflowId: id, reason: errorMessage });
 
     // Emit websocket event
-    const { emitWorkflowFailed } = await import('./websocket-emitter.js');
+    const { emitWorkflowFailed } = await import("./websocket-emitter.js");
     emitWorkflowFailed(id, errorMessage);
 
     return res.json({
       success: true,
-      message: 'Workflow failed',
+      message: "Workflow failed",
     });
   } catch (error) {
-    logger.error('Failed to force-fail workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to force-fail workflow' });
+    logger.error("Failed to force-fail workflow", error as Error);
+    return res.status(500).json({ error: "Failed to force-fail workflow" });
   }
 });
 
@@ -1447,22 +1488,22 @@ router.post('/workflows/:id/force-fail', async (req: Request, res: Response) => 
  * POST /api/workflows/:id/unpause
  * Resume a paused workflow
  */
-router.post('/workflows/:id/unpause', async (req: Request, res: Response) => {
+router.post("/workflows/:id/unpause", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
-    const { unpauseWorkflow } = await import('./workflow-messages.js');
+    const { unpauseWorkflow } = await import("./workflow-messages.js");
     await unpauseWorkflow(id);
 
-    logger.info('Workflow unpaused', { workflowId: id });
+    logger.info("Workflow unpaused", { workflowId: id });
 
     return res.json({
       success: true,
-      message: 'Workflow resumed',
+      message: "Workflow resumed",
     });
   } catch (error) {
-    logger.error('Failed to unpause workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to unpause workflow' });
+    logger.error("Failed to unpause workflow", error as Error);
+    return res.status(500).json({ error: "Failed to unpause workflow" });
   }
 });
 
@@ -1472,28 +1513,34 @@ router.post('/workflows/:id/unpause', async (req: Request, res: Response) => {
  * For workflows with sub-workflows: continues executing the sub-workflow queue
  * For single workflows: re-runs the WorkflowOrchestrator (if available)
  */
-router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
+router.post("/workflows/:id/resume", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Get workflow details
-    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import('./workflow-state.js');
-    const { getQueueStatus, advanceSubWorkflowQueue, updateSubWorkflowStatus, getNextExecutableSubWorkflow, resetFailedSubWorkflows } = await import('./sub-workflow-queue.js');
+    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import("./workflow-state.js");
+    const {
+      getQueueStatus,
+      advanceSubWorkflowQueue,
+      updateSubWorkflowStatus,
+      getNextExecutableSubWorkflow,
+      resetFailedSubWorkflows,
+    } = await import("./sub-workflow-queue.js");
 
     const workflow = await getWorkflow(id);
     if (!workflow) {
       return res.status(404).json({
         success: false,
-        error: 'Workflow not found',
+        error: "Workflow not found",
       });
     }
 
     // Check if workflow can be resumed (must be in failed, completed, or cancelled state)
-    if (!['failed', 'completed', 'cancelled'].includes(workflow.status)) {
+    if (!["failed", "completed", "cancelled"].includes(workflow.status)) {
       return res.status(400).json({
         success: false,
         error: `Cannot resume workflow in '${workflow.status}' state`,
-        message: 'Only failed, completed, or cancelled workflows can be resumed',
+        message: "Only failed, completed, or cancelled workflows can be resumed",
       });
     }
 
@@ -1502,7 +1549,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
     if (queueStatus.total > 0) {
       // This workflow has sub-workflows - resume the queue
-      logger.info('Resuming workflow with sub-workflow queue', {
+      logger.info("Resuming workflow with sub-workflow queue", {
         workflowId: id,
         queueStatus,
       });
@@ -1510,7 +1557,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
       // Reset all failed/in_progress sub-workflows back to pending
       // This allows the pipeline to restart from the earliest failure point
       const resetResult = await resetFailedSubWorkflows(id);
-      logger.info('Reset failed sub-workflows for resume', {
+      logger.info("Reset failed sub-workflows for resume", {
         workflowId: id,
         resetCount: resetResult.resetCount,
         earliestResetOrder: resetResult.earliestResetOrder,
@@ -1522,8 +1569,8 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
       // IMPORTANT: If this workflow has a parent, mark this workflow's entry in the parent's queue as in_progress
       // This prevents sibling workflows from running concurrently
       if (workflow.parentWorkflowId) {
-        await updateSubWorkflowStatus(id, 'in_progress');
-        logger.info('Marked workflow as in_progress in parent queue', {
+        await updateSubWorkflowStatus(id, "in_progress");
+        logger.info("Marked workflow as in_progress in parent queue", {
           workflowId: id,
           parentWorkflowId: workflow.parentWorkflowId,
         });
@@ -1548,12 +1595,11 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
         (async () => {
           try {
             // Mark next workflow as in_progress
-            await updateSubWorkflowStatus(nextWorkflowEntry.childWorkflowId, 'in_progress');
+            await updateSubWorkflowStatus(nextWorkflowEntry.childWorkflowId, "in_progress");
 
             // Execute the sub-workflow queue
-            // @ts-ignore - Dynamic import path resolved at runtime
             const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-            const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+            const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
 
             let currentWorkflowId: number | null = nextWorkflowEntry.childWorkflowId;
 
@@ -1561,7 +1607,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
               const currentWorkflow = await getWorkflow(currentWorkflowId);
               if (!currentWorkflow) break;
 
-              logger.info('Executing sub-workflow from resume', {
+              logger.info("Executing sub-workflow from resume", {
                 workflowId: currentWorkflowId,
                 type: currentWorkflow.type,
               });
@@ -1569,21 +1615,22 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
               const targetModule = currentWorkflow.target_module;
               const workflowDir = targetModule
                 ? getModuleDirectory(targetModule)
-                : getWorkflowDirectory(currentWorkflowId, currentWorkflow.branchName || 'master');
+                : getWorkflowDirectory(currentWorkflowId, currentWorkflow.branchName || "master");
 
               await updateWorkflowStatus(currentWorkflowId, WorkflowStatus.PLANNING);
 
               const orchestrator = new WorkflowOrchestrator();
-              const payload = typeof currentWorkflow.payload === 'string'
-                ? JSON.parse(currentWorkflow.payload)
-                : currentWorkflow.payload;
+              const payload =
+                typeof currentWorkflow.payload === "string"
+                  ? JSON.parse(currentWorkflow.payload)
+                  : currentWorkflow.payload;
 
               try {
                 const result = await orchestrator.execute({
                   workflowId: currentWorkflowId,
                   workflowType: currentWorkflow.type,
                   targetModule: currentWorkflow.target_module,
-                  taskDescription: payload.taskDescription || payload.title || '',
+                  taskDescription: payload.taskDescription || payload.title || "",
                   workingDir: workflowDir,
                   metadata: payload.metadata || {},
                 });
@@ -1600,9 +1647,12 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
                         artifact.filePath,
                         artifact.metadata
                       );
-                      logger.debug('Saved artifact', { workflowId: currentWorkflowId, type: artifact.type });
+                      logger.debug("Saved artifact", {
+                        workflowId: currentWorkflowId,
+                        type: artifact.type,
+                      });
                     } catch (artifactError) {
-                      logger.error('Failed to save artifact', artifactError as Error, {
+                      logger.error("Failed to save artifact", artifactError as Error, {
                         workflowId: currentWorkflowId,
                         type: artifact.type,
                       });
@@ -1610,11 +1660,17 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
                   }
                 }
 
-                const finalStatus = result.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+                const finalStatus = result.success
+                  ? WorkflowStatus.COMPLETED
+                  : WorkflowStatus.FAILED;
                 await updateWorkflowStatus(currentWorkflowId, finalStatus);
-                await updateSubWorkflowStatus(currentWorkflowId, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+                await updateSubWorkflowStatus(
+                  currentWorkflowId,
+                  result.success ? "completed" : "failed",
+                  result.success ? undefined : result.summary
+                );
 
-                logger.info('Sub-workflow completed', {
+                logger.info("Sub-workflow completed", {
                   workflowId: currentWorkflowId,
                   status: finalStatus,
                 });
@@ -1622,23 +1678,27 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
                 // Advance to next workflow
                 currentWorkflowId = await advanceSubWorkflowQueue(id);
               } catch (execError) {
-                logger.error('Sub-workflow execution failed', execError as Error, {
+                logger.error("Sub-workflow execution failed", execError as Error, {
                   workflowId: currentWorkflowId,
                 });
                 if (currentWorkflowId !== null) {
                   await updateWorkflowStatus(currentWorkflowId, WorkflowStatus.FAILED);
-                  await updateSubWorkflowStatus(currentWorkflowId, 'failed', (execError as Error).message);
+                  await updateSubWorkflowStatus(
+                    currentWorkflowId,
+                    "failed",
+                    (execError as Error).message
+                  );
                 }
                 break;
               }
             }
 
-            logger.info('Resume execution completed for workflow', { workflowId: id });
+            logger.info("Resume execution completed for workflow", { workflowId: id });
           } catch (asyncError) {
-            logger.error('Resume async execution failed', asyncError as Error, { workflowId: id });
+            logger.error("Resume async execution failed", asyncError as Error, { workflowId: id });
           }
         })().catch((error) => {
-          logger.error('Unhandled error in resume execution', error as Error);
+          logger.error("Unhandled error in resume execution", error as Error);
         });
       }
 
@@ -1647,7 +1707,7 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
     // No sub-workflows - this is a leaf workflow
     // Re-run the WorkflowOrchestrator for this workflow
-    logger.info('Resuming leaf workflow by re-executing', { workflowId: id, type: workflow.type });
+    logger.info("Resuming leaf workflow by re-executing", { workflowId: id, type: workflow.type });
 
     // Reset workflow status to pending
     await updateWorkflowStatus(id, WorkflowStatus.PENDING);
@@ -1662,8 +1722,8 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
     // If this is a sub-workflow, update its queue entry status
     if (workflow.parentWorkflowId) {
-      const { updateSubWorkflowStatus } = await import('./sub-workflow-queue.js');
-      await updateSubWorkflowStatus(id, 'pending');
+      const { updateSubWorkflowStatus } = await import("./sub-workflow-queue.js");
+      await updateSubWorkflowStatus(id, "pending");
     }
 
     // Send response immediately
@@ -1680,27 +1740,25 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
     // Execute asynchronously
     (async () => {
       try {
-        // @ts-ignore - Dynamic import path resolved at runtime
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
 
         const targetModule = workflow.target_module;
         const workflowDir = targetModule
           ? getModuleDirectory(targetModule)
-          : getWorkflowDirectory(id, workflow.branchName || 'master');
+          : getWorkflowDirectory(id, workflow.branchName || "master");
 
         await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
 
         const orchestrator = new WorkflowOrchestrator();
-        const payload = typeof workflow.payload === 'string'
-          ? JSON.parse(workflow.payload)
-          : workflow.payload;
+        const payload =
+          typeof workflow.payload === "string" ? JSON.parse(workflow.payload) : workflow.payload;
 
         const result = await orchestrator.execute({
           workflowId: id,
           workflowType: workflow.type,
           targetModule: workflow.target_module,
-          taskDescription: payload?.taskDescription || payload?.title || '',
+          taskDescription: payload?.taskDescription || payload?.title || "",
           workingDir: workflowDir,
           metadata: payload?.metadata || {},
         });
@@ -1717,9 +1775,12 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
                 artifact.filePath,
                 artifact.metadata
               );
-              logger.debug('Saved artifact from leaf workflow resume', { workflowId: id, type: artifact.type });
+              logger.debug("Saved artifact from leaf workflow resume", {
+                workflowId: id,
+                type: artifact.type,
+              });
             } catch (artifactError) {
-              logger.error('Failed to save artifact', artifactError as Error, {
+              logger.error("Failed to save artifact", artifactError as Error, {
                 workflowId: id,
                 type: artifact.type,
               });
@@ -1732,14 +1793,20 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
 
         // If this is a sub-workflow, update its queue entry status and advance the parent queue
         if (workflow.parentWorkflowId) {
-          const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
-          await updateSubWorkflowStatus(id, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+          const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import(
+            "./sub-workflow-queue.js"
+          );
+          await updateSubWorkflowStatus(
+            id,
+            result.success ? "completed" : "failed",
+            result.success ? undefined : result.summary
+          );
 
           // If successful, try to advance the parent queue to continue execution
           if (result.success) {
             const nextWorkflowId = await advanceSubWorkflowQueue(workflow.parentWorkflowId);
             if (nextWorkflowId) {
-              logger.info('Advanced parent queue after leaf workflow resume', {
+              logger.info("Advanced parent queue after leaf workflow resume", {
                 parentWorkflowId: workflow.parentWorkflowId,
                 nextWorkflowId,
               });
@@ -1747,28 +1814,30 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
           }
         }
 
-        logger.info('Leaf workflow resume completed', {
+        logger.info("Leaf workflow resume completed", {
           workflowId: id,
           status: finalStatus,
           success: result.success,
         });
       } catch (asyncError) {
-        logger.error('Leaf workflow resume execution failed', asyncError as Error, { workflowId: id });
+        logger.error("Leaf workflow resume execution failed", asyncError as Error, {
+          workflowId: id,
+        });
         await updateWorkflowStatus(id, WorkflowStatus.FAILED);
 
         if (workflow.parentWorkflowId) {
-          const { updateSubWorkflowStatus } = await import('./sub-workflow-queue.js');
-          await updateSubWorkflowStatus(id, 'failed', (asyncError as Error).message);
+          const { updateSubWorkflowStatus } = await import("./sub-workflow-queue.js");
+          await updateSubWorkflowStatus(id, "failed", (asyncError as Error).message);
         }
       }
     })().catch((error) => {
-      logger.error('Unhandled error in leaf workflow resume', error as Error);
+      logger.error("Unhandled error in leaf workflow resume", error as Error);
     });
 
     return;
   } catch (error) {
-    logger.error('Failed to start workflow resume', error as Error);
-    return res.status(500).json({ error: 'Failed to resume workflow' });
+    logger.error("Failed to start workflow resume", error as Error);
+    return res.status(500).json({ error: "Failed to resume workflow" });
   }
 });
 
@@ -1777,26 +1846,28 @@ router.post('/workflows/:id/resume', async (req: Request, res: Response) => {
  * Retry a failed/stuck sub-workflow
  * Resets the workflow and re-executes it
  */
-router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
+router.post("/workflows/:id/retry", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Get workflow details
-    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import('./workflow-state.js');
-    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+    const { getWorkflow, updateWorkflowStatus, saveArtifact } = await import("./workflow-state.js");
+    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import(
+      "./sub-workflow-queue.js"
+    );
 
     const workflow = await getWorkflow(id);
     if (!workflow) {
       return res.status(404).json({
         success: false,
-        error: 'Workflow not found',
+        error: "Workflow not found",
       });
     }
 
     // Get parent workflow ID to check if this is a sub-workflow
     const parentId = workflow.parentWorkflowId;
 
-    logger.info('Retrying workflow', {
+    logger.info("Retrying workflow", {
       workflowId: id,
       currentStatus: workflow.status,
       parentWorkflowId: parentId,
@@ -1807,7 +1878,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
 
     // If this is a sub-workflow, update queue entry status
     if (parentId) {
-      await updateSubWorkflowStatus(id, 'pending');
+      await updateSubWorkflowStatus(id, "pending");
     }
 
     // Send response immediately
@@ -1823,39 +1894,38 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
     // Execute the workflow asynchronously
     (async () => {
       try {
-        // @ts-ignore - Dynamic import path resolved at runtime
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
 
         // Mark as in_progress
         if (parentId) {
-          await updateSubWorkflowStatus(id, 'in_progress');
+          await updateSubWorkflowStatus(id, "in_progress");
         }
 
         const targetModule = workflow.target_module;
-        const workflowDir = workflow.type === 'new_module'
-          ? getWorkflowDirectory(id, workflow.branchName || `new-module-${targetModule}-${id}`)
-          : targetModule
-            ? getModuleDirectory(targetModule)
-            : getWorkflowDirectory(id, workflow.branchName || 'master');
+        const workflowDir =
+          workflow.type === "new_module"
+            ? getWorkflowDirectory(id, workflow.branchName || `new-module-${targetModule}-${id}`)
+            : targetModule
+              ? getModuleDirectory(targetModule)
+              : getWorkflowDirectory(id, workflow.branchName || "master");
 
         // For new_module workflows, ensure the workflow directory exists
-        if (workflow.type === 'new_module') {
+        if (workflow.type === "new_module") {
           await fs.mkdir(workflowDir, { recursive: true });
         }
 
         await updateWorkflowStatus(id, WorkflowStatus.PLANNING);
 
         const orchestrator = new WorkflowOrchestrator();
-        const payload = typeof workflow.payload === 'string'
-          ? JSON.parse(workflow.payload)
-          : workflow.payload;
+        const payload =
+          typeof workflow.payload === "string" ? JSON.parse(workflow.payload) : workflow.payload;
 
         const result = await orchestrator.execute({
           workflowId: id,
           workflowType: workflow.type,
           targetModule: workflow.target_module,
-          taskDescription: payload.taskDescription || payload.title || '',
+          taskDescription: payload.taskDescription || payload.title || "",
           workingDir: workflowDir,
           metadata: payload.metadata || {},
         });
@@ -1872,9 +1942,9 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
                 artifact.filePath,
                 artifact.metadata
               );
-              logger.debug('Saved artifact from retry', { workflowId: id, type: artifact.type });
+              logger.debug("Saved artifact from retry", { workflowId: id, type: artifact.type });
             } catch (artifactError) {
-              logger.error('Failed to save artifact', artifactError as Error, {
+              logger.error("Failed to save artifact", artifactError as Error, {
                 workflowId: id,
                 type: artifact.type,
               });
@@ -1886,7 +1956,11 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
         await updateWorkflowStatus(id, finalStatus);
 
         if (parentId) {
-          await updateSubWorkflowStatus(id, result.success ? 'completed' : 'failed', result.success ? undefined : result.summary);
+          await updateSubWorkflowStatus(
+            id,
+            result.success ? "completed" : "failed",
+            result.success ? undefined : result.summary
+          );
 
           // If successful, advance parent queue to continue with remaining workflows
           if (result.success) {
@@ -1895,7 +1969,7 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
               const nextWorkflow = await getWorkflow(nextWorkflowId);
               if (!nextWorkflow) break;
 
-              logger.info('Executing next sub-workflow after retry', {
+              logger.info("Executing next sub-workflow after retry", {
                 workflowId: nextWorkflowId,
                 type: nextWorkflow.type,
               });
@@ -1903,21 +1977,22 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
               const nextTargetModule = nextWorkflow.target_module;
               const nextWorkflowDir = nextTargetModule
                 ? getModuleDirectory(nextTargetModule)
-                : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
+                : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || "master");
 
               await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
 
               const nextOrchestrator = new WorkflowOrchestrator();
-              const nextPayload = typeof nextWorkflow.payload === 'string'
-                ? JSON.parse(nextWorkflow.payload)
-                : nextWorkflow.payload;
+              const nextPayload =
+                typeof nextWorkflow.payload === "string"
+                  ? JSON.parse(nextWorkflow.payload)
+                  : nextWorkflow.payload;
 
               try {
                 const nextResult = await nextOrchestrator.execute({
                   workflowId: nextWorkflowId,
                   workflowType: nextWorkflow.type,
                   targetModule: nextWorkflow.target_module,
-                  taskDescription: nextPayload.taskDescription || nextPayload.title || '',
+                  taskDescription: nextPayload.taskDescription || nextPayload.title || "",
                   workingDir: nextWorkflowDir,
                   metadata: nextPayload.metadata || {},
                 });
@@ -1934,9 +2009,12 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
                         artifact.filePath,
                         artifact.metadata
                       );
-                      logger.debug('Saved artifact from retry loop', { workflowId: nextWorkflowId, type: artifact.type });
+                      logger.debug("Saved artifact from retry loop", {
+                        workflowId: nextWorkflowId,
+                        type: artifact.type,
+                      });
                     } catch (artifactError) {
-                      logger.error('Failed to save artifact', artifactError as Error, {
+                      logger.error("Failed to save artifact", artifactError as Error, {
                         workflowId: nextWorkflowId,
                         type: artifact.type,
                       });
@@ -1944,20 +2022,30 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
                   }
                 }
 
-                const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+                const nextFinalStatus = nextResult.success
+                  ? WorkflowStatus.COMPLETED
+                  : WorkflowStatus.FAILED;
                 await updateWorkflowStatus(nextWorkflowId, nextFinalStatus);
-                await updateSubWorkflowStatus(nextWorkflowId, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
+                await updateSubWorkflowStatus(
+                  nextWorkflowId,
+                  nextResult.success ? "completed" : "failed",
+                  nextResult.success ? undefined : nextResult.summary
+                );
 
                 if (!nextResult.success) break; // Stop on failure
 
                 nextWorkflowId = await advanceSubWorkflowQueue(parentId);
               } catch (loopError) {
-                logger.error('Sub-workflow execution failed after retry', loopError as Error, {
+                logger.error("Sub-workflow execution failed after retry", loopError as Error, {
                   workflowId: nextWorkflowId,
                 });
                 if (nextWorkflowId !== null) {
                   await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.FAILED);
-                  await updateSubWorkflowStatus(nextWorkflowId, 'failed', (loopError as Error).message);
+                  await updateSubWorkflowStatus(
+                    nextWorkflowId,
+                    "failed",
+                    (loopError as Error).message
+                  );
                 }
                 break;
               }
@@ -1965,22 +2053,22 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
           }
         }
 
-        logger.info('Retry completed', { workflowId: id, status: finalStatus });
+        logger.info("Retry completed", { workflowId: id, status: finalStatus });
       } catch (asyncError) {
-        logger.error('Retry execution failed', asyncError as Error, { workflowId: id });
+        logger.error("Retry execution failed", asyncError as Error, { workflowId: id });
         await updateWorkflowStatus(id, WorkflowStatus.FAILED);
         if (parentId) {
-          await updateSubWorkflowStatus(id, 'failed', (asyncError as Error).message);
+          await updateSubWorkflowStatus(id, "failed", (asyncError as Error).message);
         }
       }
     })().catch((error) => {
-      logger.error('Unhandled error in retry execution', error as Error);
+      logger.error("Unhandled error in retry execution", error as Error);
     });
 
     return;
   } catch (error) {
-    logger.error('Failed to retry workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to retry workflow' });
+    logger.error("Failed to retry workflow", error as Error);
+    return res.status(500).json({ error: "Failed to retry workflow" });
   }
 });
 
@@ -1988,19 +2076,21 @@ router.post('/workflows/:id/retry', async (req: Request, res: Response) => {
  * POST /api/workflows/:id/skip
  * Skip a failed sub-workflow and continue with remaining workflows
  */
-router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
+router.post("/workflows/:id/skip", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Get workflow details
-    const { getWorkflow, updateWorkflowStatus } = await import('./workflow-state.js');
-    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import('./sub-workflow-queue.js');
+    const { getWorkflow, updateWorkflowStatus } = await import("./workflow-state.js");
+    const { updateSubWorkflowStatus, advanceSubWorkflowQueue } = await import(
+      "./sub-workflow-queue.js"
+    );
 
     const workflow = await getWorkflow(id);
     if (!workflow) {
       return res.status(404).json({
         success: false,
-        error: 'Workflow not found',
+        error: "Workflow not found",
       });
     }
 
@@ -2008,19 +2098,19 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
     if (!parentId) {
       return res.status(400).json({
         success: false,
-        error: 'Cannot skip a root workflow',
-        message: 'Only sub-workflows can be skipped',
+        error: "Cannot skip a root workflow",
+        message: "Only sub-workflows can be skipped",
       });
     }
 
-    logger.info('Skipping workflow', {
+    logger.info("Skipping workflow", {
       workflowId: id,
       parentWorkflowId: parentId,
     });
 
     // Mark workflow as skipped
     await updateWorkflowStatus(id, WorkflowStatus.COMPLETED); // Use COMPLETED since there's no SKIPPED status
-    await updateSubWorkflowStatus(id, 'skipped', 'Manually skipped by user');
+    await updateSubWorkflowStatus(id, "skipped", "Manually skipped by user");
 
     // Send response
     res.json({
@@ -2035,16 +2125,15 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
     // Continue with remaining workflows asynchronously
     (async () => {
       try {
-        // @ts-ignore - Dynamic import path resolved at runtime
         const { WorkflowOrchestrator } = await import(getWorkflowOrchestratorPath());
-        const { getWorkflowDirectory } = await import('./utils/workflow-directory-manager.js');
+        const { getWorkflowDirectory } = await import("./utils/workflow-directory-manager.js");
 
         let nextWorkflowId = await advanceSubWorkflowQueue(parentId);
         while (nextWorkflowId) {
           const nextWorkflow = await getWorkflow(nextWorkflowId);
           if (!nextWorkflow) break;
 
-          logger.info('Executing next sub-workflow after skip', {
+          logger.info("Executing next sub-workflow after skip", {
             workflowId: nextWorkflowId,
             type: nextWorkflow.type,
           });
@@ -2052,56 +2141,65 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
           const nextTargetModule = nextWorkflow.target_module;
           const nextWorkflowDir = nextTargetModule
             ? getModuleDirectory(nextTargetModule)
-            : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || 'master');
+            : getWorkflowDirectory(nextWorkflowId, nextWorkflow.branchName || "master");
 
           await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.PLANNING);
 
           const nextOrchestrator = new WorkflowOrchestrator();
-          const nextPayload = typeof nextWorkflow.payload === 'string'
-            ? JSON.parse(nextWorkflow.payload)
-            : nextWorkflow.payload;
+          const nextPayload =
+            typeof nextWorkflow.payload === "string"
+              ? JSON.parse(nextWorkflow.payload)
+              : nextWorkflow.payload;
 
           try {
             const nextResult = await nextOrchestrator.execute({
               workflowId: nextWorkflowId,
               workflowType: nextWorkflow.type,
               targetModule: nextWorkflow.target_module,
-              taskDescription: nextPayload.taskDescription || nextPayload.title || '',
+              taskDescription: nextPayload.taskDescription || nextPayload.title || "",
               workingDir: nextWorkflowDir,
               metadata: nextPayload.metadata || {},
             });
 
-            const nextFinalStatus = nextResult.success ? WorkflowStatus.COMPLETED : WorkflowStatus.FAILED;
+            const nextFinalStatus = nextResult.success
+              ? WorkflowStatus.COMPLETED
+              : WorkflowStatus.FAILED;
             await updateWorkflowStatus(nextWorkflowId, nextFinalStatus);
-            await updateSubWorkflowStatus(nextWorkflowId, nextResult.success ? 'completed' : 'failed', nextResult.success ? undefined : nextResult.summary);
+            await updateSubWorkflowStatus(
+              nextWorkflowId,
+              nextResult.success ? "completed" : "failed",
+              nextResult.success ? undefined : nextResult.summary
+            );
 
             if (!nextResult.success) break; // Stop on failure
 
             nextWorkflowId = await advanceSubWorkflowQueue(parentId);
           } catch (loopError) {
-            logger.error('Sub-workflow execution failed after skip', loopError as Error, {
+            logger.error("Sub-workflow execution failed after skip", loopError as Error, {
               workflowId: nextWorkflowId,
             });
             if (nextWorkflowId !== null) {
               await updateWorkflowStatus(nextWorkflowId, WorkflowStatus.FAILED);
-              await updateSubWorkflowStatus(nextWorkflowId, 'failed', (loopError as Error).message);
+              await updateSubWorkflowStatus(nextWorkflowId, "failed", (loopError as Error).message);
             }
             break;
           }
         }
 
-        logger.info('Continued execution after skip completed', { skippedWorkflowId: id });
+        logger.info("Continued execution after skip completed", { skippedWorkflowId: id });
       } catch (asyncError) {
-        logger.error('Failed to continue after skip', asyncError as Error, { skippedWorkflowId: id });
+        logger.error("Failed to continue after skip", asyncError as Error, {
+          skippedWorkflowId: id,
+        });
       }
     })().catch((error) => {
-      logger.error('Unhandled error in skip continuation', error as Error);
+      logger.error("Unhandled error in skip continuation", error as Error);
     });
 
     return;
   } catch (error) {
-    logger.error('Failed to skip workflow', error as Error);
-    return res.status(500).json({ error: 'Failed to skip workflow' });
+    logger.error("Failed to skip workflow", error as Error);
+    return res.status(500).json({ error: "Failed to skip workflow" });
   }
 });
 
@@ -2109,22 +2207,22 @@ router.post('/workflows/:id/skip', async (req: Request, res: Response) => {
  * GET /api/workflows/:id/resume-state
  * Get workflow resume state to check if workflow can be resumed
  */
-router.get('/workflows/:id/resume-state', async (req: Request, res: Response) => {
+router.get("/workflows/:id/resume-state", async (req: Request, res: Response) => {
   try {
     const id = parseInt(req.params.id);
 
     // Import getWorkflowResumeState dynamically
-    const { getWorkflowResumeState } = await import('./workflow-state.js');
+    const { getWorkflowResumeState } = await import("./workflow-state.js");
     const resumeState = await getWorkflowResumeState(id);
 
     if (!resumeState) {
-      return res.status(404).json({ error: 'Workflow not found' });
+      return res.status(404).json({ error: "Workflow not found" });
     }
 
     return res.json(resumeState);
   } catch (error) {
-    logger.error('Failed to get workflow resume state', error as Error);
-    return res.status(500).json({ error: 'Failed to get resume state' });
+    logger.error("Failed to get workflow resume state", error as Error);
+    return res.status(500).json({ error: "Failed to get resume state" });
   }
 });
 
@@ -2132,13 +2230,13 @@ router.get('/workflows/:id/resume-state', async (req: Request, res: Response) =>
  * GET /api/modules
  * List all discovered modules
  */
-router.get('/modules', async (_req: Request, res: Response) => {
+router.get("/modules", async (_req: Request, res: Response) => {
   try {
     const modules = await discoverModules();
     return res.json({ modules });
   } catch (error) {
-    logger.error('Failed to list modules', error as Error);
-    return res.status(500).json({ error: 'Failed to list modules' });
+    logger.error("Failed to list modules", error as Error);
+    return res.status(500).json({ error: "Failed to list modules" });
   }
 });
 
@@ -2146,12 +2244,12 @@ router.get('/modules', async (_req: Request, res: Response) => {
  * POST /api/modules/import
  * Import a module from a Git repository
  */
-router.post('/modules/import', async (req: Request, res: Response) => {
+router.post("/modules/import", async (req: Request, res: Response) => {
   try {
     const { url, category, project, tags, autoInstall } = req.body;
 
     if (!url) {
-      return res.status(400).json({ error: 'Git URL is required' });
+      return res.status(400).json({ error: "Git URL is required" });
     }
 
     const result = await importModule({
@@ -2175,10 +2273,10 @@ router.post('/modules/import', async (req: Request, res: Response) => {
       });
     }
   } catch (error: any) {
-    logger.error('Failed to import module', error);
+    logger.error("Failed to import module", error);
     return res.status(500).json({
       success: false,
-      error: error.message || 'Failed to import module',
+      error: error.message || "Failed to import module",
     });
   }
 });
@@ -2187,19 +2285,19 @@ router.post('/modules/import', async (req: Request, res: Response) => {
  * GET /api/modules/:name/remote
  * Get remote repository info for a module
  */
-router.get('/modules/:name/remote', async (req: Request, res: Response) => {
+router.get("/modules/:name/remote", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const remoteInfo = await getModuleRemoteInfo(name);
 
     if (remoteInfo === null) {
-      return res.status(404).json({ error: 'Module not found' });
+      return res.status(404).json({ error: "Module not found" });
     }
 
     return res.json({ remoteInfo });
   } catch (error) {
-    logger.error('Failed to get module remote info', error as Error);
-    return res.status(500).json({ error: 'Failed to get module remote info' });
+    logger.error("Failed to get module remote info", error as Error);
+    return res.status(500).json({ error: "Failed to get module remote info" });
   }
 });
 
@@ -2207,7 +2305,7 @@ router.get('/modules/:name/remote', async (req: Request, res: Response) => {
  * DELETE /api/modules/:name
  * Delete a module (local files and optionally remote repository)
  */
-router.delete('/modules/:name', async (req: Request, res: Response) => {
+router.delete("/modules/:name", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const { deleteRemoteRepo, githubToken } = req.body;
@@ -2232,10 +2330,10 @@ router.delete('/modules/:name', async (req: Request, res: Response) => {
       });
     }
   } catch (error: any) {
-    logger.error('Failed to delete module', error);
+    logger.error("Failed to delete module", error);
     return res.status(500).json({
       success: false,
-      error: error.message || 'Failed to delete module',
+      error: error.message || "Failed to delete module",
     });
   }
 });
@@ -2244,19 +2342,19 @@ router.delete('/modules/:name', async (req: Request, res: Response) => {
  * GET /api/modules/:name
  * Get detailed information about a specific module
  */
-router.get('/modules/:name', async (req: Request, res: Response) => {
+router.get("/modules/:name", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const module = await getModuleInfo(name);
 
     if (!module) {
-      return res.status(404).json({ error: 'Module not found' });
+      return res.status(404).json({ error: "Module not found" });
     }
 
     return res.json({ module });
   } catch (error) {
-    logger.error('Failed to get module info', error as Error);
-    return res.status(500).json({ error: 'Failed to get module info' });
+    logger.error("Failed to get module info", error as Error);
+    return res.status(500).json({ error: "Failed to get module info" });
   }
 });
 
@@ -2264,14 +2362,14 @@ router.get('/modules/:name', async (req: Request, res: Response) => {
  * GET /api/modules/:name/stats
  * Get statistics for a module
  */
-router.get('/modules/:name/stats', async (req: Request, res: Response) => {
+router.get("/modules/:name/stats", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const stats = await getModuleStats(name);
     return res.json({ stats });
   } catch (error) {
-    logger.error('Failed to get module stats', error as Error);
-    return res.status(500).json({ error: 'Failed to get module stats' });
+    logger.error("Failed to get module stats", error as Error);
+    return res.status(500).json({ error: "Failed to get module stats" });
   }
 });
 
@@ -2279,15 +2377,15 @@ router.get('/modules/:name/stats', async (req: Request, res: Response) => {
  * GET /api/modules/:name/commits
  * Get commit history for a module
  */
-router.get('/modules/:name/commits', async (req: Request, res: Response) => {
+router.get("/modules/:name/commits", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const limit = parseInt(req.query.limit as string) || 50;
     const commits = await getModuleCommitHistory(name, limit);
     return res.json({ commits });
   } catch (error) {
-    logger.error('Failed to get module commits', error as Error);
-    return res.status(500).json({ error: 'Failed to get module commits' });
+    logger.error("Failed to get module commits", error as Error);
+    return res.status(500).json({ error: "Failed to get module commits" });
   }
 });
 
@@ -2295,14 +2393,14 @@ router.get('/modules/:name/commits', async (req: Request, res: Response) => {
  * GET /api/modules/:name/prompts
  * List all prompts for a module
  */
-router.get('/modules/:name/prompts', async (req: Request, res: Response) => {
+router.get("/modules/:name/prompts", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const prompts = await getModulePrompts(name);
     return res.json({ prompts });
   } catch (error) {
-    logger.error('Failed to get module prompts', error as Error);
-    return res.status(500).json({ error: 'Failed to get module prompts' });
+    logger.error("Failed to get module prompts", error as Error);
+    return res.status(500).json({ error: "Failed to get module prompts" });
   }
 });
 
@@ -2310,19 +2408,19 @@ router.get('/modules/:name/prompts', async (req: Request, res: Response) => {
  * GET /api/modules/:name/prompts/:promptName
  * Get content of a specific prompt
  */
-router.get('/modules/:name/prompts/:promptName', async (req: Request, res: Response) => {
+router.get("/modules/:name/prompts/:promptName", async (req: Request, res: Response) => {
   try {
     const { name, promptName } = req.params;
     const content = await getModulePromptContent(name, promptName);
 
     if (!content) {
-      return res.status(404).json({ error: 'Prompt not found' });
+      return res.status(404).json({ error: "Prompt not found" });
     }
 
     return res.json({ name: promptName, content });
   } catch (error) {
-    logger.error('Failed to get prompt content', error as Error);
-    return res.status(500).json({ error: 'Failed to get prompt content' });
+    logger.error("Failed to get prompt content", error as Error);
+    return res.status(500).json({ error: "Failed to get prompt content" });
   }
 });
 
@@ -2330,27 +2428,27 @@ router.get('/modules/:name/prompts/:promptName', async (req: Request, res: Respo
  * PUT /api/modules/:name/prompts/:promptName
  * Update a module prompt
  */
-router.put('/modules/:name/prompts/:promptName', async (req: Request, res: Response) => {
+router.put("/modules/:name/prompts/:promptName", async (req: Request, res: Response) => {
   try {
     const { name, promptName } = req.params;
     const { content } = req.body;
 
     if (!content) {
-      return res.status(400).json({ error: 'Content is required' });
+      return res.status(400).json({ error: "Content is required" });
     }
 
     const success = await updateModulePrompt(name, promptName, content);
 
     if (!success) {
-      return res.status(500).json({ error: 'Failed to update prompt' });
+      return res.status(500).json({ error: "Failed to update prompt" });
     }
 
-    logger.info('Module prompt updated', { module: name, prompt: promptName });
+    logger.info("Module prompt updated", { module: name, prompt: promptName });
 
     return res.json({ success: true, name: promptName });
   } catch (error) {
-    logger.error('Failed to update module prompt', error as Error);
-    return res.status(500).json({ error: 'Failed to update module prompt' });
+    logger.error("Failed to update module prompt", error as Error);
+    return res.status(500).json({ error: "Failed to update module prompt" });
   }
 });
 
@@ -2362,15 +2460,15 @@ router.put('/modules/:name/prompts/:promptName', async (req: Request, res: Respo
  * POST /api/modules/:name/install
  * Install dependencies for a module
  */
-router.post('/modules/:name/install', async (req: Request, res: Response) => {
+router.post("/modules/:name/install", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operationId = await deploymentManager.installModule(name);
-    logger.info('Module installation started', { module: name, operationId });
-    return res.json({ operationId, message: 'Installation started' });
+    logger.info("Module installation started", { module: name, operationId });
+    return res.json({ operationId, message: "Installation started" });
   } catch (error) {
-    logger.error('Failed to start module installation', error as Error);
-    return res.status(500).json({ error: 'Failed to start installation' });
+    logger.error("Failed to start module installation", error as Error);
+    return res.status(500).json({ error: "Failed to start installation" });
   }
 });
 
@@ -2378,15 +2476,15 @@ router.post('/modules/:name/install', async (req: Request, res: Response) => {
  * POST /api/modules/:name/build
  * Build a module
  */
-router.post('/modules/:name/build', async (req: Request, res: Response) => {
+router.post("/modules/:name/build", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operationId = await deploymentManager.buildModule(name);
-    logger.info('Module build started', { module: name, operationId });
-    return res.json({ operationId, message: 'Build started' });
+    logger.info("Module build started", { module: name, operationId });
+    return res.json({ operationId, message: "Build started" });
   } catch (error) {
-    logger.error('Failed to start module build', error as Error);
-    return res.status(500).json({ error: 'Failed to start build' });
+    logger.error("Failed to start module build", error as Error);
+    return res.status(500).json({ error: "Failed to start build" });
   }
 });
 
@@ -2394,15 +2492,15 @@ router.post('/modules/:name/build', async (req: Request, res: Response) => {
  * POST /api/modules/:name/test
  * Run tests for a module
  */
-router.post('/modules/:name/test', async (req: Request, res: Response) => {
+router.post("/modules/:name/test", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operationId = await deploymentManager.testModule(name);
-    logger.info('Module tests started', { module: name, operationId });
-    return res.json({ operationId, message: 'Tests started' });
+    logger.info("Module tests started", { module: name, operationId });
+    return res.json({ operationId, message: "Tests started" });
   } catch (error) {
-    logger.error('Failed to start module tests', error as Error);
-    return res.status(500).json({ error: 'Failed to start tests' });
+    logger.error("Failed to start module tests", error as Error);
+    return res.status(500).json({ error: "Failed to start tests" });
   }
 });
 
@@ -2410,15 +2508,15 @@ router.post('/modules/:name/test', async (req: Request, res: Response) => {
  * POST /api/modules/:name/start
  * Start a module server
  */
-router.post('/modules/:name/start', async (req: Request, res: Response) => {
+router.post("/modules/:name/start", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operationId = await deploymentManager.startModule(name);
-    logger.info('Module server started', { module: name, operationId });
-    return res.json({ operationId, message: 'Server started' });
+    logger.info("Module server started", { module: name, operationId });
+    return res.json({ operationId, message: "Server started" });
   } catch (error) {
-    logger.error('Failed to start module server', error as Error);
-    return res.status(500).json({ error: 'Failed to start server' });
+    logger.error("Failed to start module server", error as Error);
+    return res.status(500).json({ error: "Failed to start server" });
   }
 });
 
@@ -2426,15 +2524,15 @@ router.post('/modules/:name/start', async (req: Request, res: Response) => {
  * POST /api/modules/:name/stop
  * Stop a running module
  */
-router.post('/modules/:name/stop', async (req: Request, res: Response) => {
+router.post("/modules/:name/stop", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operationId = await deploymentManager.stopModule(name);
-    logger.info('Module server stopped', { module: name, operationId });
-    return res.json({ operationId, message: 'Server stopped' });
+    logger.info("Module server stopped", { module: name, operationId });
+    return res.json({ operationId, message: "Server stopped" });
   } catch (error) {
-    logger.error('Failed to stop module server', error as Error);
-    return res.status(500).json({ error: 'Failed to stop server' });
+    logger.error("Failed to stop module server", error as Error);
+    return res.status(500).json({ error: "Failed to stop server" });
   }
 });
 
@@ -2442,14 +2540,14 @@ router.post('/modules/:name/stop', async (req: Request, res: Response) => {
  * GET /api/modules/:name/status
  * Check if a module is running
  */
-router.get('/modules/:name/status', async (req: Request, res: Response) => {
+router.get("/modules/:name/status", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const isRunning = deploymentManager.isModuleRunning(name);
     return res.json({ moduleName: name, isRunning });
   } catch (error) {
-    logger.error('Failed to check module status', error as Error);
-    return res.status(500).json({ error: 'Failed to check status' });
+    logger.error("Failed to check module status", error as Error);
+    return res.status(500).json({ error: "Failed to check status" });
   }
 });
 
@@ -2457,15 +2555,15 @@ router.get('/modules/:name/status', async (req: Request, res: Response) => {
  * GET /api/modules/:name/logs
  * Get recent console logs for a module (running or stopped)
  */
-router.get('/modules/:name/logs', async (req: Request, res: Response) => {
+router.get("/modules/:name/logs", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const lines = parseInt(req.query.lines as string) || 100;
     const logs = await deploymentManager.getModuleLogs(name, lines);
     return res.json({ moduleName: name, logs, count: logs.length });
   } catch (error) {
-    logger.error('Failed to get module logs', error as Error);
-    return res.status(500).json({ error: 'Failed to get logs' });
+    logger.error("Failed to get module logs", error as Error);
+    return res.status(500).json({ error: "Failed to get logs" });
   }
 });
 
@@ -2473,19 +2571,18 @@ router.get('/modules/:name/logs', async (req: Request, res: Response) => {
  * GET /api/modules/:name/auto-load
  * Get auto-load setting for a module
  */
-router.get('/modules/:name/auto-load', async (req: Request, res: Response) => {
+router.get("/modules/:name/auto-load", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const result = await query(
-      'SELECT auto_load FROM module_settings WHERE module_name = ?',
-      [name]
-    );
+    const result = await query("SELECT auto_load FROM module_settings WHERE module_name = ?", [
+      name,
+    ]);
 
     const autoLoad = result.length > 0 ? result[0].auto_load : false;
     return res.json({ moduleName: name, autoLoad: Boolean(autoLoad) });
   } catch (error) {
-    logger.error('Failed to get auto-load setting', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-load setting' });
+    logger.error("Failed to get auto-load setting", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-load setting" });
   }
 });
 
@@ -2493,13 +2590,13 @@ router.get('/modules/:name/auto-load', async (req: Request, res: Response) => {
  * PUT /api/modules/:name/auto-load
  * Update auto-load setting for a module
  */
-router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
+router.put("/modules/:name/auto-load", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const { autoLoad } = req.body;
 
-    if (typeof autoLoad !== 'boolean') {
-      return res.status(400).json({ error: 'autoLoad must be a boolean' });
+    if (typeof autoLoad !== "boolean") {
+      return res.status(400).json({ error: "autoLoad must be a boolean" });
     }
 
     // Insert or update the setting
@@ -2510,15 +2607,15 @@ router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
       [name, autoLoad, autoLoad]
     );
 
-    logger.info('Module auto-load setting updated', { module: name, autoLoad });
+    logger.info("Module auto-load setting updated", { module: name, autoLoad });
     return res.json({
       moduleName: name,
       autoLoad,
-      message: `Auto-load ${autoLoad ? 'enabled' : 'disabled'}`
+      message: `Auto-load ${autoLoad ? "enabled" : "disabled"}`,
     });
   } catch (error) {
-    logger.error('Failed to update auto-load setting', error as Error);
-    return res.status(500).json({ error: 'Failed to update auto-load setting' });
+    logger.error("Failed to update auto-load setting", error as Error);
+    return res.status(500).json({ error: "Failed to update auto-load setting" });
   }
 });
 
@@ -2526,19 +2623,18 @@ router.put('/modules/:name/auto-load', async (req: Request, res: Response) => {
  * GET /api/modules/:name/auto-update
  * Get auto-update setting for a module
  */
-router.get('/modules/:name/auto-update', async (req: Request, res: Response) => {
+router.get("/modules/:name/auto-update", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const result = await query(
-      'SELECT auto_update FROM module_settings WHERE module_name = ?',
-      [name]
-    );
+    const result = await query("SELECT auto_update FROM module_settings WHERE module_name = ?", [
+      name,
+    ]);
 
     const autoUpdate = result.length > 0 ? result[0].auto_update : false;
     return res.json({ moduleName: name, autoUpdate: Boolean(autoUpdate) });
   } catch (error) {
-    logger.error('Failed to get auto-update setting', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-update setting' });
+    logger.error("Failed to get auto-update setting", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-update setting" });
   }
 });
 
@@ -2546,13 +2642,13 @@ router.get('/modules/:name/auto-update', async (req: Request, res: Response) => 
  * PUT /api/modules/:name/auto-update
  * Update auto-update setting for a module
  */
-router.put('/modules/:name/auto-update', async (req: Request, res: Response) => {
+router.put("/modules/:name/auto-update", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const { autoUpdate } = req.body;
 
-    if (typeof autoUpdate !== 'boolean') {
-      return res.status(400).json({ error: 'autoUpdate must be a boolean' });
+    if (typeof autoUpdate !== "boolean") {
+      return res.status(400).json({ error: "autoUpdate must be a boolean" });
     }
 
     // Insert or update the setting
@@ -2563,15 +2659,15 @@ router.put('/modules/:name/auto-update', async (req: Request, res: Response) => 
       [name, autoUpdate, autoUpdate]
     );
 
-    logger.info('Module auto-update setting updated', { module: name, autoUpdate });
+    logger.info("Module auto-update setting updated", { module: name, autoUpdate });
     return res.json({
       moduleName: name,
       autoUpdate,
-      message: `Auto-update ${autoUpdate ? 'enabled' : 'disabled'}`
+      message: `Auto-update ${autoUpdate ? "enabled" : "disabled"}`,
     });
   } catch (error) {
-    logger.error('Failed to update auto-update setting', error as Error);
-    return res.status(500).json({ error: 'Failed to update auto-update setting' });
+    logger.error("Failed to update auto-update setting", error as Error);
+    return res.status(500).json({ error: "Failed to update auto-update setting" });
   }
 });
 
@@ -2579,13 +2675,13 @@ router.put('/modules/:name/auto-update', async (req: Request, res: Response) => 
  * GET /api/deployments
  * Get all deployment operations
  */
-router.get('/deployments', async (_req: Request, res: Response) => {
+router.get("/deployments", async (_req: Request, res: Response) => {
   try {
     const operations = deploymentManager.getAllOperations();
     return res.json({ operations });
   } catch (error) {
-    logger.error('Failed to fetch deployment operations', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch operations' });
+    logger.error("Failed to fetch deployment operations", error as Error);
+    return res.status(500).json({ error: "Failed to fetch operations" });
   }
 });
 
@@ -2593,19 +2689,19 @@ router.get('/deployments', async (_req: Request, res: Response) => {
  * GET /api/deployments/:operationId
  * Get a specific deployment operation
  */
-router.get('/deployments/:operationId', async (req: Request, res: Response) => {
+router.get("/deployments/:operationId", async (req: Request, res: Response) => {
   try {
     const { operationId } = req.params;
     const operation = deploymentManager.getOperation(operationId);
 
     if (!operation) {
-      return res.status(404).json({ error: 'Operation not found' });
+      return res.status(404).json({ error: "Operation not found" });
     }
 
     return res.json({ operation });
   } catch (error) {
-    logger.error('Failed to fetch deployment operation', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch operation' });
+    logger.error("Failed to fetch deployment operation", error as Error);
+    return res.status(500).json({ error: "Failed to fetch operation" });
   }
 });
 
@@ -2613,14 +2709,14 @@ router.get('/deployments/:operationId', async (req: Request, res: Response) => {
  * GET /api/modules/:name/deployments
  * Get all deployment operations for a specific module
  */
-router.get('/modules/:name/deployments', async (req: Request, res: Response) => {
+router.get("/modules/:name/deployments", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const operations = deploymentManager.getModuleOperations(name);
     return res.json({ operations });
   } catch (error) {
-    logger.error('Failed to fetch module deployments', error as Error);
-    return res.status(500).json({ error: 'Failed to fetch deployments' });
+    logger.error("Failed to fetch module deployments", error as Error);
+    return res.status(500).json({ error: "Failed to fetch deployments" });
   }
 });
 
@@ -2628,14 +2724,14 @@ router.get('/modules/:name/deployments', async (req: Request, res: Response) => 
  * GET /api/modules/:name/scripts
  * Get available scripts from package.json
  */
-router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
+router.get("/modules/:name/scripts", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
-    const modulePath = path.join(process.cwd(), '..', 'modules', name);
-    const packageJsonPath = path.join(modulePath, 'package.json');
+    const modulePath = path.join(process.cwd(), "..", "modules", name);
+    const packageJsonPath = path.join(modulePath, "package.json");
 
     try {
-      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageContent = await fs.readFile(packageJsonPath, "utf-8");
       const packageJson = JSON.parse(packageContent);
 
       const scripts = packageJson.scripts || {};
@@ -2646,18 +2742,18 @@ router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
         scripts,
       });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return res.status(404).json({
           success: false,
-          error: 'package.json not found',
+          error: "package.json not found",
           message: `Module ${name} does not have a package.json file`,
         });
       }
       throw error;
     }
   } catch (error) {
-    logger.error('Failed to get module scripts', error as Error);
-    return res.status(500).json({ error: 'Failed to get module scripts' });
+    logger.error("Failed to get module scripts", error as Error);
+    return res.status(500).json({ error: "Failed to get module scripts" });
   }
 });
 
@@ -2665,44 +2761,44 @@ router.get('/modules/:name/scripts', async (req: Request, res: Response) => {
  * POST /api/modules/:name/run-script
  * Run a script from package.json or built-in npm commands
  */
-router.post('/modules/:name/run-script', async (req: Request, res: Response) => {
+router.post("/modules/:name/run-script", async (req: Request, res: Response) => {
   try {
     const { name } = req.params;
     const { scriptName } = req.body;
 
-    if (!scriptName || typeof scriptName !== 'string') {
+    if (!scriptName || typeof scriptName !== "string") {
       return res.status(400).json({
         success: false,
-        error: 'Missing scriptName',
-        message: 'scriptName is required in the request body',
+        error: "Missing scriptName",
+        message: "scriptName is required in the request body",
       });
     }
 
     // Built-in npm commands that don't need to be in package.json
-    const builtInCommands = ['install', 'ci', 'update', 'outdated', 'prune'];
+    const builtInCommands = ["install", "ci", "update", "outdated", "prune"];
     const isBuiltIn = builtInCommands.includes(scriptName);
 
     // Verify the module has package.json
-    const modulePath = path.join(process.cwd(), '..', 'modules', name);
-    const packageJsonPath = path.join(modulePath, 'package.json');
+    const modulePath = path.join(process.cwd(), "..", "modules", name);
+    const packageJsonPath = path.join(modulePath, "package.json");
 
     try {
-      const packageContent = await fs.readFile(packageJsonPath, 'utf-8');
+      const packageContent = await fs.readFile(packageJsonPath, "utf-8");
       const packageJson = JSON.parse(packageContent);
 
       // For non-built-in commands, verify the script exists in package.json
       if (!isBuiltIn && (!packageJson.scripts || !packageJson.scripts[scriptName])) {
         return res.status(404).json({
           success: false,
-          error: 'Script not found',
+          error: "Script not found",
           message: `Script "${scriptName}" not found in package.json`,
         });
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return res.status(404).json({
           success: false,
-          error: 'package.json not found',
+          error: "package.json not found",
           message: `Module ${name} does not have a package.json file`,
         });
       }
@@ -2711,7 +2807,7 @@ router.post('/modules/:name/run-script', async (req: Request, res: Response) => 
 
     // Run the script using deployment manager
     const operationId = await deploymentManager.runPackageScript(name, scriptName);
-    logger.info('Module script started', { module: name, script: scriptName, operationId });
+    logger.info("Module script started", { module: name, script: scriptName, operationId });
 
     return res.json({
       success: true,
@@ -2719,8 +2815,8 @@ router.post('/modules/:name/run-script', async (req: Request, res: Response) => 
       message: `Script "${scriptName}" started`,
     });
   } catch (error) {
-    logger.error('Failed to run module script', error as Error);
-    return res.status(500).json({ error: 'Failed to run script' });
+    logger.error("Failed to run module script", error as Error);
+    return res.status(500).json({ error: "Failed to run script" });
   }
 });
 
@@ -2732,9 +2828,9 @@ router.post('/modules/:name/run-script', async (req: Request, res: Response) => 
  * GET /api/system/branches
  * List all available git branches (local and remote)
  */
-router.get('/system/branches', async (_req: Request, res: Response) => {
+router.get("/system/branches", async (_req: Request, res: Response) => {
   try {
-    const { listBranches, getCurrentBranch } = await import('./utils/branch-switcher.js');
+    const { listBranches, getCurrentBranch } = await import("./utils/branch-switcher.js");
     const branches = await listBranches();
     const currentBranch = await getCurrentBranch();
 
@@ -2744,8 +2840,8 @@ router.get('/system/branches', async (_req: Request, res: Response) => {
       currentBranch,
     });
   } catch (error) {
-    logger.error('Failed to list branches', error as Error);
-    return res.status(500).json({ error: 'Failed to list branches' });
+    logger.error("Failed to list branches", error as Error);
+    return res.status(500).json({ error: "Failed to list branches" });
   }
 });
 
@@ -2753,18 +2849,18 @@ router.get('/system/branches', async (_req: Request, res: Response) => {
  * POST /api/system/switch-branch
  * Switch git branch with automatic rebuild and failsafe rollback
  */
-router.post('/system/switch-branch', async (req: Request, res: Response): Promise<void> => {
+router.post("/system/switch-branch", async (req: Request, res: Response): Promise<void> => {
   try {
     const { branch } = req.body;
 
-    if (!branch || typeof branch !== 'string') {
-      res.status(400).json({ error: 'Branch name is required' });
+    if (!branch || typeof branch !== "string") {
+      res.status(400).json({ error: "Branch name is required" });
       return;
     }
 
-    logger.info('Branch switch requested', { branch });
+    logger.info("Branch switch requested", { branch });
 
-    const { switchBranchWithRebuild } = await import('./utils/branch-switcher.js');
+    const { switchBranchWithRebuild } = await import("./utils/branch-switcher.js");
     const result = await switchBranchWithRebuild(branch);
 
     if (result.success) {
@@ -2775,10 +2871,10 @@ router.post('/system/switch-branch', async (req: Request, res: Response): Promis
       return;
     }
   } catch (error) {
-    logger.error('Failed to switch branch', error as Error);
+    logger.error("Failed to switch branch", error as Error);
     res.status(500).json({
       success: false,
-      error: 'Failed to switch branch',
+      error: "Failed to switch branch",
       message: (error as Error).message,
     });
     return;
@@ -2789,49 +2885,47 @@ router.post('/system/switch-branch', async (req: Request, res: Response): Promis
  * POST /api/system/rebuild-restart
  * Rebuild and restart the entire AIDeveloper application
  */
-router.post('/system/rebuild-restart', async (_req: Request, res: Response): Promise<void> => {
+router.post("/system/rebuild-restart", async (_req: Request, res: Response): Promise<void> => {
   try {
-    logger.info('Rebuild and restart triggered via API');
+    logger.info("Rebuild and restart triggered via API");
 
     // Return success immediately - the restart will happen asynchronously
     res.json({
       success: true,
-      message: 'Rebuild and restart initiated. The server will restart in a few seconds.'
+      message: "Rebuild and restart initiated. The server will restart in a few seconds.",
     });
 
     // Execute rebuild and restart asynchronously
     setTimeout(async (): Promise<void> => {
       try {
-        const { spawn } = await import('child_process');
-        const path = await import('path');
+        const { spawn } = await import("child_process");
+        const path = await import("path");
 
         // Get the script path
-        const scriptPath = path.join(process.cwd(), 'scripts', 'rebuild-restart.sh');
+        const scriptPath = path.join(process.cwd(), "scripts", "rebuild-restart.sh");
 
         // Create a detached process that will survive this server shutdown
-        const restartProcess = spawn('bash', [scriptPath], {
+        const restartProcess = spawn("bash", [scriptPath], {
           detached: true,
-          stdio: 'ignore',
-          cwd: process.cwd()
+          stdio: "ignore",
+          cwd: process.cwd(),
         });
 
         restartProcess.unref();
 
-        logger.info('Restart script launched, shutting down current server');
+        logger.info("Restart script launched, shutting down current server");
 
         // Exit this process to allow restart
         setTimeout(() => {
           process.exit(0);
         }, 1000);
-
       } catch (error) {
-        logger.error('Failed to execute rebuild and restart', error as Error);
+        logger.error("Failed to execute rebuild and restart", error as Error);
       }
     }, 500);
-
   } catch (error) {
-    logger.error('Failed to initiate rebuild and restart', error as Error);
-    res.status(500).json({ error: 'Failed to initiate rebuild and restart' });
+    logger.error("Failed to initiate rebuild and restart", error as Error);
+    res.status(500).json({ error: "Failed to initiate rebuild and restart" });
     return;
   }
 });
@@ -2844,14 +2938,14 @@ router.post('/system/rebuild-restart', async (_req: Request, res: Response): Pro
  * GET /api/auto-fix/config
  * Get current auto-fix configuration
  */
-router.get('/auto-fix/config', async (_req: Request, res: Response) => {
+router.get("/auto-fix/config", async (_req: Request, res: Response) => {
   try {
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const config = autoFixManager.getConfig();
     return res.json({ config });
   } catch (error) {
-    logger.error('Failed to get auto-fix config', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-fix config' });
+    logger.error("Failed to get auto-fix config", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-fix config" });
   }
 });
 
@@ -2859,16 +2953,16 @@ router.get('/auto-fix/config', async (_req: Request, res: Response) => {
  * PUT /api/auto-fix/config
  * Update auto-fix configuration
  */
-router.put('/auto-fix/config', async (req: Request, res: Response) => {
+router.put("/auto-fix/config", async (req: Request, res: Response) => {
   try {
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     await autoFixManager.updateConfig(req.body);
     const config = autoFixManager.getConfig();
-    logger.info('Auto-fix config updated', config);
+    logger.info("Auto-fix config updated", config);
     return res.json({ config, success: true });
   } catch (error) {
-    logger.error('Failed to update auto-fix config', error as Error);
-    return res.status(500).json({ error: 'Failed to update auto-fix config' });
+    logger.error("Failed to update auto-fix config", error as Error);
+    return res.status(500).json({ error: "Failed to update auto-fix config" });
   }
 });
 
@@ -2876,27 +2970,27 @@ router.put('/auto-fix/config', async (req: Request, res: Response) => {
  * POST /api/workflows/:id/auto-fix
  * Manually trigger auto-fix for a specific workflow
  */
-router.post('/workflows/:id/auto-fix', async (req: Request, res: Response) => {
+router.post("/workflows/:id/auto-fix", async (req: Request, res: Response) => {
   try {
     const workflowId = parseInt(req.params.id);
 
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
 
-    logger.info('Manual auto-fix triggered', { workflowId });
+    logger.info("Manual auto-fix triggered", { workflowId });
 
     // Trigger auto-fix asynchronously
     autoFixManager.triggerAutoFix(workflowId).catch((error) => {
-      logger.error('Auto-fix failed', error as Error, { workflowId });
+      logger.error("Auto-fix failed", error as Error, { workflowId });
     });
 
     return res.json({
       success: true,
-      message: 'Auto-fix triggered',
+      message: "Auto-fix triggered",
       workflowId,
     });
   } catch (error) {
-    logger.error('Failed to trigger auto-fix', error as Error);
-    return res.status(500).json({ error: 'Failed to trigger auto-fix' });
+    logger.error("Failed to trigger auto-fix", error as Error);
+    return res.status(500).json({ error: "Failed to trigger auto-fix" });
   }
 });
 
@@ -2904,11 +2998,11 @@ router.post('/workflows/:id/auto-fix', async (req: Request, res: Response) => {
  * GET /api/workflows/:id/auto-fix/status
  * Get auto-fix status for a workflow
  */
-router.get('/workflows/:id/auto-fix/status', async (req: Request, res: Response) => {
+router.get("/workflows/:id/auto-fix/status", async (req: Request, res: Response) => {
   try {
     const workflowId = parseInt(req.params.id);
 
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const attempts = autoFixManager.getAutoFixStatus(workflowId);
 
     return res.json({
@@ -2917,8 +3011,8 @@ router.get('/workflows/:id/auto-fix/status', async (req: Request, res: Response)
       totalAttempts: attempts.length,
     });
   } catch (error) {
-    logger.error('Failed to get auto-fix status', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-fix status' });
+    logger.error("Failed to get auto-fix status", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-fix status" });
   }
 });
 
@@ -2926,18 +3020,18 @@ router.get('/workflows/:id/auto-fix/status', async (req: Request, res: Response)
  * GET /api/auto-fix/active
  * Get all active auto-fix attempts
  */
-router.get('/auto-fix/active', async (_req: Request, res: Response) => {
+router.get("/auto-fix/active", async (_req: Request, res: Response) => {
   try {
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const activeAttempts = autoFixManager.getActiveAttempts();
 
     return res.json({
       count: activeAttempts.length,
-      attempts: activeAttempts
+      attempts: activeAttempts,
     });
   } catch (error) {
-    logger.error('Failed to get active auto-fixes', error as Error);
-    return res.status(500).json({ error: 'Failed to get active auto-fixes' });
+    logger.error("Failed to get active auto-fixes", error as Error);
+    return res.status(500).json({ error: "Failed to get active auto-fixes" });
   }
 });
 
@@ -2945,20 +3039,20 @@ router.get('/auto-fix/active', async (_req: Request, res: Response) => {
  * GET /api/auto-fix/history
  * Get auto-fix history with optional limit
  */
-router.get('/auto-fix/history', async (req: Request, res: Response) => {
+router.get("/auto-fix/history", async (req: Request, res: Response) => {
   try {
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
 
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const attempts = autoFixManager.getAllAttempts(limit);
 
     return res.json({
       count: attempts.length,
-      attempts
+      attempts,
     });
   } catch (error) {
-    logger.error('Failed to get auto-fix history', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-fix history' });
+    logger.error("Failed to get auto-fix history", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-fix history" });
   }
 });
 
@@ -2966,15 +3060,15 @@ router.get('/auto-fix/history', async (req: Request, res: Response) => {
  * GET /api/auto-fix/summary
  * Get auto-fix summary statistics
  */
-router.get('/auto-fix/summary', async (_req: Request, res: Response) => {
+router.get("/auto-fix/summary", async (_req: Request, res: Response) => {
   try {
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const summary = autoFixManager.getSummary();
 
     return res.json(summary);
   } catch (error) {
-    logger.error('Failed to get auto-fix summary', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-fix summary' });
+    logger.error("Failed to get auto-fix summary", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-fix summary" });
   }
 });
 
@@ -2982,23 +3076,23 @@ router.get('/auto-fix/summary', async (_req: Request, res: Response) => {
  * GET /api/auto-fix/:attemptId
  * Get specific auto-fix attempt details
  */
-router.get('/auto-fix/:attemptId', async (req: Request, res: Response) => {
+router.get("/auto-fix/:attemptId", async (req: Request, res: Response) => {
   try {
     const attemptId = req.params.attemptId;
 
-    const { autoFixManager } = await import('./utils/auto-fix-manager.js');
+    const { autoFixManager } = await import("./utils/auto-fix-manager.js");
     const attempt = autoFixManager.getAttempt(attemptId);
 
     if (!attempt) {
-      return res.status(404).json({ error: 'Auto-fix attempt not found' });
+      return res.status(404).json({ error: "Auto-fix attempt not found" });
     }
 
     return res.json({
-      attempt
+      attempt,
     });
   } catch (error) {
-    logger.error('Failed to get auto-fix attempt', error as Error);
-    return res.status(500).json({ error: 'Failed to get auto-fix attempt' });
+    logger.error("Failed to get auto-fix attempt", error as Error);
+    return res.status(500).json({ error: "Failed to get auto-fix attempt" });
   }
 });
 

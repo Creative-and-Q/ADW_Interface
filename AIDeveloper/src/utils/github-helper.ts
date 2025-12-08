@@ -3,10 +3,10 @@
  * Provides utilities for GitHub operations like creating PRs
  */
 
-import { execSync } from 'child_process';
-import { config } from '../config.js';
-import * as logger from './logger.js';
-import { pushChanges } from './git-helper.js';
+import { execSync } from "child_process";
+import { config } from "../config.js";
+import * as logger from "./logger.js";
+import { pushChanges } from "./git-helper.js";
 
 /**
  * Create a pull request on GitHub
@@ -21,14 +21,14 @@ export async function createPullRequest(
   try {
     // Check if GitHub is configured
     if (!config.github.token || !config.github.owner || !config.github.repo) {
-      logger.warn('GitHub not configured - skipping PR creation');
+      logger.warn("GitHub not configured - skipping PR creation");
       return {
         success: false,
-        error: 'GitHub not configured (missing GITHUB_TOKEN, GITHUB_OWNER, or GITHUB_REPO)',
+        error: "GitHub not configured (missing GITHUB_TOKEN, GITHUB_OWNER, or GITHUB_REPO)",
       };
     }
 
-    logger.info('Creating pull request', { branchName, workflowType });
+    logger.info("Creating pull request", { branchName, workflowType });
 
     // Push branch to remote
     const pushResult = await pushChanges(branchName, workingDir);
@@ -58,26 +58,26 @@ ${summary}
 `;
 
     // Use GitHub CLI to create PR
-    logger.info('Creating PR via GitHub CLI');
+    logger.info("Creating PR via GitHub CLI");
     const prCommand = `gh pr create --title "${prTitle}" --body "${prBody.replace(/"/g, '\\"')}" --base ${config.git.defaultBranch} --head ${branchName}`;
 
     const prUrl = execSync(prCommand, {
       cwd: workingDir,
-      encoding: 'utf-8',
+      encoding: "utf-8",
       env: {
         ...process.env,
         GH_TOKEN: config.github.token,
       },
     }).trim();
 
-    logger.info('Pull request created', { prUrl, branchName });
+    logger.info("Pull request created", { prUrl, branchName });
 
     return {
       success: true,
       prUrl,
     };
   } catch (error) {
-    logger.error('Failed to create pull request', error as Error);
+    logger.error("Failed to create pull request", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -90,7 +90,7 @@ ${summary}
  */
 export function isGitHubCLIInstalled(): boolean {
   try {
-    execSync('gh --version', { stdio: 'ignore' });
+    execSync("gh --version", { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -109,34 +109,34 @@ export async function addCommitComment(
   try {
     // Check if GitHub is configured
     if (!config.github.token || !config.github.owner || !config.github.repo) {
-      logger.debug('GitHub not configured - skipping commit comment');
+      logger.debug("GitHub not configured - skipping commit comment");
       return {
         success: false,
-        error: 'GitHub not configured',
+        error: "GitHub not configured",
       };
     }
 
-    logger.info('Adding commit comment', { commitSha: commitSha.substring(0, 7) });
+    logger.info("Adding commit comment", { commitSha: commitSha.substring(0, 7) });
 
     // Use GitHub CLI API to create commit comment
-    const apiCommand = `gh api repos/${config.github.owner}/${config.github.repo}/commits/${commitSha}/comments -f body="${comment.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+    const apiCommand = `gh api repos/${config.github.owner}/${config.github.repo}/commits/${commitSha}/comments -f body="${comment.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 
     execSync(apiCommand, {
       cwd: workingDir,
-      encoding: 'utf-8',
+      encoding: "utf-8",
       env: {
         ...process.env,
         GH_TOKEN: config.github.token,
       },
     });
 
-    logger.info('Commit comment added successfully', { commitSha: commitSha.substring(0, 7) });
+    logger.info("Commit comment added successfully", { commitSha: commitSha.substring(0, 7) });
 
     return {
       success: true,
     };
   } catch (error) {
-    logger.error('Failed to add commit comment', error as Error);
+    logger.error("Failed to add commit comment", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -151,14 +151,14 @@ export async function addCommitComment(
 export function formatWorkflowStageComment(
   workflowId: number,
   agentType: string,
-  status: 'completed' | 'failed',
+  status: "completed" | "failed",
   summary: string,
   duration?: number,
   artifactsCount?: number
 ): string {
-  const statusEmoji = status === 'completed' ? '✅' : '❌';
-  const durationText = duration ? `\n**Duration:** ${(duration / 1000).toFixed(2)}s` : '';
-  const artifactsText = artifactsCount ? `\n**Artifacts Created:** ${artifactsCount}` : '';
+  const statusEmoji = status === "completed" ? "✅" : "❌";
+  const durationText = duration ? `\n**Duration:** ${(duration / 1000).toFixed(2)}s` : "";
+  const artifactsText = artifactsCount ? `\n**Artifacts Created:** ${artifactsCount}` : "";
 
   return `## ${statusEmoji} Workflow Stage: ${agentType}
 
@@ -180,7 +180,7 @@ ${summary}
 export async function addWorkflowStageComment(
   workflowId: number,
   agentType: string,
-  status: 'completed' | 'failed',
+  status: "completed" | "failed",
   summary: string,
   workingDir: string,
   duration?: number,
@@ -188,9 +188,9 @@ export async function addWorkflowStageComment(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Get latest commit SHA
-    const commitSha = execSync('git rev-parse HEAD', {
+    const commitSha = execSync("git rev-parse HEAD", {
       cwd: workingDir,
-      encoding: 'utf-8',
+      encoding: "utf-8",
     }).trim();
 
     // Format comment
@@ -206,7 +206,7 @@ export async function addWorkflowStageComment(
     // Add comment to commit
     return await addCommitComment(commitSha, comment, workingDir);
   } catch (error) {
-    logger.error('Failed to add workflow stage comment', error as Error);
+    logger.error("Failed to add workflow stage comment", error as Error);
     return {
       success: false,
       error: (error as Error).message,

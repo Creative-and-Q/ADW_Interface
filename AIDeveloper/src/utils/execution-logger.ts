@@ -4,17 +4,17 @@
  * Stores detailed JSON logs in database for frontend display
  */
 
-import { insert } from '../database.js';
-import * as logger from './logger.js';
+import { insert } from "../database.js";
+import * as logger from "./logger.js";
 
 /**
  * Log levels
  */
 export enum LogLevel {
-  DEBUG = 'debug',
-  INFO = 'info',
-  WARN = 'warn',
-  ERROR = 'error',
+  DEBUG = "debug",
+  INFO = "info",
+  WARN = "warn",
+  ERROR = "error",
 }
 
 /**
@@ -22,37 +22,37 @@ export enum LogLevel {
  */
 export enum EventType {
   // Lifecycle events
-  AGENT_START = 'agent_start',
-  AGENT_COMPLETE = 'agent_complete',
-  AGENT_FAILED = 'agent_failed',
-  WORKFLOW_START = 'workflow_start',
-  WORKFLOW_COMPLETE = 'workflow_complete',
-  WORKFLOW_FAILED = 'workflow_failed',
+  AGENT_START = "agent_start",
+  AGENT_COMPLETE = "agent_complete",
+  AGENT_FAILED = "agent_failed",
+  WORKFLOW_START = "workflow_start",
+  WORKFLOW_COMPLETE = "workflow_complete",
+  WORKFLOW_FAILED = "workflow_failed",
 
   // Agent actions
-  API_CALL = 'api_call',
-  API_RESPONSE = 'api_response',
-  FILE_READ = 'file_read',
-  FILE_WRITE = 'file_write',
-  FILE_DELETE = 'file_delete',
-  GIT_OPERATION = 'git_operation',
-  CODEBASE_ANALYSIS = 'codebase_analysis',
-  PLAN_GENERATED = 'plan_generated',
-  CODE_GENERATED = 'code_generated',
-  TEST_EXECUTED = 'test_executed',
-  REVIEW_COMPLETED = 'review_completed',
-  DOCS_GENERATED = 'docs_generated',
+  API_CALL = "api_call",
+  API_RESPONSE = "api_response",
+  FILE_READ = "file_read",
+  FILE_WRITE = "file_write",
+  FILE_DELETE = "file_delete",
+  GIT_OPERATION = "git_operation",
+  CODEBASE_ANALYSIS = "codebase_analysis",
+  PLAN_GENERATED = "plan_generated",
+  CODE_GENERATED = "code_generated",
+  TEST_EXECUTED = "test_executed",
+  REVIEW_COMPLETED = "review_completed",
+  DOCS_GENERATED = "docs_generated",
 
   // Error events
-  EXCEPTION = 'exception',
-  VALIDATION_ERROR = 'validation_error',
-  TIMEOUT = 'timeout',
-  RETRY_ATTEMPT = 'retry_attempt',
+  EXCEPTION = "exception",
+  VALIDATION_ERROR = "validation_error",
+  TIMEOUT = "timeout",
+  RETRY_ATTEMPT = "retry_attempt",
 
   // Generic
-  STEP = 'step',
-  INFO = 'info',
-  WARNING = 'warning',
+  STEP = "step",
+  INFO = "info",
+  WARNING = "warning",
 }
 
 /**
@@ -88,7 +88,7 @@ export class ExecutionLogger {
    */
   private async logToDatabase(entry: ExecutionLogEntry): Promise<void> {
     try {
-      await insert('execution_logs', {
+      await insert("execution_logs", {
         workflow_id: entry.workflowId,
         agent_execution_id: entry.agentExecutionId || null,
         log_level: entry.level,
@@ -99,7 +99,7 @@ export class ExecutionLogger {
       });
     } catch (error) {
       // Fallback to winston logger if database insert fails
-      logger.error('Failed to write execution log to database', error as Error, {
+      logger.error("Failed to write execution log to database", error as Error, {
         entry,
       });
     }
@@ -206,14 +206,9 @@ export class ExecutionLogger {
    * Log agent failure
    */
   async logAgentFailed(error: Error): Promise<void> {
-    await this.error(
-      EventType.AGENT_FAILED,
-      `Agent failed: ${this.agentType}`,
-      error,
-      {
-        agentType: this.agentType,
-      }
-    );
+    await this.error(EventType.AGENT_FAILED, `Agent failed: ${this.agentType}`, error, {
+      agentType: this.agentType,
+    });
   }
 
   /**
@@ -234,7 +229,12 @@ export class ExecutionLogger {
   /**
    * Log API response
    */
-  async logAPIResponse(provider: string, model: string, response: any, duration: number): Promise<void> {
+  async logAPIResponse(
+    provider: string,
+    model: string,
+    response: any,
+    duration: number
+  ): Promise<void> {
     await this.info(EventType.API_RESPONSE, `Received ${provider} API response: ${model}`, {
       provider,
       model,
@@ -249,7 +249,11 @@ export class ExecutionLogger {
   /**
    * Log file operation
    */
-  async logFileOperation(operation: 'read' | 'write' | 'delete', filePath: string, data?: any): Promise<void> {
+  async logFileOperation(
+    operation: "read" | "write" | "delete",
+    filePath: string,
+    data?: any
+  ): Promise<void> {
     const eventTypeMap = {
       read: EventType.FILE_READ,
       write: EventType.FILE_WRITE,
@@ -277,7 +281,7 @@ export class ExecutionLogger {
    * Log plan generation
    */
   async logPlanGenerated(plan: any): Promise<void> {
-    await this.info(EventType.PLAN_GENERATED, 'Plan generated successfully', {
+    await this.info(EventType.PLAN_GENERATED, "Plan generated successfully", {
       steps: plan.steps?.length || 0,
       files: {
         create: plan.files?.create?.length || 0,
@@ -302,7 +306,7 @@ export class ExecutionLogger {
    * Log test execution
    */
   async logTestExecuted(results: any): Promise<void> {
-    await this.info(EventType.TEST_EXECUTED, 'Tests executed', {
+    await this.info(EventType.TEST_EXECUTED, "Tests executed", {
       passed: results.passed,
       failed: results.failed,
       total: results.total,
@@ -314,7 +318,7 @@ export class ExecutionLogger {
    * Log review completion
    */
   async logReviewCompleted(review: any): Promise<void> {
-    await this.info(EventType.REVIEW_COMPLETED, 'Code review completed', {
+    await this.info(EventType.REVIEW_COMPLETED, "Code review completed", {
       issuesFound: review.issues?.length || 0,
       severity: review.severity,
       approved: review.approved,
@@ -325,10 +329,14 @@ export class ExecutionLogger {
    * Log documentation generation
    */
   async logDocsGenerated(files: string[]): Promise<void> {
-    await this.info(EventType.DOCS_GENERATED, `Documentation generated for ${files.length} file(s)`, {
-      filesCount: files.length,
-      files,
-    });
+    await this.info(
+      EventType.DOCS_GENERATED,
+      `Documentation generated for ${files.length} file(s)`,
+      {
+        filesCount: files.length,
+        files,
+      }
+    );
   }
 
   /**
@@ -361,13 +369,22 @@ export class ExecutionLogger {
   /**
    * Log retry attempt
    */
-  async logRetryAttempt(operation: string, attempt: number, maxAttempts: number, error?: Error): Promise<void> {
-    await this.warn(EventType.RETRY_ATTEMPT, `Retry attempt ${attempt}/${maxAttempts}: ${operation}`, {
-      operation,
-      attempt,
-      maxAttempts,
-      error: error?.message,
-    });
+  async logRetryAttempt(
+    operation: string,
+    attempt: number,
+    maxAttempts: number,
+    error?: Error
+  ): Promise<void> {
+    await this.warn(
+      EventType.RETRY_ATTEMPT,
+      `Retry attempt ${attempt}/${maxAttempts}: ${operation}`,
+      {
+        operation,
+        attempt,
+        maxAttempts,
+        error: error?.message,
+      }
+    );
   }
 
   /**
@@ -381,7 +398,7 @@ export class ExecutionLogger {
    * Log codebase analysis
    */
   async logCodebaseAnalysis(stats: any): Promise<void> {
-    await this.info(EventType.CODEBASE_ANALYSIS, 'Codebase analyzed', stats);
+    await this.info(EventType.CODEBASE_ANALYSIS, "Codebase analyzed", stats);
   }
 }
 
@@ -404,17 +421,17 @@ export async function getExecutionLogs(
   agentExecutionId?: number,
   limit?: number
 ): Promise<any[]> {
-  const { query } = await import('../database.js');
+  const { query } = await import("../database.js");
 
-  let sql = 'SELECT * FROM execution_logs WHERE workflow_id = ?';
+  let sql = "SELECT * FROM execution_logs WHERE workflow_id = ?";
   const params: any[] = [workflowId];
 
   if (agentExecutionId) {
-    sql += ' AND agent_execution_id = ?';
+    sql += " AND agent_execution_id = ?";
     params.push(agentExecutionId);
   }
 
-  sql += ' ORDER BY created_at ASC';
+  sql += " ORDER BY created_at ASC";
 
   if (limit) {
     sql += ` LIMIT ${limit}`;
@@ -422,14 +439,14 @@ export async function getExecutionLogs(
 
   const results = await query<any[]>(sql, params);
 
-  return results.map(row => ({
+  return results.map((row) => ({
     id: row.id,
     workflowId: row.workflow_id,
     agentExecutionId: row.agent_execution_id,
     level: row.log_level,
     eventType: row.event_type,
     message: row.message,
-    data: row.data ? (typeof row.data === 'string' ? JSON.parse(row.data) : row.data) : undefined,
+    data: row.data ? (typeof row.data === "string" ? JSON.parse(row.data) : row.data) : undefined,
     stackTrace: row.stack_trace,
     timestamp: row.created_at,
   }));

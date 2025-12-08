@@ -3,7 +3,7 @@
  * Handles workflow and agent execution records in database
  */
 
-import { insert, update, query, queryOne } from './database.js';
+import { insert, update, query, queryOne } from "./database.js";
 import {
   WorkflowType,
   WorkflowStatus,
@@ -14,8 +14,8 @@ import {
   WebhookPayload,
   Artifact,
   ArtifactType,
-} from './types.js';
-import * as logger from './utils/logger.js';
+} from "./types.js";
+import * as logger from "./utils/logger.js";
 // WebSocket emitters for real-time updates (to be integrated)
 /* import {
   emitWorkflowUpdated,
@@ -32,7 +32,7 @@ import * as logger from './utils/logger.js';
 export async function createWorkflow(
   type: WorkflowType,
   payload: WebhookPayload,
-  targetModule: string = 'AIDeveloper',
+  targetModule: string = "AIDeveloper",
   options?: {
     parentWorkflowId?: number;
     workflowDepth?: number;
@@ -68,17 +68,17 @@ export async function createWorkflow(
       }
     }
 
-    const workflowId = await insert('workflows', data);
+    const workflowId = await insert("workflows", data);
 
-    logger.info(`Workflow created: ${workflowId}`, { 
-      type, 
+    logger.info(`Workflow created: ${workflowId}`, {
+      type,
       targetModule,
       parentWorkflowId: options?.parentWorkflowId,
       depth: options?.workflowDepth || 0,
     });
     return workflowId;
   } catch (error) {
-    logger.error('Failed to create workflow', error as Error);
+    logger.error("Failed to create workflow", error as Error);
     throw error;
   }
 }
@@ -86,18 +86,15 @@ export async function createWorkflow(
 /**
  * Save structured plan to workflow
  */
-export async function saveWorkflowPlan(
-  workflowId: number,
-  plan: any
-): Promise<void> {
+export async function saveWorkflowPlan(workflowId: number, plan: any): Promise<void> {
   try {
     await update(
-      'workflows',
+      "workflows",
       {
         plan_json: JSON.stringify(plan),
         updated_at: new Date(),
       },
-      'id = ?',
+      "id = ?",
       [workflowId]
     );
 
@@ -105,7 +102,7 @@ export async function saveWorkflowPlan(
       subTasks: plan.subTasks?.length || 0,
     });
   } catch (error) {
-    logger.error('Failed to save workflow plan', error as Error);
+    logger.error("Failed to save workflow plan", error as Error);
     throw error;
   }
 }
@@ -129,11 +126,11 @@ export async function updateWorkflowStatus(
       updateData.completed_at = new Date();
     }
 
-    await update('workflows', updateData, 'id = ?', [id]);
+    await update("workflows", updateData, "id = ?", [id]);
 
     logger.debug(`Workflow ${id} status updated to ${status}`);
   } catch (error) {
-    logger.error('Failed to update workflow status', error as Error);
+    logger.error("Failed to update workflow status", error as Error);
     throw error;
   }
 }
@@ -143,10 +140,7 @@ export async function updateWorkflowStatus(
  */
 export async function getWorkflow(id: number): Promise<WorkflowExecution | null> {
   try {
-    const row = await queryOne<any>(
-      'SELECT * FROM workflows WHERE id = ?',
-      [id]
-    );
+    const row = await queryOne<any>("SELECT * FROM workflows WHERE id = ?", [id]);
 
     if (!row) {
       return null;
@@ -158,14 +152,14 @@ export async function getWorkflow(id: number): Promise<WorkflowExecution | null>
       type: row.workflow_type as WorkflowType,
       target_module: row.target_module,
       status: row.status as WorkflowStatus,
-      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+      payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
       branchName: row.branch_name,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       completedAt: row.completed_at,
     };
   } catch (error) {
-    logger.error('Failed to get workflow', error as Error);
+    logger.error("Failed to get workflow", error as Error);
     throw error;
   }
 }
@@ -193,7 +187,7 @@ export async function getWorkflowStatus(id: number): Promise<{
       artifacts,
     };
   } catch (error) {
-    logger.error('Failed to get workflow status', error as Error);
+    logger.error("Failed to get workflow status", error as Error);
     throw error;
   }
 }
@@ -207,7 +201,7 @@ export async function createAgentExecution(
   input: any
 ): Promise<number> {
   try {
-    const executionId = await insert('agent_executions', {
+    const executionId = await insert("agent_executions", {
       workflow_id: workflowId,
       agent_type: agentType,
       status: AgentStatus.PENDING,
@@ -222,7 +216,7 @@ export async function createAgentExecution(
 
     return executionId;
   } catch (error) {
-    logger.error('Failed to create agent execution', error as Error);
+    logger.error("Failed to create agent execution", error as Error);
     throw error;
   }
 }
@@ -255,11 +249,11 @@ export async function updateAgentExecution(
       updateData.completed_at = new Date();
     }
 
-    await update('agent_executions', updateData, 'id = ?', [id]);
+    await update("agent_executions", updateData, "id = ?", [id]);
 
     logger.debug(`Agent execution ${id} status updated to ${status}`);
   } catch (error) {
-    logger.error('Failed to update agent execution', error as Error);
+    logger.error("Failed to update agent execution", error as Error);
     throw error;
   }
 }
@@ -270,24 +264,28 @@ export async function updateAgentExecution(
 export async function getAgentExecutions(workflowId: number): Promise<AgentExecution[]> {
   try {
     const results = await query<any[]>(
-      'SELECT * FROM agent_executions WHERE workflow_id = ? ORDER BY started_at ASC',
+      "SELECT * FROM agent_executions WHERE workflow_id = ? ORDER BY started_at ASC",
       [workflowId]
     );
 
-    return results.map(row => ({
+    return results.map((row) => ({
       id: row.id,
       workflowId: row.workflow_id,
       agentType: row.agent_type as AgentType,
       status: row.status as AgentStatus,
-      input: typeof row.input === 'string' ? JSON.parse(row.input) : row.input,
-      output: row.output ? (typeof row.output === 'string' ? JSON.parse(row.output) : row.output) : undefined,
+      input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+      output: row.output
+        ? typeof row.output === "string"
+          ? JSON.parse(row.output)
+          : row.output
+        : undefined,
       errorMessage: row.error,
       retryCount: row.retry_count,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     }));
   } catch (error) {
-    logger.error('Failed to get agent executions', error as Error);
+    logger.error("Failed to get agent executions", error as Error);
     throw error;
   }
 }
@@ -304,7 +302,7 @@ export async function saveArtifact(
   metadata?: any
 ): Promise<number> {
   try {
-    const artifactId = await insert('artifacts', {
+    const artifactId = await insert("artifacts", {
       workflow_id: workflowId,
       agent_execution_id: executionId,
       artifact_type: type,
@@ -320,7 +318,7 @@ export async function saveArtifact(
 
     return artifactId;
   } catch (error) {
-    logger.error('Failed to save artifact', error as Error);
+    logger.error("Failed to save artifact", error as Error);
     throw error;
   }
 }
@@ -328,35 +326,36 @@ export async function saveArtifact(
 /**
  * Get artifacts for a workflow
  */
-export async function getArtifacts(
-  workflowId: number,
-  type?: ArtifactType
-): Promise<Artifact[]> {
+export async function getArtifacts(workflowId: number, type?: ArtifactType): Promise<Artifact[]> {
   try {
-    let sql = 'SELECT * FROM artifacts WHERE workflow_id = ?';
+    let sql = "SELECT * FROM artifacts WHERE workflow_id = ?";
     const params: any[] = [workflowId];
 
     if (type) {
-      sql += ' AND artifact_type = ?';
+      sql += " AND artifact_type = ?";
       params.push(type);
     }
 
-    sql += ' ORDER BY created_at ASC';
+    sql += " ORDER BY created_at ASC";
 
     const results = await query<any[]>(sql, params);
 
-    return results.map(row => ({
+    return results.map((row) => ({
       id: row.id,
       workflowId: row.workflow_id,
       agentExecutionId: row.agent_execution_id,
       type: row.artifact_type as ArtifactType,
       filePath: row.file_path,
       content: row.content,
-      metadata: row.metadata ? (typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata) : undefined,
+      metadata: row.metadata
+        ? typeof row.metadata === "string"
+          ? JSON.parse(row.metadata)
+          : row.metadata
+        : undefined,
       createdAt: row.created_at,
     }));
   } catch (error) {
-    logger.error('Failed to get artifacts', error as Error);
+    logger.error("Failed to get artifacts", error as Error);
     throw error;
   }
 }
@@ -369,7 +368,7 @@ export async function completeWorkflow(id: number): Promise<void> {
     await updateWorkflowStatus(id, WorkflowStatus.COMPLETED);
     logger.info(`Workflow completed: ${id}`);
   } catch (error) {
-    logger.error('Failed to complete workflow', error as Error);
+    logger.error("Failed to complete workflow", error as Error);
     throw error;
   }
 }
@@ -380,13 +379,13 @@ export async function completeWorkflow(id: number): Promise<void> {
 export async function failWorkflow(id: number, reason?: string): Promise<void> {
   try {
     // First, mark any running agents as failed to prevent orphaned executions
-    await failRunningAgents(id, reason || 'Workflow failed');
+    await failRunningAgents(id, reason || "Workflow failed");
 
     // Then update the workflow status
     await updateWorkflowStatus(id, WorkflowStatus.FAILED);
-    logger.error(`Workflow failed: ${id}`, new Error(reason || 'Unknown error'));
+    logger.error(`Workflow failed: ${id}`, new Error(reason || "Unknown error"));
   } catch (error) {
-    logger.error('Failed to fail workflow', error as Error);
+    logger.error("Failed to fail workflow", error as Error);
     throw error;
   }
 }
@@ -398,10 +397,12 @@ export async function failWorkflow(id: number, reason?: string): Promise<void> {
 export async function failRunningAgents(workflowId: number, reason: string): Promise<void> {
   try {
     const agents = await getAgentExecutions(workflowId);
-    const runningAgents = agents.filter(a => a.status === AgentStatus.RUNNING);
+    const runningAgents = agents.filter((a) => a.status === AgentStatus.RUNNING);
 
     if (runningAgents.length > 0) {
-      logger.info(`Marking ${runningAgents.length} running agent(s) as failed for workflow ${workflowId}`);
+      logger.info(
+        `Marking ${runningAgents.length} running agent(s) as failed for workflow ${workflowId}`
+      );
 
       for (const agent of runningAgents) {
         await updateAgentExecution(
@@ -414,7 +415,7 @@ export async function failRunningAgents(workflowId: number, reason: string): Pro
       }
     }
   } catch (error) {
-    logger.error('Failed to fail running agents', error as Error);
+    logger.error("Failed to fail running agents", error as Error);
     // Don't throw - we still want to fail the workflow even if this cleanup fails
   }
 }
@@ -440,29 +441,30 @@ export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<n
     );
 
     if (stuckAgents.length === 0) {
-      logger.debug('No stuck agents found');
+      logger.debug("No stuck agents found");
       return 0;
     }
 
-    logger.warn(`Found ${stuckAgents.length} stuck agent(s) running longer than ${timeoutMinutes} minutes`);
+    logger.warn(
+      `Found ${stuckAgents.length} stuck agent(s) running longer than ${timeoutMinutes} minutes`
+    );
 
     // Track unique workflow IDs that need status updates
     const affectedWorkflowIds = new Set<number>();
 
     for (const agent of stuckAgents) {
-      const runningTime = Math.floor((Date.now() - new Date(agent.started_at).getTime()) / 1000 / 60);
+      const runningTime = Math.floor(
+        (Date.now() - new Date(agent.started_at).getTime()) / 1000 / 60
+      );
       const errorMessage = `Agent execution timeout: exceeded ${timeoutMinutes} minute limit (ran for ${runningTime} minutes)`;
 
-      await updateAgentExecution(
-        agent.id,
-        AgentStatus.FAILED,
-        undefined,
-        errorMessage
-      );
+      await updateAgentExecution(agent.id, AgentStatus.FAILED, undefined, errorMessage);
 
       affectedWorkflowIds.add(agent.workflow_id);
 
-      logger.info(`Cleaned up stuck agent execution ${agent.id} (${agent.agent_type}) for workflow ${agent.workflow_id}`);
+      logger.info(
+        `Cleaned up stuck agent execution ${agent.id} (${agent.agent_type}) for workflow ${agent.workflow_id}`
+      );
     }
 
     // Update workflow and sub-workflow queue statuses for affected workflows
@@ -474,25 +476,28 @@ export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<n
 
         // Update sub-workflow queue entry if this workflow is a child of another
         await update(
-          'sub_workflow_queue',
+          "sub_workflow_queue",
           {
-            status: 'failed',
+            status: "failed",
             completed_at: new Date(),
-            error_message: 'Agent execution timeout',
+            error_message: "Agent execution timeout",
           },
-          'child_workflow_id = ?',
+          "child_workflow_id = ?",
           [workflowId]
         );
         logger.debug(`Updated sub-workflow queue entry for workflow ${workflowId}`);
       } catch (updateError) {
-        logger.error(`Failed to update workflow ${workflowId} status after agent cleanup`, updateError as Error);
+        logger.error(
+          `Failed to update workflow ${workflowId} status after agent cleanup`,
+          updateError as Error
+        );
         // Continue with other workflows
       }
     }
 
     return stuckAgents.length;
   } catch (error) {
-    logger.error('Failed to cleanup stuck agents', error as Error);
+    logger.error("Failed to cleanup stuck agents", error as Error);
     throw error;
   }
 }
@@ -503,12 +508,12 @@ export async function cleanupStuckAgents(timeoutMinutes: number = 60): Promise<n
 export async function getRunningAgentCount(): Promise<number> {
   try {
     const result = await queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM agent_executions WHERE status = ?',
+      "SELECT COUNT(*) as count FROM agent_executions WHERE status = ?",
       [AgentStatus.RUNNING]
     );
     return result?.count || 0;
   } catch (error) {
-    logger.error('Failed to get running agent count', error as Error);
+    logger.error("Failed to get running agent count", error as Error);
     return 0;
   }
 }
@@ -526,9 +531,7 @@ export async function getRunningAgentCount(): Promise<number> {
  * @param inactiveThresholdMinutes - Time after which a running agent is considered stuck
  * @returns Object with counts of recovered workflows and agents
  */
-export async function resumeInterruptedWorkflows(
-  inactiveThresholdMinutes: number = 30
-): Promise<{
+export async function resumeInterruptedWorkflows(inactiveThresholdMinutes: number = 30): Promise<{
   recoveredWorkflows: number;
   recoveredAgents: number;
   workflowIds: number[];
@@ -538,8 +541,15 @@ export async function resumeInterruptedWorkflows(
 
     // Find workflows that are in active execution states
     // These statuses indicate a workflow that was actively being processed
-    const activeStatuses = ['planning', 'coding', 'testing', 'reviewing', 'documenting', 'security_linting'];
-    const statusPlaceholders = activeStatuses.map(() => '?').join(',');
+    const activeStatuses = [
+      "planning",
+      "coding",
+      "testing",
+      "reviewing",
+      "documenting",
+      "security_linting",
+    ];
+    const statusPlaceholders = activeStatuses.map(() => "?").join(",");
 
     // Find interrupted workflows that have stuck agents
     const interruptedWorkflows = await query<any[]>(
@@ -553,12 +563,12 @@ export async function resumeInterruptedWorkflows(
     );
 
     if (interruptedWorkflows.length === 0) {
-      logger.info('No interrupted workflows found on startup');
+      logger.info("No interrupted workflows found on startup");
       return { recoveredWorkflows: 0, recoveredAgents: 0, workflowIds: [] };
     }
 
     logger.warn(`Found ${interruptedWorkflows.length} interrupted workflow(s) to recover`, {
-      workflowIds: interruptedWorkflows.map(w => w.id),
+      workflowIds: interruptedWorkflows.map((w) => w.id),
       thresholdMinutes: inactiveThresholdMinutes,
     });
 
@@ -582,9 +592,9 @@ export async function resumeInterruptedWorkflows(
 
         // Reset the workflow to pending
         await update(
-          'workflows',
+          "workflows",
           { status: WorkflowStatus.PENDING, updated_at: new Date() },
-          'id = ?',
+          "id = ?",
           [workflow.id]
         );
 
@@ -633,10 +643,13 @@ export async function resumeInterruptedWorkflows(
       );
 
       if (pendingChildren && pendingChildren.count > 0) {
-        logger.info(`Workflow ${workflow.id} has ${pendingChildren.count} pending children - queue will be advanced`, {
-          type: workflow.workflow_type,
-          targetModule: workflow.target_module,
-        });
+        logger.info(
+          `Workflow ${workflow.id} has ${pendingChildren.count} pending children - queue will be advanced`,
+          {
+            type: workflow.workflow_type,
+            targetModule: workflow.target_module,
+          }
+        );
         workflowIds.push(workflow.id);
       }
     }
@@ -658,20 +671,23 @@ export async function resumeInterruptedWorkflows(
         continue;
       }
 
-      logger.info(`Found stuck queue entry for workflow ${entry.child_workflow_id} - resetting for retry`, {
-        parentWorkflowId: entry.parent_workflow_id,
-        workflowStatus: entry.workflow_status,
-        targetModule: entry.target_module,
-      });
+      logger.info(
+        `Found stuck queue entry for workflow ${entry.child_workflow_id} - resetting for retry`,
+        {
+          parentWorkflowId: entry.parent_workflow_id,
+          workflowStatus: entry.workflow_status,
+          targetModule: entry.target_module,
+        }
+      );
 
       // Delete old agent executions to prevent duplicate detection
-      await query('DELETE FROM agent_executions WHERE workflow_id = ?', [entry.child_workflow_id]);
+      await query("DELETE FROM agent_executions WHERE workflow_id = ?", [entry.child_workflow_id]);
 
       // Reset workflow to pending
       await update(
-        'workflows',
+        "workflows",
         { status: WorkflowStatus.PENDING, updated_at: new Date() },
-        'id = ?',
+        "id = ?",
         [entry.child_workflow_id]
       );
 
@@ -691,7 +707,7 @@ export async function resumeInterruptedWorkflows(
       }
     }
 
-    logger.info('Workflow recovery complete', {
+    logger.info("Workflow recovery complete", {
       recoveredWorkflows: workflowIds.length,
       recoveredAgents: totalAgentsRecovered,
       workflowIds,
@@ -703,7 +719,7 @@ export async function resumeInterruptedWorkflows(
       workflowIds,
     };
   } catch (error) {
-    logger.error('Failed to resume interrupted workflows', error as Error);
+    logger.error("Failed to resume interrupted workflows", error as Error);
     throw error;
   }
 }
@@ -731,22 +747,16 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
     const allAgents = await getAgentExecutions(id);
 
     // Separate agents by status
-    const completedAgents = allAgents.filter(
-      a => a.status === AgentStatus.COMPLETED
-    );
+    const completedAgents = allAgents.filter((a) => a.status === AgentStatus.COMPLETED);
 
-    const failedAgent = allAgents.find(
-      a => a.status === AgentStatus.FAILED
-    ) || null;
+    const failedAgent = allAgents.find((a) => a.status === AgentStatus.FAILED) || null;
 
-    const pendingAgents = allAgents.filter(
-      a => a.status === AgentStatus.PENDING
-    );
+    const pendingAgents = allAgents.filter((a) => a.status === AgentStatus.PENDING);
 
     // Can resume if workflow is failed and there are completed agents
     // BUT: Cannot resume if only the orchestrator completed (orchestrator failures require full restart)
     const hasNonOrchestratorAgents = completedAgents.some(
-      a => a.agentType !== AgentType.ORCHESTRATOR
+      (a) => a.agentType !== AgentType.ORCHESTRATOR
     );
 
     const canResume =
@@ -757,9 +767,7 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
     // Calculate resume index based on unique completed agent types (not total executions)
     // Get unique completed agent types (excluding orchestrator)
     const uniqueCompletedTypes = new Set(
-      completedAgents
-        .filter(a => a.agentType !== AgentType.ORCHESTRATOR)
-        .map(a => a.agentType)
+      completedAgents.filter((a) => a.agentType !== AgentType.ORCHESTRATOR).map((a) => a.agentType)
     );
 
     // Standard workflow sequence
@@ -784,7 +792,7 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
     // Resume from the next agent after the last completed one
     const resumeFromIndex = lastCompletedIndex + 1;
 
-    logger.debug('Workflow resume state retrieved', {
+    logger.debug("Workflow resume state retrieved", {
       workflowId: id,
       completed: completedAgents.length,
       failed: failedAgent ? 1 : 0,
@@ -802,7 +810,7 @@ export async function getWorkflowResumeState(id: number): Promise<WorkflowResume
       resumeFromIndex,
     };
   } catch (error) {
-    logger.error('Failed to get workflow resume state', error as Error);
+    logger.error("Failed to get workflow resume state", error as Error);
     throw error;
   }
 }
@@ -816,7 +824,7 @@ export async function resetWorkflowForResume(id: number): Promise<void> {
     await updateWorkflowStatus(id, WorkflowStatus.PENDING);
     logger.info(`Workflow ${id} reset for resumption`);
   } catch (error) {
-    logger.error('Failed to reset workflow for resume', error as Error);
+    logger.error("Failed to reset workflow for resume", error as Error);
     throw error;
   }
 }
@@ -825,23 +833,20 @@ export async function resetWorkflowForResume(id: number): Promise<void> {
  * Save a checkpoint commit for a workflow
  * Called when a workflow completes successfully
  */
-export async function saveWorkflowCheckpoint(
-  workflowId: number,
-  commitSha: string
-): Promise<void> {
+export async function saveWorkflowCheckpoint(workflowId: number, commitSha: string): Promise<void> {
   try {
     await update(
-      'workflows',
+      "workflows",
       {
         checkpoint_commit: commitSha,
         checkpoint_created_at: new Date(),
       },
-      'id = ?',
+      "id = ?",
       [workflowId]
     );
     logger.info(`Saved checkpoint for workflow ${workflowId}`, { commitSha });
   } catch (error) {
-    logger.error('Failed to save workflow checkpoint', error as Error);
+    logger.error("Failed to save workflow checkpoint", error as Error);
     throw error;
   }
 }
@@ -887,7 +892,7 @@ export async function getLastCheckpoint(workflowId: number): Promise<{
       targetModule: result.target_module,
     };
   } catch (error) {
-    logger.error('Failed to get last checkpoint', error as Error);
+    logger.error("Failed to get last checkpoint", error as Error);
     throw error;
   }
 }
@@ -895,13 +900,15 @@ export async function getLastCheckpoint(workflowId: number): Promise<{
 /**
  * Get all checkpoints in a workflow tree (for display purposes)
  */
-export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<Array<{
-  workflowId: number;
-  commitSha: string;
-  createdAt: Date;
-  targetModule: string;
-  taskDescription: string | null;
-}>> {
+export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<
+  Array<{
+    workflowId: number;
+    commitSha: string;
+    createdAt: Date;
+    targetModule: string;
+    taskDescription: string | null;
+  }>
+> {
   try {
     const results = await query<any[]>(
       `WITH RECURSIVE workflow_tree AS (
@@ -919,13 +926,15 @@ export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<Ar
       [rootWorkflowId]
     );
 
-    return results.map(row => {
+    return results.map((row) => {
       let taskDesc = row.task_description;
       if (!taskDesc && row.payload) {
         try {
-          const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+          const payload = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
           taskDesc = payload.taskDescription || payload.title || null;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       return {
         workflowId: row.id,
@@ -936,7 +945,7 @@ export async function getWorkflowCheckpoints(rootWorkflowId: number): Promise<Ar
       };
     });
   } catch (error) {
-    logger.error('Failed to get workflow checkpoints', error as Error);
+    logger.error("Failed to get workflow checkpoints", error as Error);
     throw error;
   }
 }
@@ -996,7 +1005,7 @@ export async function resumeFromCheckpoint(
     }
 
     if (!checkpoint) {
-      throw new Error('No checkpoint found to resume from');
+      throw new Error("No checkpoint found to resume from");
     }
 
     // Find workflows to remove - this is a multi-step process:
@@ -1017,7 +1026,7 @@ export async function resumeFromCheckpoint(
       SELECT id FROM descendants`,
       [checkpoint.workflowId]
     );
-    workflowsToRemove.push(...checkpointDescendants.map(w => w.id));
+    workflowsToRemove.push(...checkpointDescendants.map((w) => w.id));
 
     // Step 2: Get siblings that come after the checkpoint
     // (same parent, execution_order > checkpoint's or same execution_order but higher id)
@@ -1035,7 +1044,7 @@ export async function resumeFromCheckpoint(
           checkpoint.workflowId,
           checkpoint.executionOrder,
           checkpoint.executionOrder,
-          checkpoint.workflowId
+          checkpoint.workflowId,
         ]
       );
 
@@ -1053,14 +1062,14 @@ export async function resumeFromCheckpoint(
           SELECT id FROM descendants`,
           [sibling.id]
         );
-        workflowsToRemove.push(...siblingDescendants.map(w => w.id));
+        workflowsToRemove.push(...siblingDescendants.map((w) => w.id));
       }
     }
 
     // Deduplicate
     const uniqueRemoveIds = [...new Set(workflowsToRemove)];
 
-    logger.info('Workflows to remove on checkpoint resume', {
+    logger.info("Workflows to remove on checkpoint resume", {
       checkpointWorkflowId: checkpoint.workflowId,
       checkpointParent: checkpoint.parentWorkflowId,
       checkpointOrder: checkpoint.executionOrder,
@@ -1069,7 +1078,7 @@ export async function resumeFromCheckpoint(
     });
 
     if (uniqueRemoveIds.length > 0) {
-      const idsPlaceholder = uniqueRemoveIds.map(() => '?').join(',');
+      const idsPlaceholder = uniqueRemoveIds.map(() => "?").join(",");
 
       // STEP 0: Mark all workflows being removed as CANCELLED first
       // This allows running orchestrators to detect cancellation and stop gracefully
@@ -1089,8 +1098,10 @@ export async function resumeFromCheckpoint(
       // Wait briefly to allow running orchestrators to detect cancellation
       // This gives them time to check status and exit gracefully
       const CANCELLATION_WAIT_MS = 2000;
-      logger.info(`Waiting ${CANCELLATION_WAIT_MS}ms for running orchestrators to detect cancellation...`);
-      await new Promise(resolve => setTimeout(resolve, CANCELLATION_WAIT_MS));
+      logger.info(
+        `Waiting ${CANCELLATION_WAIT_MS}ms for running orchestrators to detect cancellation...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, CANCELLATION_WAIT_MS));
 
       // Now proceed with cleanup - orchestrators should have stopped or will ignore FK errors
 
@@ -1130,16 +1141,13 @@ export async function resumeFromCheckpoint(
       logger.debug(`Deleted sub_workflow_queue entries for ${uniqueRemoveIds.length} workflows`);
 
       // 6. Delete the workflow records themselves
-      await query(
-        `DELETE FROM workflows WHERE id IN (${idsPlaceholder})`,
-        uniqueRemoveIds
-      );
+      await query(`DELETE FROM workflows WHERE id IN (${idsPlaceholder})`, uniqueRemoveIds);
       logger.debug(`Deleted ${uniqueRemoveIds.length} workflow records`);
     }
 
     // Reset the checkpoint workflow itself to pending so it can be re-run
     await update(
-      'workflows',
+      "workflows",
       {
         status: WorkflowStatus.PENDING,
         started_at: null,
@@ -1147,7 +1155,7 @@ export async function resumeFromCheckpoint(
         plan_json: null,
         // Keep checkpoint_commit so we know where to restore git to
       },
-      'id = ?',
+      "id = ?",
       [checkpoint.workflowId]
     );
 
@@ -1159,7 +1167,7 @@ export async function resumeFromCheckpoint(
       [checkpoint.workflowId]
     );
 
-    logger.info('Resumed workflow tree from checkpoint with full cleanup', {
+    logger.info("Resumed workflow tree from checkpoint with full cleanup", {
       rootWorkflowId,
       checkpointWorkflowId: checkpoint.workflowId,
       checkpointCommit: checkpoint.commitSha,
@@ -1174,7 +1182,7 @@ export async function resumeFromCheckpoint(
       targetModule: checkpoint.targetModule,
     };
   } catch (error) {
-    logger.error('Failed to resume from checkpoint', error as Error);
+    logger.error("Failed to resume from checkpoint", error as Error);
     throw error;
   }
 }
@@ -1211,11 +1219,13 @@ export async function cleanupStuckWorkflows(timeoutHours: number = 2): Promise<n
     );
 
     if (stuckWorkflows.length === 0) {
-      logger.debug('No stuck workflows found');
+      logger.debug("No stuck workflows found");
       return 0;
     }
 
-    logger.warn(`Found ${stuckWorkflows.length} stuck workflow(s) running longer than ${timeoutHours} hours`);
+    logger.warn(
+      `Found ${stuckWorkflows.length} stuck workflow(s) running longer than ${timeoutHours} hours`
+    );
 
     for (const workflow of stuckWorkflows) {
       // Check if this workflow has pending children that should complete it
@@ -1266,13 +1276,13 @@ export async function cleanupStuckWorkflows(timeoutHours: number = 2): Promise<n
 
       // Update sub-workflow queue entry if this is a child workflow
       await update(
-        'sub_workflow_queue',
+        "sub_workflow_queue",
         {
-          status: newStatus === WorkflowStatus.COMPLETED ? 'completed' : 'failed',
+          status: newStatus === WorkflowStatus.COMPLETED ? "completed" : "failed",
           completed_at: new Date(),
           error_message: newStatus === WorkflowStatus.FAILED ? reason : null,
         },
-        'child_workflow_id = ?',
+        "child_workflow_id = ?",
         [workflow.id]
       );
 
@@ -1287,7 +1297,7 @@ export async function cleanupStuckWorkflows(timeoutHours: number = 2): Promise<n
 
     return stuckWorkflows.length;
   } catch (error) {
-    logger.error('Failed to cleanup stuck workflows', error as Error);
+    logger.error("Failed to cleanup stuck workflows", error as Error);
     throw error;
   }
 }
@@ -1313,7 +1323,7 @@ export async function cleanupOrphanWorkflows(): Promise<number> {
     );
 
     if (orphanWorkflows.length === 0) {
-      logger.debug('No orphan workflows found');
+      logger.debug("No orphan workflows found");
       return 0;
     }
 
@@ -1322,24 +1332,24 @@ export async function cleanupOrphanWorkflows(): Promise<number> {
     for (const workflow of orphanWorkflows) {
       // Mark the workflow as skipped (not failed, since it was never attempted)
       await update(
-        'workflows',
+        "workflows",
         {
-          status: 'completed_with_warnings',
+          status: "completed_with_warnings",
           completed_at: new Date(),
         },
-        'id = ?',
+        "id = ?",
         [workflow.id]
       );
 
       // Update sub-workflow queue entry
       await update(
-        'sub_workflow_queue',
+        "sub_workflow_queue",
         {
-          status: 'skipped',
+          status: "skipped",
           completed_at: new Date(),
-          error_message: 'Skipped due to parent workflow failure',
+          error_message: "Skipped due to parent workflow failure",
         },
-        'child_workflow_id = ?',
+        "child_workflow_id = ?",
         [workflow.id]
       );
 
@@ -1352,7 +1362,7 @@ export async function cleanupOrphanWorkflows(): Promise<number> {
 
     return orphanWorkflows.length;
   } catch (error) {
-    logger.error('Failed to cleanup orphan workflows', error as Error);
+    logger.error("Failed to cleanup orphan workflows", error as Error);
     throw error;
   }
 }

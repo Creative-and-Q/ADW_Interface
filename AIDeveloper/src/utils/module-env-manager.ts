@@ -3,10 +3,10 @@
  * Handles reading and writing environment variables directly from each module's .env file
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import { discoverModules, getModulesPath } from './module-manager.js';
-import * as logger from './logger.js';
+import fs from "fs/promises";
+import path from "path";
+import { discoverModules, getModulesPath } from "./module-manager.js";
+import * as logger from "./logger.js";
 
 /**
  * Parsed environment variable from a module's .env file
@@ -34,19 +34,21 @@ export interface ModuleEnvStatus {
  */
 function parseEnvFile(content: string): Map<string, string> {
   const env = new Map<string, string>();
-  const lines = content.split('\n');
+  const lines = content.split("\n");
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (!trimmed || trimmed.startsWith("#")) continue;
 
     const match = trimmed.match(/^([^=]+)=(.*)$/);
     if (match) {
       const key = match[1].trim();
       let value = match[2].trim();
       // Remove surrounding quotes if present
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
         value = value.slice(1, -1);
       }
       env.set(key, value);
@@ -61,20 +63,20 @@ function parseEnvFile(content: string): Map<string, string> {
  */
 function parseEnvExample(content: string): Map<string, { defaultValue: string; comment?: string }> {
   const envExample = new Map<string, { defaultValue: string; comment?: string }>();
-  const lines = content.split('\n');
-  let currentComment = '';
+  const lines = content.split("\n");
+  let currentComment = "";
 
   for (const line of lines) {
     const trimmed = line.trim();
 
     // Track comments
-    if (trimmed.startsWith('#')) {
+    if (trimmed.startsWith("#")) {
       currentComment = trimmed.slice(1).trim();
       continue;
     }
 
     if (!trimmed) {
-      currentComment = '';
+      currentComment = "";
       continue;
     }
 
@@ -83,15 +85,17 @@ function parseEnvExample(content: string): Map<string, { defaultValue: string; c
       const key = match[1].trim();
       let defaultValue = match[2].trim();
       // Remove surrounding quotes if present
-      if ((defaultValue.startsWith('"') && defaultValue.endsWith('"')) ||
-          (defaultValue.startsWith("'") && defaultValue.endsWith("'"))) {
+      if (
+        (defaultValue.startsWith('"') && defaultValue.endsWith('"')) ||
+        (defaultValue.startsWith("'") && defaultValue.endsWith("'"))
+      ) {
         defaultValue = defaultValue.slice(1, -1);
       }
       envExample.set(key, {
         defaultValue,
         comment: currentComment || undefined,
       });
-      currentComment = '';
+      currentComment = "";
     }
   }
 
@@ -106,27 +110,26 @@ function serializeEnvFile(env: Map<string, string>): string {
 
   for (const [key, value] of env) {
     // Escape values that contain spaces, equals, or special characters
-    const escapedValue = value.includes(' ') || value.includes('=') || value.includes('#')
-      ? `"${value}"`
-      : value;
+    const escapedValue =
+      value.includes(" ") || value.includes("=") || value.includes("#") ? `"${value}"` : value;
     lines.push(`${key}=${escapedValue}`);
   }
 
-  return lines.join('\n') + '\n';
+  return lines.join("\n") + "\n";
 }
 
 /**
  * Get the .env file path for a module
  */
 function getModuleEnvPath(moduleName: string): string {
-  return path.join(getModulesPath(), moduleName, '.env');
+  return path.join(getModulesPath(), moduleName, ".env");
 }
 
 /**
  * Get the .env.example file path for a module
  */
 function getModuleEnvExamplePath(moduleName: string): string {
-  return path.join(getModulesPath(), moduleName, '.env.example');
+  return path.join(getModulesPath(), moduleName, ".env.example");
 }
 
 /**
@@ -135,10 +138,10 @@ function getModuleEnvExamplePath(moduleName: string): string {
 export async function readModuleEnvFile(moduleName: string): Promise<Map<string, string>> {
   try {
     const envPath = getModuleEnvPath(moduleName);
-    const content = await fs.readFile(envPath, 'utf-8');
+    const content = await fs.readFile(envPath, "utf-8");
     return parseEnvFile(content);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return new Map();
     }
     logger.error(`Failed to read .env file for ${moduleName}`, error as Error);
@@ -149,13 +152,15 @@ export async function readModuleEnvFile(moduleName: string): Promise<Map<string,
 /**
  * Read .env.example file for a module
  */
-export async function readModuleEnvExample(moduleName: string): Promise<Map<string, { defaultValue: string; comment?: string }>> {
+export async function readModuleEnvExample(
+  moduleName: string
+): Promise<Map<string, { defaultValue: string; comment?: string }>> {
   try {
     const envExamplePath = getModuleEnvExamplePath(moduleName);
-    const content = await fs.readFile(envExamplePath, 'utf-8');
+    const content = await fs.readFile(envExamplePath, "utf-8");
     return parseEnvExample(content);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return new Map();
     }
     logger.error(`Failed to read .env.example file for ${moduleName}`, error as Error);
@@ -202,7 +207,7 @@ export async function copyEnvExample(moduleName: string): Promise<boolean> {
     }
 
     // Check if .env.example exists
-    if (!await hasEnvExample(moduleName)) {
+    if (!(await hasEnvExample(moduleName))) {
       logger.info(`Module ${moduleName} does not have a .env.example file`);
       return false;
     }
@@ -285,7 +290,7 @@ export async function updateModuleEnvVar(
 
   currentEnv.set(key, value);
 
-  await fs.writeFile(envPath, serializeEnvFile(currentEnv), 'utf-8');
+  await fs.writeFile(envPath, serializeEnvFile(currentEnv), "utf-8");
   logger.info(`Updated ${key} in ${moduleName}/.env`);
 }
 
@@ -300,30 +305,27 @@ export async function updateModuleEnvVars(
   const currentEnv = await readModuleEnvFile(moduleName);
 
   for (const [key, value] of Object.entries(updates)) {
-    if (value === null || value === '') {
+    if (value === null || value === "") {
       currentEnv.delete(key);
     } else {
       currentEnv.set(key, value);
     }
   }
 
-  await fs.writeFile(envPath, serializeEnvFile(currentEnv), 'utf-8');
+  await fs.writeFile(envPath, serializeEnvFile(currentEnv), "utf-8");
   logger.info(`Updated ${Object.keys(updates).length} variables in ${moduleName}/.env`);
 }
 
 /**
  * Delete an environment variable from a module's .env file
  */
-export async function deleteModuleEnvVar(
-  moduleName: string,
-  key: string
-): Promise<void> {
+export async function deleteModuleEnvVar(moduleName: string, key: string): Promise<void> {
   const envPath = getModuleEnvPath(moduleName);
   const currentEnv = await readModuleEnvFile(moduleName);
 
   currentEnv.delete(key);
 
-  await fs.writeFile(envPath, serializeEnvFile(currentEnv), 'utf-8');
+  await fs.writeFile(envPath, serializeEnvFile(currentEnv), "utf-8");
   logger.info(`Deleted ${key} from ${moduleName}/.env`);
 }
 
@@ -345,7 +347,7 @@ export async function syncEnvWithExample(moduleName: string): Promise<string[]> 
 
   if (addedKeys.length > 0) {
     const envPath = getModuleEnvPath(moduleName);
-    await fs.writeFile(envPath, serializeEnvFile(currentEnv), 'utf-8');
+    await fs.writeFile(envPath, serializeEnvFile(currentEnv), "utf-8");
     logger.info(`Added ${addedKeys.length} missing variables to ${moduleName}/.env`);
   }
 
@@ -362,7 +364,7 @@ export async function createModuleEnvFile(
   const envPath = getModuleEnvPath(moduleName);
   const env = new Map(Object.entries(vars));
 
-  await fs.writeFile(envPath, serializeEnvFile(env), 'utf-8');
+  await fs.writeFile(envPath, serializeEnvFile(env), "utf-8");
   logger.info(`Created .env file for ${moduleName} with ${Object.keys(vars).length} variables`);
 }
 
@@ -379,7 +381,7 @@ export interface EnvVarValue {
     description: string;
     required: boolean;
     defaultValue?: string;
-    type?: 'string' | 'number' | 'boolean';
+    type?: "string" | "number" | "boolean";
     secret?: boolean;
     modulePrefix?: string;
   };
@@ -399,13 +401,14 @@ export async function getAllModuleEnvVarValues(): Promise<EnvVarValue[]> {
         value: envVar.value,
         module: status.moduleName,
         definition: {
-          description: envVar.comment || '',
+          description: envVar.comment || "",
           required: false,
           defaultValue: undefined,
-          type: 'string',
-          secret: envVar.key.toLowerCase().includes('key') ||
-                  envVar.key.toLowerCase().includes('secret') ||
-                  envVar.key.toLowerCase().includes('password'),
+          type: "string",
+          secret:
+            envVar.key.toLowerCase().includes("key") ||
+            envVar.key.toLowerCase().includes("secret") ||
+            envVar.key.toLowerCase().includes("password"),
         },
       });
     }
@@ -420,18 +423,19 @@ export async function getAllModuleEnvVarValues(): Promise<EnvVarValue[]> {
 export async function getModuleEnvVars(moduleName: string): Promise<EnvVarValue[]> {
   const status = await getModuleEnvStatus(moduleName);
 
-  return status.envVars.map(envVar => ({
+  return status.envVars.map((envVar) => ({
     key: envVar.key,
     value: envVar.value,
     module: moduleName,
     definition: {
-      description: envVar.comment || '',
+      description: envVar.comment || "",
       required: false,
       defaultValue: undefined,
-      type: 'string' as const,
-      secret: envVar.key.toLowerCase().includes('key') ||
-              envVar.key.toLowerCase().includes('secret') ||
-              envVar.key.toLowerCase().includes('password'),
+      type: "string" as const,
+      secret:
+        envVar.key.toLowerCase().includes("key") ||
+        envVar.key.toLowerCase().includes("secret") ||
+        envVar.key.toLowerCase().includes("password"),
     },
   }));
 }
@@ -439,34 +443,31 @@ export async function getModuleEnvVars(moduleName: string): Promise<EnvVarValue[
 /**
  * @deprecated Use updateModuleEnvVar instead
  */
-export async function updateEnvVar(
-  _key: string,
-  _value: string | null
-): Promise<void> {
+export async function updateEnvVar(_key: string, _value: string | null): Promise<void> {
   // This is a legacy function - it used to update a global .env file
   // Now it's essentially a no-op since we've moved to per-module .env files
-  logger.warn('updateEnvVar is deprecated - use updateModuleEnvVar instead');
+  logger.warn("updateEnvVar is deprecated - use updateModuleEnvVar instead");
 }
 
 /**
  * @deprecated Use updateModuleEnvVars instead
  */
-export async function updateEnvVars(
-  _updates: Record<string, string | null>
-): Promise<void> {
+export async function updateEnvVars(_updates: Record<string, string | null>): Promise<void> {
   // This is a legacy function - it used to update a global .env file
   // Now it's essentially a no-op since we've moved to per-module .env files
-  logger.warn('updateEnvVars is deprecated - use updateModuleEnvVars instead');
+  logger.warn("updateEnvVars is deprecated - use updateModuleEnvVars instead");
 }
 
 /**
  * @deprecated No longer used with per-module .env files
  */
-export async function validateRequiredEnvVars(): Promise<Array<{
-  module: string;
-  key: string;
-  missing: boolean;
-}>> {
+export async function validateRequiredEnvVars(): Promise<
+  Array<{
+    module: string;
+    key: string;
+    missing: boolean;
+  }>
+> {
   // With per-module .env files, validation is simpler - just check for missing keys
   const statuses = await getAllModulesEnvStatus();
   const issues: Array<{ module: string; key: string; missing: boolean }> = [];
@@ -489,7 +490,7 @@ export async function validateRequiredEnvVars(): Promise<Array<{
  */
 export async function readEnvFile(): Promise<Record<string, string>> {
   // Return empty object - the global .env is no longer used
-  logger.warn('readEnvFile is deprecated - use readModuleEnvFile instead');
+  logger.warn("readEnvFile is deprecated - use readModuleEnvFile instead");
   return {};
 }
 
@@ -497,5 +498,5 @@ export async function readEnvFile(): Promise<Record<string, string>> {
  * @deprecated This is no longer used
  */
 export async function writeEnvFile(_env: Record<string, string>): Promise<void> {
-  logger.warn('writeEnvFile is deprecated - use updateModuleEnvVars instead');
+  logger.warn("writeEnvFile is deprecated - use updateModuleEnvVars instead");
 }

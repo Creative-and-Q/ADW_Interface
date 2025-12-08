@@ -3,11 +3,11 @@
  * Manages automatic fixing of failed workflows
  */
 
-import { spawn } from 'child_process';
-import path from 'path';
-import fs from 'fs/promises';
-import * as logger from './logger.js';
-import { emitToClients } from '../websocket-emitter.js';
+import { spawn } from "child_process";
+import path from "path";
+import fs from "fs/promises";
+import * as logger from "./logger.js";
+import { emitToClients } from "../websocket-emitter.js";
 
 interface AutoFixConfig {
   enabled: boolean;
@@ -23,7 +23,7 @@ interface AutoFixAttempt {
   id: string;
   workflowId: number;
   timestamp: Date;
-  status: 'pending' | 'running' | 'investigating' | 'fixing' | 'testing' | 'success' | 'failed';
+  status: "pending" | "running" | "investigating" | "fixing" | "testing" | "success" | "failed";
   error?: string;
   pid?: number;
   startedAt: Date;
@@ -61,13 +61,13 @@ export class AutoFixManager {
       autoTriggerOnFailure: false,
       maxAutoFixes: 3,
       cooldownMinutes: 30,
-      excludedErrorTypes: ['infrastructure_error', 'api_error'],
-      includedWorkflowTypes: ['feature', 'bugfix', 'refactor'],
+      excludedErrorTypes: ["infrastructure_error", "api_error"],
+      includedWorkflowTypes: ["feature", "bugfix", "refactor"],
       notifyOnAutoFix: true,
     };
 
     this.loadConfig().catch((error) => {
-      logger.warn('Failed to load auto-fix config, using defaults', error as Error);
+      logger.warn("Failed to load auto-fix config, using defaults", error as Error);
     });
   }
 
@@ -86,16 +86,12 @@ export class AutoFixManager {
    */
   private async loadConfig(): Promise<void> {
     try {
-      const configPath = path.join(
-        process.cwd(),
-        'config',
-        'auto-fix-config.json'
-      );
-      const configData = await fs.readFile(configPath, 'utf-8');
+      const configPath = path.join(process.cwd(), "config", "auto-fix-config.json");
+      const configData = await fs.readFile(configPath, "utf-8");
       this.config = JSON.parse(configData);
-      logger.info('Auto-fix config loaded', this.config);
+      logger.info("Auto-fix config loaded", this.config);
     } catch (error) {
-      logger.warn('Could not load auto-fix config', error as Error);
+      logger.warn("Could not load auto-fix config", error as Error);
     }
   }
 
@@ -108,7 +104,7 @@ export class AutoFixManager {
     errorType?: string
   ): boolean {
     if (!this.config.enabled || !this.config.autoTriggerOnFailure) {
-      logger.debug('Auto-fix disabled or auto-trigger disabled', {
+      logger.debug("Auto-fix disabled or auto-trigger disabled", {
         enabled: this.config.enabled,
         autoTrigger: this.config.autoTriggerOnFailure,
       });
@@ -117,13 +113,13 @@ export class AutoFixManager {
 
     // Check if workflow type is included
     if (!this.config.includedWorkflowTypes.includes(workflowType)) {
-      logger.debug('Workflow type not included in auto-fix', { workflowType });
+      logger.debug("Workflow type not included in auto-fix", { workflowType });
       return false;
     }
 
     // Check if error type is excluded
     if (errorType && this.config.excludedErrorTypes.includes(errorType)) {
-      logger.debug('Error type excluded from auto-fix', { errorType });
+      logger.debug("Error type excluded from auto-fix", { errorType });
       return false;
     }
 
@@ -132,7 +128,7 @@ export class AutoFixManager {
 
     // Check max attempts
     if (attempts.length >= this.config.maxAutoFixes) {
-      logger.warn('Max auto-fix attempts reached for workflow', {
+      logger.warn("Max auto-fix attempts reached for workflow", {
         workflowId,
         attempts: attempts.length,
         max: this.config.maxAutoFixes,
@@ -144,11 +140,10 @@ export class AutoFixManager {
     const lastAttempt = attempts[attempts.length - 1];
     if (lastAttempt) {
       const cooldownMs = this.config.cooldownMinutes * 60 * 1000;
-      const timeSinceLastAttempt =
-        Date.now() - lastAttempt.timestamp.getTime();
+      const timeSinceLastAttempt = Date.now() - lastAttempt.timestamp.getTime();
 
       if (timeSinceLastAttempt < cooldownMs) {
-        logger.debug('Auto-fix cooldown period active', {
+        logger.debug("Auto-fix cooldown period active", {
           workflowId,
           timeSinceLastAttempt,
           cooldownMs,
@@ -164,7 +159,7 @@ export class AutoFixManager {
    * Trigger auto-fix for a workflow
    */
   public async triggerAutoFix(workflowId: number): Promise<string> {
-    logger.info('Triggering auto-fix for workflow', { workflowId });
+    logger.info("Triggering auto-fix for workflow", { workflowId });
 
     // Generate unique attempt ID
     const attemptId = `autofix-${workflowId}-${Date.now()}`;
@@ -175,12 +170,12 @@ export class AutoFixManager {
       workflowId,
       timestamp: new Date(),
       startedAt: new Date(),
-      status: 'pending',
+      status: "pending",
       progress: {
-        stage: 'Initializing',
+        stage: "Initializing",
         percentage: 0,
-        message: 'Auto-fix process starting...'
-      }
+        message: "Auto-fix process starting...",
+      },
     };
 
     // Add to all collections
@@ -192,66 +187,65 @@ export class AutoFixManager {
 
     try {
       // Spawn auto-fix process
-      const scriptPath = path.join(
-        process.cwd(),
-        'scripts',
-        'auto-fix-workflow.ts'
-      );
+      const scriptPath = path.join(process.cwd(), "scripts", "auto-fix-workflow.ts");
 
       // Auto-fix script needs to run from project root (parent of AIDeveloper)
-      const projectRoot = path.join(process.cwd(), '..');
+      const projectRoot = path.join(process.cwd(), "..");
 
-      const autoFixProcess = spawn('tsx', [scriptPath, workflowId.toString(), attemptId], {
+      const autoFixProcess = spawn("tsx", [scriptPath, workflowId.toString(), attemptId], {
         detached: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ["ignore", "pipe", "pipe"],
         cwd: projectRoot,
       });
 
       // Store PID
       attempt.pid = autoFixProcess.pid;
-      attempt.status = 'running';
+      attempt.status = "running";
 
       // Monitor stdout for progress updates
-      autoFixProcess.stdout?.on('data', (data) => {
+      autoFixProcess.stdout?.on("data", (data) => {
         const output = data.toString();
         this.parseProgressUpdate(attemptId, output);
       });
 
       // Monitor stderr for errors
-      autoFixProcess.stderr?.on('data', (data) => {
+      autoFixProcess.stderr?.on("data", (data) => {
         const error = data.toString();
-        logger.error('Auto-fix process error output', new Error(error), { attemptId });
+        logger.error("Auto-fix process error output", new Error(error), { attemptId });
       });
 
       // Handle process exit
-      autoFixProcess.on('exit', (code) => {
+      autoFixProcess.on("exit", (code) => {
         const attempt = this.activeAttempts.get(attemptId);
         if (attempt) {
           attempt.completedAt = new Date();
           attempt.duration = attempt.completedAt.getTime() - attempt.startedAt.getTime();
 
           if (code === 0) {
-            attempt.status = 'success';
-            logger.info('Auto-fix process completed successfully', { attemptId, workflowId });
+            attempt.status = "success";
+            logger.info("Auto-fix process completed successfully", { attemptId, workflowId });
 
             // Emit success event
-            emitToClients('autofix:completed', {
+            emitToClients("autofix:completed", {
               attemptId,
               workflowId,
-              status: 'success',
-              duration: attempt.duration
+              status: "success",
+              duration: attempt.duration,
             });
           } else {
-            attempt.status = 'failed';
+            attempt.status = "failed";
             attempt.error = `Process exited with code ${code}`;
-            logger.error('Auto-fix process failed', new Error(`Process exited with code ${code}`), { attemptId, workflowId });
+            logger.error("Auto-fix process failed", new Error(`Process exited with code ${code}`), {
+              attemptId,
+              workflowId,
+            });
 
             // Emit failure event
-            emitToClients('autofix:failed', {
+            emitToClients("autofix:failed", {
               attemptId,
               workflowId,
               error: attempt.error,
-              duration: attempt.duration
+              duration: attempt.duration,
             });
           }
 
@@ -261,27 +255,27 @@ export class AutoFixManager {
 
       autoFixProcess.unref();
 
-      logger.info('Auto-fix process spawned', {
+      logger.info("Auto-fix process spawned", {
         workflowId,
         attemptId,
-        pid: autoFixProcess.pid
+        pid: autoFixProcess.pid,
       });
 
       // Emit WebSocket event
-      emitToClients('autofix:started', {
+      emitToClients("autofix:started", {
         attemptId,
         workflowId,
-        timestamp: attempt.startedAt
+        timestamp: attempt.startedAt,
       });
 
       if (this.config.notifyOnAutoFix) {
-        logger.info('Auto-fix triggered - notification sent', { workflowId, attemptId });
+        logger.info("Auto-fix triggered - notification sent", { workflowId, attemptId });
       }
 
       return attemptId;
     } catch (error) {
-      logger.error('Failed to trigger auto-fix', error as Error, { workflowId, attemptId });
-      attempt.status = 'failed';
+      logger.error("Failed to trigger auto-fix", error as Error, { workflowId, attemptId });
+      attempt.status = "failed";
       attempt.error = (error as Error).message;
       attempt.completedAt = new Date();
       attempt.duration = attempt.completedAt.getTime() - attempt.startedAt.getTime();
@@ -305,14 +299,14 @@ export class AutoFixManager {
         if (progress.stage) {
           attempt.progress = progress;
           attempt.status = progress.status || attempt.status;
-          logger.debug('Auto-fix progress update', { attemptId, progress });
+          logger.debug("Auto-fix progress update", { attemptId, progress });
 
           // Emit progress update via WebSocket
-          emitToClients('autofix:progress', {
+          emitToClients("autofix:progress", {
             attemptId,
             workflowId: attempt.workflowId,
             progress: attempt.progress,
-            status: attempt.status
+            status: attempt.status,
           });
         }
       }
@@ -324,20 +318,17 @@ export class AutoFixManager {
   /**
    * Update auto-fix attempt status (called by auto-fix script)
    */
-  public updateAttemptStatus(
-    attemptId: string,
-    update: Partial<AutoFixAttempt>
-  ): void {
+  public updateAttemptStatus(attemptId: string, update: Partial<AutoFixAttempt>): void {
     const attempt = this.activeAttempts.get(attemptId);
     if (attempt) {
       Object.assign(attempt, update);
-      logger.info('Auto-fix attempt updated', { attemptId, update });
+      logger.info("Auto-fix attempt updated", { attemptId, update });
 
       // Emit update event
-      emitToClients('autofix:updated', {
+      emitToClients("autofix:updated", {
         attemptId,
         workflowId: attempt.workflowId,
-        ...update
+        ...update,
       });
     }
   }
@@ -353,8 +344,7 @@ export class AutoFixManager {
    * Get specific auto-fix attempt by ID
    */
   public getAttempt(attemptId: string): AutoFixAttempt | undefined {
-    return this.activeAttempts.get(attemptId) ||
-           this.allAttempts.find(a => a.id === attemptId);
+    return this.activeAttempts.get(attemptId) || this.allAttempts.find((a) => a.id === attemptId);
   }
 
   /**
@@ -368,8 +358,8 @@ export class AutoFixManager {
    * Get all auto-fix attempts (with optional limit)
    */
   public getAllAttempts(limit?: number): AutoFixAttempt[] {
-    const attempts = [...this.allAttempts].sort((a, b) =>
-      b.timestamp.getTime() - a.timestamp.getTime()
+    const attempts = [...this.allAttempts].sort(
+      (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
     );
     return limit ? attempts.slice(0, limit) : attempts;
   }
@@ -380,8 +370,8 @@ export class AutoFixManager {
   public getSummary(): AutoFixSummary {
     const totalAttempts = this.allAttempts.length;
     const activeAttempts = this.activeAttempts.size;
-    const successfulAttempts = this.allAttempts.filter(a => a.status === 'success').length;
-    const failedAttempts = this.allAttempts.filter(a => a.status === 'failed').length;
+    const successfulAttempts = this.allAttempts.filter((a) => a.status === "success").length;
+    const failedAttempts = this.allAttempts.filter((a) => a.status === "failed").length;
     const recentAttempts = this.getAllAttempts(10);
 
     return {
@@ -389,7 +379,7 @@ export class AutoFixManager {
       activeAttempts,
       successfulAttempts,
       failedAttempts,
-      recentAttempts
+      recentAttempts,
     };
   }
 
@@ -406,19 +396,11 @@ export class AutoFixManager {
   public async updateConfig(config: Partial<AutoFixConfig>): Promise<void> {
     this.config = { ...this.config, ...config };
 
-    const configPath = path.join(
-      process.cwd(),
-      'config',
-      'auto-fix-config.json'
-    );
+    const configPath = path.join(process.cwd(), "config", "auto-fix-config.json");
 
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(this.config, null, 2),
-      'utf-8'
-    );
+    await fs.writeFile(configPath, JSON.stringify(this.config, null, 2), "utf-8");
 
-    logger.info('Auto-fix config updated', this.config);
+    logger.info("Auto-fix config updated", this.config);
   }
 }
 

@@ -3,13 +3,41 @@
  * Handles conversation thread between users and AI agents during workflow execution
  */
 
-import { query } from './database.js';
-import * as logger from './utils/logger.js';
-import { emitToClients } from './websocket-emitter.js';
+import { query } from "./database.js";
+import * as logger from "./utils/logger.js";
+import { emitToClients } from "./websocket-emitter.js";
 
-export type MessageType = 'user' | 'agent' | 'system';
-export type ActionType = 'comment' | 'instruction' | 'pause' | 'resume' | 'cancel' | 'redirect';
-export type ActionStatus = 'pending' | 'acknowledged' | 'processed' | 'ignored';
+export type MessageType = "user" | "agent" | "system";
+export type ActionType = "comment" | "instruction" | "pause" | "resume" | "cancel" | "redirect";
+export type ActionStatus = "pending" | "acknowledged" | "processed" | "ignored";
+
+// Database result types
+interface InsertResult {
+  insertId: number;
+  affectedRows: number;
+}
+
+interface WorkflowMessageRow {
+  id: number;
+  workflow_id: number;
+  agent_execution_id: number | null;
+  message_type: MessageType;
+  agent_type: string | null;
+  content: string;
+  metadata: string | Record<string, unknown> | null;
+  action_type: ActionType;
+  action_status: ActionStatus;
+  created_at: string;
+  workflow_type?: string;
+  target_module?: string;
+  parent_workflow_id?: number | null;
+}
+
+interface WorkflowRow {
+  id: number;
+  is_paused?: number | boolean;
+  parent_workflow_id?: number | null;
+}
 
 export interface WorkflowMessage {
   id: number;
@@ -18,17 +46,17 @@ export interface WorkflowMessage {
   message_type: MessageType;
   agent_type: string | null;
   content: string;
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   action_type: ActionType;
   action_status: ActionStatus;
   created_at: string;
 }
 
 export interface InterruptSignal {
-  type: 'pause' | 'cancel' | 'redirect' | 'instruction';
+  type: "pause" | "cancel" | "redirect" | "instruction";
   messageId: number;
   content: string;
-  metadata?: any;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface AddMessageOptions {
@@ -36,7 +64,7 @@ export interface AddMessageOptions {
   agentType?: string;
   actionType?: ActionType;
   actionStatus?: ActionStatus;
-  metadata?: any;
+  metadata?: Record<string, unknown> | null;
 }
 
 /**
@@ -51,8 +79,8 @@ export async function addMessage(
   const {
     agentExecutionId = null,
     agentType = null,
-    actionType = 'comment',
-    actionStatus = messageType === 'user' ? 'pending' : 'processed',
+    actionType = "comment",
+    actionStatus = messageType === "user" ? "pending" : "processed",
     metadata = null,
   } = options;
 
@@ -73,7 +101,7 @@ export async function addMessage(
       ]
     );
 
-    const messageId = (result as any).insertId;
+    const messageId = (result as InsertResult).insertId;
 
     // Emit WebSocket event for real-time updates
     emitMessageCreated(workflowId, {
@@ -89,7 +117,7 @@ export async function addMessage(
       created_at: new Date().toISOString(),
     });
 
-    logger.debug('Added workflow message', {
+    logger.debug("Added workflow message", {
       workflowId,
       messageId,
       messageType,
@@ -98,7 +126,7 @@ export async function addMessage(
 
     return messageId;
   } catch (error) {
-    logger.error('Failed to add workflow message', error as Error, {
+    logger.error("Failed to add workflow message", error as Error, {
       workflowId,
       messageType,
     });
@@ -122,9 +150,9 @@ export async function getRootWorkflowId(workflowId: number): Promise<number> {
        SELECT id FROM workflow_ancestors WHERE parent_workflow_id IS NULL`,
       [workflowId]
     );
-    return (result as any[])[0]?.id || workflowId;
+    return (result as WorkflowRow[])[0]?.id || workflowId;
   } catch (error) {
-    logger.error('Failed to get root workflow ID', error as Error, { workflowId });
+    logger.error("Failed to get root workflow ID", error as Error, { workflowId });
     return workflowId;
   }
 }
@@ -144,9 +172,9 @@ export async function getWorkflowTreeIds(rootWorkflowId: number): Promise<number
        SELECT id FROM workflow_tree`,
       [rootWorkflowId]
     );
-    return (result as any[]).map(r => r.id);
+    return (result as WorkflowRow[]).map((r) => r.id);
   } catch (error) {
-    logger.error('Failed to get workflow tree IDs', error as Error, { rootWorkflowId });
+    logger.error("Failed to get workflow tree IDs", error as Error, { rootWorkflowId });
     return [rootWorkflowId];
   }
 }
@@ -155,7 +183,10 @@ export async function getWorkflowTreeIds(rootWorkflowId: number): Promise<number
  * Get all messages for a workflow and all its sub-workflows (entire tree)
  * Messages are ordered by created_at and include workflow context
  */
-export async function getMessages(workflowId: number, includeTree: boolean = true): Promise<WorkflowMessage[]> {
+export async function getMessages(
+  workflowId: number,
+  includeTree: boolean = true
+): Promise<WorkflowMessage[]> {
   try {
     let messages;
 
@@ -168,7 +199,7 @@ export async function getMessages(workflowId: number, includeTree: boolean = tru
       }
 
       // Fetch messages from all workflows in the tree
-      const placeholders = treeIds.map(() => '?').join(',');
+      const placeholders = treeIds.map(() => "?").join(",");
       messages = await query(
         `SELECT wm.*, w.workflow_type, w.target_module, w.parent_workflow_id
          FROM workflow_messages wm
@@ -189,12 +220,16 @@ export async function getMessages(workflowId: number, includeTree: boolean = tru
       );
     }
 
-    return (messages as any[]).map(msg => ({
+    return (messages as WorkflowMessageRow[]).map((msg) => ({
       ...msg,
-      metadata: msg.metadata ? (typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata) : null,
+      metadata: msg.metadata
+        ? typeof msg.metadata === "string"
+          ? JSON.parse(msg.metadata)
+          : msg.metadata
+        : null,
     }));
   } catch (error) {
-    logger.error('Failed to get workflow messages', error as Error, { workflowId });
+    logger.error("Failed to get workflow messages", error as Error, { workflowId });
     throw error;
   }
 }
@@ -213,12 +248,16 @@ export async function getPendingUserMessages(workflowId: number): Promise<Workfl
       [workflowId]
     );
 
-    return (messages as any[]).map(msg => ({
+    return (messages as WorkflowMessageRow[]).map((msg) => ({
       ...msg,
-      metadata: msg.metadata ? (typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata) : null,
+      metadata: msg.metadata
+        ? typeof msg.metadata === "string"
+          ? JSON.parse(msg.metadata)
+          : msg.metadata
+        : null,
     }));
   } catch (error) {
-    logger.error('Failed to get pending user messages', error as Error, { workflowId });
+    logger.error("Failed to get pending user messages", error as Error, { workflowId });
     throw error;
   }
 }
@@ -228,13 +267,12 @@ export async function getPendingUserMessages(workflowId: number): Promise<Workfl
  */
 export async function markMessageAcknowledged(messageId: number): Promise<void> {
   try {
-    await query(
-      `UPDATE workflow_messages SET action_status = 'acknowledged' WHERE id = ?`,
-      [messageId]
-    );
-    logger.debug('Marked message as acknowledged', { messageId });
+    await query(`UPDATE workflow_messages SET action_status = 'acknowledged' WHERE id = ?`, [
+      messageId,
+    ]);
+    logger.debug("Marked message as acknowledged", { messageId });
   } catch (error) {
-    logger.error('Failed to mark message as acknowledged', error as Error, { messageId });
+    logger.error("Failed to mark message as acknowledged", error as Error, { messageId });
     throw error;
   }
 }
@@ -244,13 +282,12 @@ export async function markMessageAcknowledged(messageId: number): Promise<void> 
  */
 export async function markMessageProcessed(messageId: number): Promise<void> {
   try {
-    await query(
-      `UPDATE workflow_messages SET action_status = 'processed' WHERE id = ?`,
-      [messageId]
-    );
-    logger.debug('Marked message as processed', { messageId });
+    await query(`UPDATE workflow_messages SET action_status = 'processed' WHERE id = ?`, [
+      messageId,
+    ]);
+    logger.debug("Marked message as processed", { messageId });
   } catch (error) {
-    logger.error('Failed to mark message as processed', error as Error, { messageId });
+    logger.error("Failed to mark message as processed", error as Error, { messageId });
     throw error;
   }
 }
@@ -260,13 +297,10 @@ export async function markMessageProcessed(messageId: number): Promise<void> {
  */
 export async function markMessageIgnored(messageId: number): Promise<void> {
   try {
-    await query(
-      `UPDATE workflow_messages SET action_status = 'ignored' WHERE id = ?`,
-      [messageId]
-    );
-    logger.debug('Marked message as ignored', { messageId });
+    await query(`UPDATE workflow_messages SET action_status = 'ignored' WHERE id = ?`, [messageId]);
+    logger.debug("Marked message as ignored", { messageId });
   } catch (error) {
-    logger.error('Failed to mark message as ignored', error as Error, { messageId });
+    logger.error("Failed to mark message as ignored", error as Error, { messageId });
     throw error;
   }
 }
@@ -281,33 +315,33 @@ export async function checkForInterrupt(workflowId: number): Promise<InterruptSi
     const pendingMessages = await getPendingUserMessages(workflowId);
 
     for (const msg of pendingMessages) {
-      if (msg.action_type === 'pause') {
+      if (msg.action_type === "pause") {
         return {
-          type: 'pause',
+          type: "pause",
           messageId: msg.id,
           content: msg.content,
           metadata: msg.metadata,
         };
       }
-      if (msg.action_type === 'cancel') {
+      if (msg.action_type === "cancel") {
         return {
-          type: 'cancel',
+          type: "cancel",
           messageId: msg.id,
           content: msg.content,
           metadata: msg.metadata,
         };
       }
-      if (msg.action_type === 'redirect') {
+      if (msg.action_type === "redirect") {
         return {
-          type: 'redirect',
+          type: "redirect",
           messageId: msg.id,
           content: msg.content,
           metadata: msg.metadata,
         };
       }
-      if (msg.action_type === 'instruction') {
+      if (msg.action_type === "instruction") {
         return {
-          type: 'instruction',
+          type: "instruction",
           messageId: msg.id,
           content: msg.content,
           metadata: msg.metadata,
@@ -316,22 +350,19 @@ export async function checkForInterrupt(workflowId: number): Promise<InterruptSi
     }
 
     // Also check if workflow is paused
-    const workflow = await query(
-      `SELECT is_paused FROM workflows WHERE id = ?`,
-      [workflowId]
-    );
+    const workflow = await query(`SELECT is_paused FROM workflows WHERE id = ?`, [workflowId]);
 
-    if ((workflow as any[])[0]?.is_paused) {
+    if ((workflow as WorkflowRow[])[0]?.is_paused) {
       return {
-        type: 'pause',
+        type: "pause",
         messageId: 0,
-        content: 'Workflow is paused',
+        content: "Workflow is paused",
       };
     }
 
     return null;
   } catch (error) {
-    logger.error('Failed to check for interrupt', error as Error, { workflowId });
+    logger.error("Failed to check for interrupt", error as Error, { workflowId });
     return null; // Don't throw - let workflow continue
   }
 }
@@ -345,21 +376,21 @@ export async function pauseWorkflow(workflowId: number, reason?: string): Promis
       `UPDATE workflows
        SET is_paused = TRUE, pause_requested_at = NOW(), pause_reason = ?
        WHERE id = ?`,
-      [reason || 'User requested pause', workflowId]
+      [reason || "User requested pause", workflowId]
     );
 
     // Add system message
-    await addMessage(workflowId, 'system', `Workflow paused: ${reason || 'User requested pause'}`, {
-      actionType: 'pause',
-      actionStatus: 'processed',
+    await addMessage(workflowId, "system", `Workflow paused: ${reason || "User requested pause"}`, {
+      actionType: "pause",
+      actionStatus: "processed",
     });
 
     // Emit WebSocket event
     emitWorkflowPaused(workflowId, reason);
 
-    logger.info('Workflow paused', { workflowId, reason });
+    logger.info("Workflow paused", { workflowId, reason });
   } catch (error) {
-    logger.error('Failed to pause workflow', error as Error, { workflowId });
+    logger.error("Failed to pause workflow", error as Error, { workflowId });
     throw error;
   }
 }
@@ -377,17 +408,17 @@ export async function unpauseWorkflow(workflowId: number): Promise<void> {
     );
 
     // Add system message
-    await addMessage(workflowId, 'system', 'Workflow resumed', {
-      actionType: 'resume',
-      actionStatus: 'processed',
+    await addMessage(workflowId, "system", "Workflow resumed", {
+      actionType: "resume",
+      actionStatus: "processed",
     });
 
     // Emit WebSocket event
     emitWorkflowUnpaused(workflowId);
 
-    logger.info('Workflow unpaused', { workflowId });
+    logger.info("Workflow unpaused", { workflowId });
   } catch (error) {
-    logger.error('Failed to unpause workflow', error as Error, { workflowId });
+    logger.error("Failed to unpause workflow", error as Error, { workflowId });
     throw error;
   }
 }
@@ -397,13 +428,10 @@ export async function unpauseWorkflow(workflowId: number): Promise<void> {
  */
 export async function isWorkflowPaused(workflowId: number): Promise<boolean> {
   try {
-    const result = await query(
-      `SELECT is_paused FROM workflows WHERE id = ?`,
-      [workflowId]
-    );
-    return (result as any[])[0]?.is_paused === 1;
+    const result = await query(`SELECT is_paused FROM workflows WHERE id = ?`, [workflowId]);
+    return (result as WorkflowRow[])[0]?.is_paused === 1;
   } catch (error) {
-    logger.error('Failed to check if workflow is paused', error as Error, { workflowId });
+    logger.error("Failed to check if workflow is paused", error as Error, { workflowId });
     return false;
   }
 }
@@ -417,13 +445,13 @@ export async function addAgentComment(
   agentType: string,
   content: string,
   agentExecutionId?: number,
-  metadata?: any
+  metadata?: Record<string, unknown> | null
 ): Promise<number> {
-  return addMessage(workflowId, 'agent', content, {
+  return addMessage(workflowId, "agent", content, {
     agentType,
     agentExecutionId,
-    actionType: 'comment',
-    actionStatus: 'processed',
+    actionType: "comment",
+    actionStatus: "processed",
     metadata,
   });
 }
@@ -434,12 +462,12 @@ export async function addAgentComment(
 export async function addSystemMessage(
   workflowId: number,
   content: string,
-  actionType: ActionType = 'comment',
-  metadata?: any
+  actionType: ActionType = "comment",
+  metadata?: Record<string, unknown> | null
 ): Promise<number> {
-  return addMessage(workflowId, 'system', content, {
+  return addMessage(workflowId, "system", content, {
     actionType,
-    actionStatus: 'processed',
+    actionStatus: "processed",
     metadata,
   });
 }
@@ -447,21 +475,21 @@ export async function addSystemMessage(
 // WebSocket event emitters
 
 function emitMessageCreated(workflowId: number, message: WorkflowMessage) {
-  emitToClients('message:new', {
+  emitToClients("message:new", {
     workflowId,
     message,
   });
 }
 
 function emitWorkflowPaused(workflowId: number, reason?: string) {
-  emitToClients('workflow:paused', {
+  emitToClients("workflow:paused", {
     workflowId,
     reason,
   });
 }
 
 function emitWorkflowUnpaused(workflowId: number) {
-  emitToClients('workflow:unpaused', {
+  emitToClients("workflow:unpaused", {
     workflowId,
   });
 }

@@ -10,28 +10,29 @@
  * 5. On success, clone from remote into modules/ directory
  */
 
-import { execSync } from 'child_process';
-import fs from 'fs/promises';
-import path from 'path';
-import { config } from '../config.js';
-import * as logger from './logger.js';
+import { execSync } from "child_process";
+import fs from "fs/promises";
+import { readFileSync } from "fs";
+import path from "path";
+import { config } from "../config.js";
+import * as logger from "./logger.js";
 
 export interface NewModuleConfig {
-  name: string;                    // Module name (e.g., "DataProcessor")
-  description: string;             // Module description
-  type: 'service' | 'library';     // Service runs standalone, library is imported
-  port?: number;                   // Port for service modules
-  hasFrontend?: boolean;           // Whether to scaffold frontend
-  frontendPort?: number;           // Port for frontend dev server
-  relatedModules?: string[];       // Related/connected modules
-  repoPrefix?: string;             // GitHub repo name prefix (default: "Ex_Nihilo_")
-  workflowId?: number;             // Associated workflow ID
+  name: string; // Module name (e.g., "DataProcessor")
+  description: string; // Module description
+  type: "service" | "library"; // Service runs standalone, library is imported
+  port?: number; // Port for service modules
+  hasFrontend?: boolean; // Whether to scaffold frontend
+  frontendPort?: number; // Port for frontend dev server
+  relatedModules?: string[]; // Related/connected modules
+  repoPrefix?: string; // GitHub repo name prefix (default: "Ex_Nihilo_")
+  workflowId?: number; // Associated workflow ID
 }
 
 export interface ModuleCreationResult {
   success: boolean;
-  workflowPath: string;            // Path in workflows/ where module was scaffolded
-  modulePath?: string;             // Final path in modules/ after cloning
+  workflowPath: string; // Path in workflows/ where module was scaffolded
+  modulePath?: string; // Final path in modules/ after cloning
   repoUrl?: string;
   error?: string;
 }
@@ -40,25 +41,25 @@ export interface ModuleCreationResult {
  * Get SSH environment for git operations
  */
 function getSSHEnvironment(): NodeJS.ProcessEnv {
-  const sshEnvFile = path.join(process.env.HOME || '/root', '.ssh', 'agent-environment');
+  const sshEnvFile = path.join(process.env.HOME || "/root", ".ssh", "agent-environment");
 
   try {
-    const envContent = require('fs').readFileSync(sshEnvFile, 'utf-8');
+    const envContent = readFileSync(sshEnvFile, "utf-8");
     const env: NodeJS.ProcessEnv = { ...process.env };
 
     const matches = envContent.matchAll(/([A-Z_]+)=([^;]+);/g);
     for (const match of matches) {
       const [, key, value] = match;
-      env[key] = value.replace(/^['"]|['"]$/g, '');
+      env[key] = value.replace(/^['"]|['"]$/g, "");
     }
 
     return env;
   } catch {
-    const homeDir = process.env.HOME || '/root';
-    const sshKeyPath = path.join(homeDir, '.ssh', config.git.sshKeyName);
+    const homeDir = process.env.HOME || "/root";
+    const sshKeyPath = path.join(homeDir, ".ssh", config.git.sshKeyName);
     return {
       ...process.env,
-      GIT_SSH_COMMAND: `ssh -i ${sshKeyPath} -F ${path.join(homeDir, '.ssh', 'config')}`,
+      GIT_SSH_COMMAND: `ssh -i ${sshKeyPath} -F ${path.join(homeDir, ".ssh", "config")}`,
     };
   }
 }
@@ -72,14 +73,17 @@ async function createGitHubRepo(
   description: string,
   isPrivate: boolean = true
 ): Promise<string> {
-  logger.info('Creating GitHub repository', { repoName, description: description.substring(0, 50) });
+  logger.info("Creating GitHub repository", {
+    repoName,
+    description: description.substring(0, 50),
+  });
 
   const token = config.github.token || process.env.GITHUB_TOKEN;
 
   if (!token) {
     throw new Error(
-      'GitHub token not configured. Set GITHUB_TOKEN environment variable or config.github.token. ' +
-      'Create a token at https://github.com/settings/tokens with "repo" scope.'
+      "GitHub token not configured. Set GITHUB_TOKEN environment variable or config.github.token. " +
+        'Create a token at https://github.com/settings/tokens with "repo" scope.'
     );
   }
 
@@ -90,58 +94,70 @@ async function createGitHubRepo(
       private: isPrivate,
       auto_init: false,
     };
-    
-    logger.info('Sending GitHub API request', { repoName, descriptionLength: description.length, isPrivate, requestBody });
-    
-    const response = await fetch('https://api.github.com/user/repos', {
-      method: 'POST',
+
+    logger.info("Sending GitHub API request", {
+      repoName,
+      descriptionLength: description.length,
+      isPrivate,
+      requestBody,
+    });
+
+    const response = await fetch("https://api.github.com/user/repos", {
+      method: "POST",
       headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
       },
       body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { 
-        message?: string; 
+      const errorData = (await response.json().catch(() => ({}))) as {
+        message?: string;
         errors?: Array<{ resource?: string; code?: string; field?: string; message?: string }>;
         documentation_url?: string;
       };
       const errorMessage = errorData.message || response.statusText;
-      const errorDetails = errorData.errors?.map(e => `${e.field || e.resource}: ${e.message || e.code}`).join(', ') || '';
+      const errorDetails =
+        errorData.errors
+          ?.map((e) => `${e.field || e.resource}: ${e.message || e.code}`)
+          .join(", ") || "";
 
       if (response.status === 401) {
         throw new Error(
           `GitHub authentication failed (401). Your token may be expired or invalid. ` +
-          `Create a new token at https://github.com/settings/tokens with "repo" scope.`
+            `Create a new token at https://github.com/settings/tokens with "repo" scope.`
         );
       }
-      if (response.status === 422 && errorMessage.includes('already exists')) {
+      if (response.status === 422 && errorMessage.includes("already exists")) {
         throw new Error(`Repository ${repoName} already exists on GitHub`);
       }
 
       const fullError = errorDetails ? `${errorMessage} - Details: ${errorDetails}` : errorMessage;
-      logger.info('GitHub API error details', { 
-        httpStatus: response.status, 
-        message: errorMessage, 
+      logger.info("GitHub API error details", {
+        httpStatus: response.status,
+        message: errorMessage,
         errorDetails,
-        repoName 
+        repoName,
       });
       throw new Error(`GitHub API error (${response.status}): ${fullError}`);
     }
 
-    const repoData = await response.json() as { ssh_url?: string; full_name: string; html_url: string };
+    const repoData = (await response.json()) as {
+      ssh_url?: string;
+      full_name: string;
+      html_url: string;
+    };
 
     // Return SSH URL for git operations
     const repoUrl = repoData.ssh_url || `git@github.com:${repoData.full_name}.git`;
-    logger.info('GitHub repository created', { repoName, repoUrl, htmlUrl: repoData.html_url });
+    logger.info("GitHub repository created", { repoName, repoUrl, htmlUrl: repoData.html_url });
 
     return repoUrl;
   } catch (error: any) {
-    logger.error('Failed to create GitHub repository', error);
+    logger.error("Failed to create GitHub repository", error);
     throw new Error(`Failed to create GitHub repo: ${error.message}`);
   }
 }
@@ -151,71 +167,86 @@ async function createGitHubRepo(
  */
 function generatePackageJson(moduleConfig: NewModuleConfig): string {
   const scripts: Record<string, string> = {
-    build: 'tsc',
-    typecheck: 'tsc --noEmit',
+    build: "tsc",
+    typecheck: "tsc --noEmit",
   };
 
-  if (moduleConfig.type === 'service') {
-    scripts.start = 'node dist/server.js';
-    scripts.dev = 'tsx watch src/server.ts';
+  if (moduleConfig.type === "service") {
+    scripts.start = "node dist/server.js";
+    scripts.dev = "tsx watch src/server.ts";
   }
 
   if (moduleConfig.hasFrontend) {
-    scripts.start = 'cd frontend && npm run dev';
+    scripts.start = "cd frontend && npm run dev";
   }
 
-  return JSON.stringify({
-    name: moduleConfig.name.toLowerCase().replace(/([A-Z])/g, '-$1').replace(/^-/, ''),
-    version: '1.0.0',
-    description: moduleConfig.description,
-    type: 'module',
-    main: moduleConfig.type === 'service' ? 'dist/server.js' : 'index.js',
-    scripts,
-    keywords: [moduleConfig.name.toLowerCase(), 'ex-nihilo', 'module'],
-    author: '',
-    license: 'MIT',
-    dependencies: {
-      'axios': '^1.6.2',
-      'dotenv': '^16.3.1',
-      ...(moduleConfig.type === 'service' ? {
-        'express': '^4.18.2',
-        'cors': '^2.8.5',
-      } : {}),
+  return JSON.stringify(
+    {
+      name: moduleConfig.name
+        .toLowerCase()
+        .replace(/([A-Z])/g, "-$1")
+        .replace(/^-/, ""),
+      version: "1.0.0",
+      description: moduleConfig.description,
+      type: "module",
+      main: moduleConfig.type === "service" ? "dist/server.js" : "index.js",
+      scripts,
+      keywords: [moduleConfig.name.toLowerCase(), "ex-nihilo", "module"],
+      author: "",
+      license: "MIT",
+      dependencies: {
+        axios: "^1.6.2",
+        dotenv: "^16.3.1",
+        ...(moduleConfig.type === "service"
+          ? {
+              express: "^4.18.2",
+              cors: "^2.8.5",
+            }
+          : {}),
+      },
+      devDependencies: {
+        "@types/node": "^20.10.5",
+        typescript: "^5.3.3",
+        ...(moduleConfig.type === "service"
+          ? {
+              tsx: "^4.7.0",
+              "@types/express": "^4.17.21",
+              "@types/cors": "^2.8.17",
+            }
+          : {}),
+      },
+      engines: {
+        node: ">=18.0.0",
+      },
     },
-    devDependencies: {
-      '@types/node': '^20.10.5',
-      'typescript': '^5.3.3',
-      ...(moduleConfig.type === 'service' ? {
-        'tsx': '^4.7.0',
-        '@types/express': '^4.17.21',
-        '@types/cors': '^2.8.17',
-      } : {}),
-    },
-    engines: {
-      node: '>=18.0.0',
-    },
-  }, null, 2);
+    null,
+    2
+  );
 }
 
 /**
  * Generate tsconfig.json for new module
  */
 function generateTsConfig(): string {
-  return JSON.stringify({
-    compilerOptions: {
-      target: 'ES2022',
-      module: 'ESNext',
-      moduleResolution: 'node',
-      esModuleInterop: true,
-      strict: true,
-      skipLibCheck: true,
-      outDir: './dist',
-      rootDir: './src',
-      declaration: true,
+  return JSON.stringify(
+    {
+      compilerOptions: {
+        target: "ES2022",
+        module: "ESNext",
+        moduleResolution: "node",
+        esModuleInterop: true,
+        strict: true,
+        skipLibCheck: true,
+        outDir: "./dist",
+        rootDir: "./src",
+        declaration: true,
+      },
+      include: ["src/**/*"],
+      exclude: ["node_modules", "dist"],
     },
-    include: ['src/**/*'],
-    exclude: ['node_modules', 'dist'],
-  }, null, 2);
+    null,
+    2
+  );
 }
 
 /**
@@ -308,7 +339,7 @@ function generateModuleJson(moduleConfig: NewModuleConfig): string {
     name: moduleConfig.name,
     description: moduleConfig.description,
     type: moduleConfig.type,
-    version: '1.0.0',
+    version: "1.0.0",
   };
 
   if (moduleConfig.port) {
@@ -323,7 +354,7 @@ function generateModuleJson(moduleConfig: NewModuleConfig): string {
           path: `/${moduleConfig.name.toLowerCase()}`,
           component: moduleConfig.name,
           label: moduleConfig.name,
-          icon: 'Package',
+          icon: "Package",
           navOrder: 10,
         },
       ],
@@ -353,7 +384,9 @@ npm install
 
 ## Usage
 
-${moduleConfig.type === 'service' ? `
+${
+  moduleConfig.type === "service"
+    ? `
 ### Starting the Service
 
 \`\`\`bash
@@ -361,7 +394,8 @@ npm start
 \`\`\`
 
 The service will run on port ${moduleConfig.port || 3000}.
-` : `
+`
+    : `
 ### Importing the Module
 
 \`\`\`typescript
@@ -370,7 +404,8 @@ import { ${moduleConfig.name} } from './${moduleConfig.name}';
 const module = new ${moduleConfig.name}();
 const result = await module.execute(input);
 \`\`\`
-`}
+`
+}
 
 ## Development
 
@@ -379,7 +414,9 @@ npm run build    # Build TypeScript
 npm run typecheck  # Type check without building
 \`\`\`
 
-${moduleConfig.hasFrontend ? `
+${
+  moduleConfig.hasFrontend
+    ? `
 ## Frontend
 
 The frontend runs on port ${moduleConfig.frontendPort || 5176}.
@@ -389,11 +426,13 @@ cd frontend
 npm install
 npm run dev
 \`\`\`
-` : ''}
+`
+    : ""
+}
 
 ## Related Modules
 
-${moduleConfig.relatedModules?.map(m => `- ${m}`).join('\n') || 'None specified'}
+${moduleConfig.relatedModules?.map((m) => `- ${m}`).join("\n") || "None specified"}
 
 ---
 Generated by AIDeveloper
@@ -437,45 +476,45 @@ async function createFrontendScaffold(
   modulePath: string,
   moduleConfig: NewModuleConfig
 ): Promise<void> {
-  const frontendPath = path.join(modulePath, 'frontend');
+  const frontendPath = path.join(modulePath, "frontend");
 
   await fs.mkdir(frontendPath, { recursive: true });
-  await fs.mkdir(path.join(frontendPath, 'src'), { recursive: true });
-  await fs.mkdir(path.join(frontendPath, 'src', 'pages'), { recursive: true });
-  await fs.mkdir(path.join(frontendPath, 'src', 'components'), { recursive: true });
+  await fs.mkdir(path.join(frontendPath, "src"), { recursive: true });
+  await fs.mkdir(path.join(frontendPath, "src", "pages"), { recursive: true });
+  await fs.mkdir(path.join(frontendPath, "src", "components"), { recursive: true });
 
   // Frontend package.json
   const frontendPackage = {
     name: `${moduleConfig.name.toLowerCase()}-frontend`,
-    version: '1.0.0',
-    type: 'module',
+    version: "1.0.0",
+    type: "module",
     scripts: {
       dev: `vite --port ${moduleConfig.frontendPort || 5176}`,
-      build: 'vite build',
-      preview: 'vite preview',
+      build: "vite build",
+      preview: "vite preview",
     },
     dependencies: {
-      'react': '^18.2.0',
-      'react-dom': '^18.2.0',
-      'react-router-dom': '^6.20.0',
-      'react-hot-toast': '^2.4.1',
-      'lucide-react': '^0.294.0',
-      'axios': '^1.6.2',
+      react: "^18.2.0",
+      "react-dom": "^18.2.0",
+      "react-router-dom": "^6.20.0",
+      "react-hot-toast": "^2.4.1",
+      "lucide-react": "^0.294.0",
+      axios: "^1.6.2",
     },
     devDependencies: {
-      '@types/react': '^18.2.42',
-      '@types/react-dom': '^18.2.17',
-      '@vitejs/plugin-react': '^4.2.1',
-      'autoprefixer': '^10.4.16',
-      'postcss': '^8.4.32',
-      'tailwindcss': '^3.3.6',
-      'typescript': '^5.3.3',
-      'vite': '^5.0.7',
+      "@types/react": "^18.2.42",
+      "@types/react-dom": "^18.2.17",
+      "@vitejs/plugin-react": "^4.2.1",
+      autoprefixer: "^10.4.16",
+      postcss: "^8.4.32",
+      tailwindcss: "^3.3.6",
+      typescript: "^5.3.3",
+      vite: "^5.0.7",
     },
   };
 
   await fs.writeFile(
-    path.join(frontendPath, 'package.json'),
+    path.join(frontendPath, "package.json"),
     JSON.stringify(frontendPackage, null, 2)
   );
 
@@ -496,7 +535,7 @@ export default function App() {
 }
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'src', 'App.tsx'), appTsx);
+  await fs.writeFile(path.join(frontendPath, "src", "App.tsx"), appTsx);
 
   // Basic page component
   const pageTsx = `export default function ${moduleConfig.name}() {
@@ -509,10 +548,7 @@ export default function App() {
 }
 `;
 
-  await fs.writeFile(
-    path.join(frontendPath, 'src', 'pages', `${moduleConfig.name}.tsx`),
-    pageTsx
-  );
+  await fs.writeFile(path.join(frontendPath, "src", "pages", `${moduleConfig.name}.tsx`), pageTsx);
 
   // index.html
   const indexHtml = `<!DOCTYPE html>
@@ -529,7 +565,7 @@ export default function App() {
 </html>
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'index.html'), indexHtml);
+  await fs.writeFile(path.join(frontendPath, "index.html"), indexHtml);
 
   // main.tsx
   const mainTsx = `import React from 'react';
@@ -544,7 +580,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 );
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'src', 'main.tsx'), mainTsx);
+  await fs.writeFile(path.join(frontendPath, "src", "main.tsx"), mainTsx);
 
   // Basic CSS
   const indexCss = `@tailwind base;
@@ -552,7 +588,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 @tailwind utilities;
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'src', 'index.css'), indexCss);
+  await fs.writeFile(path.join(frontendPath, "src", "index.css"), indexCss);
 
   // Vite config
   const viteConfig = `import { defineConfig } from 'vite';
@@ -566,7 +602,7 @@ export default defineConfig({
 });
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'vite.config.ts'), viteConfig);
+  await fs.writeFile(path.join(frontendPath, "vite.config.ts"), viteConfig);
 
   // Tailwind config
   const tailwindConfig = `/** @type {import('tailwindcss').Config} */
@@ -577,7 +613,7 @@ export default {
 };
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'tailwind.config.js'), tailwindConfig);
+  await fs.writeFile(path.join(frontendPath, "tailwind.config.js"), tailwindConfig);
 
   // PostCSS config
   const postcssConfig = `export default {
@@ -588,33 +624,33 @@ export default {
 };
 `;
 
-  await fs.writeFile(path.join(frontendPath, 'postcss.config.js'), postcssConfig);
+  await fs.writeFile(path.join(frontendPath, "postcss.config.js"), postcssConfig);
 
   // tsconfig for frontend
   const frontendTsConfig = {
     compilerOptions: {
-      target: 'ES2020',
+      target: "ES2020",
       useDefineForClassFields: true,
-      lib: ['ES2020', 'DOM', 'DOM.Iterable'],
-      module: 'ESNext',
+      lib: ["ES2020", "DOM", "DOM.Iterable"],
+      module: "ESNext",
       skipLibCheck: true,
-      moduleResolution: 'bundler',
+      moduleResolution: "bundler",
       allowImportingTsExtensions: true,
       resolveJsonModule: true,
       isolatedModules: true,
       noEmit: true,
-      jsx: 'react-jsx',
+      jsx: "react-jsx",
       strict: true,
       noUnusedLocals: true,
       noUnusedParameters: true,
       noFallthroughCasesInSwitch: true,
     },
-    include: ['src'],
-    references: [{ path: './tsconfig.node.json' }],
+    include: ["src"],
+    references: [{ path: "./tsconfig.node.json" }],
   };
 
   await fs.writeFile(
-    path.join(frontendPath, 'tsconfig.json'),
+    path.join(frontendPath, "tsconfig.json"),
     JSON.stringify(frontendTsConfig, null, 2)
   );
 
@@ -623,19 +659,19 @@ export default {
     compilerOptions: {
       composite: true,
       skipLibCheck: true,
-      module: 'ESNext',
-      moduleResolution: 'bundler',
+      module: "ESNext",
+      moduleResolution: "bundler",
       allowSyntheticDefaultImports: true,
     },
-    include: ['vite.config.ts'],
+    include: ["vite.config.ts"],
   };
 
   await fs.writeFile(
-    path.join(frontendPath, 'tsconfig.node.json'),
+    path.join(frontendPath, "tsconfig.node.json"),
     JSON.stringify(tsconfigNode, null, 2)
   );
 
-  logger.info('Frontend scaffold created', { moduleName: moduleConfig.name });
+  logger.info("Frontend scaffold created", { moduleName: moduleConfig.name });
 }
 
 /**
@@ -647,53 +683,32 @@ async function scaffoldModuleFiles(
 ): Promise<void> {
   // Create directory structure
   await fs.mkdir(targetPath, { recursive: true });
-  await fs.mkdir(path.join(targetPath, 'src'), { recursive: true });
+  await fs.mkdir(path.join(targetPath, "src"), { recursive: true });
 
-  if (moduleConfig.type === 'service') {
-    await fs.mkdir(path.join(targetPath, 'src', 'routes'), { recursive: true });
-    await fs.mkdir(path.join(targetPath, 'src', 'utils'), { recursive: true });
+  if (moduleConfig.type === "service") {
+    await fs.mkdir(path.join(targetPath, "src", "routes"), { recursive: true });
+    await fs.mkdir(path.join(targetPath, "src", "utils"), { recursive: true });
   }
 
   // Write core files
-  await fs.writeFile(
-    path.join(targetPath, 'package.json'),
-    generatePackageJson(moduleConfig)
-  );
+  await fs.writeFile(path.join(targetPath, "package.json"), generatePackageJson(moduleConfig));
 
-  await fs.writeFile(
-    path.join(targetPath, 'tsconfig.json'),
-    generateTsConfig()
-  );
+  await fs.writeFile(path.join(targetPath, "tsconfig.json"), generateTsConfig());
 
-  await fs.writeFile(
-    path.join(targetPath, '.env.example'),
-    generateEnvTemplate(moduleConfig)
-  );
+  await fs.writeFile(path.join(targetPath, ".env.example"), generateEnvTemplate(moduleConfig));
 
-  await fs.writeFile(
-    path.join(targetPath, '.gitignore'),
-    generateGitignore()
-  );
+  await fs.writeFile(path.join(targetPath, ".gitignore"), generateGitignore());
 
-  await fs.writeFile(
-    path.join(targetPath, 'module.json'),
-    generateModuleJson(moduleConfig)
-  );
+  await fs.writeFile(path.join(targetPath, "module.json"), generateModuleJson(moduleConfig));
 
-  await fs.writeFile(
-    path.join(targetPath, 'README.md'),
-    generateReadme(moduleConfig)
-  );
+  await fs.writeFile(path.join(targetPath, "README.md"), generateReadme(moduleConfig));
 
   // Write main source file
-  if (moduleConfig.type === 'library') {
-    await fs.writeFile(
-      path.join(targetPath, 'index.ts'),
-      generateLibraryIndex(moduleConfig)
-    );
+  if (moduleConfig.type === "library") {
+    await fs.writeFile(path.join(targetPath, "index.ts"), generateLibraryIndex(moduleConfig));
   } else {
     await fs.writeFile(
-      path.join(targetPath, 'src', 'server.ts'),
+      path.join(targetPath, "src", "server.ts"),
       generateServiceServer(moduleConfig)
     );
   }
@@ -717,16 +732,16 @@ async function scaffoldModuleFiles(
 export async function createNewModule(
   moduleConfig: NewModuleConfig
 ): Promise<ModuleCreationResult> {
-  const workflowsPath = path.join(config.workspace.root, 'workflows');
-  const modulesPath = path.join(config.workspace.root, 'modules');
+  const workflowsPath = path.join(config.workspace.root, "workflows");
+  const modulesPath = path.join(config.workspace.root, "modules");
   const workflowDirName = `new-module-${moduleConfig.name}-${Date.now()}`;
   const workflowPath = path.join(workflowsPath, workflowDirName);
   const finalModulePath = path.join(modulesPath, moduleConfig.name);
-  const repoPrefix = moduleConfig.repoPrefix || 'Ex_Nihilo_';
+  const repoPrefix = moduleConfig.repoPrefix || "Ex_Nihilo_";
   const repoName = `${repoPrefix}${moduleConfig.name}`;
 
   try {
-    logger.info('Creating new module in workflow directory', {
+    logger.info("Creating new module in workflow directory", {
       moduleName: moduleConfig.name,
       workflowPath,
     });
@@ -736,26 +751,26 @@ export async function createNewModule(
       await fs.access(finalModulePath);
       throw new Error(`Module ${moduleConfig.name} already exists at ${finalModulePath}`);
     } catch (error: any) {
-      if (error.code !== 'ENOENT') throw error;
+      if (error.code !== "ENOENT") throw error;
     }
 
     // Step 1: Create workflow directory
     await fs.mkdir(workflowPath, { recursive: true });
-    logger.info('Workflow directory created', { workflowPath });
+    logger.info("Workflow directory created", { workflowPath });
 
     // Step 2: Scaffold module files in workflow directory
     await scaffoldModuleFiles(workflowPath, moduleConfig);
-    logger.info('Module scaffolded in workflow directory', { moduleName: moduleConfig.name });
+    logger.info("Module scaffolded in workflow directory", { moduleName: moduleConfig.name });
 
     // Step 3: Initialize git
-    execSync('git init', { cwd: workflowPath, encoding: 'utf-8' });
-    execSync('git checkout -b master', { cwd: workflowPath, encoding: 'utf-8' });
-    execSync('git add .', { cwd: workflowPath, encoding: 'utf-8' });
+    execSync("git init", { cwd: workflowPath, encoding: "utf-8" });
+    execSync("git checkout -b master", { cwd: workflowPath, encoding: "utf-8" });
+    execSync("git add .", { cwd: workflowPath, encoding: "utf-8" });
     execSync(`git commit -m "Initial commit: ${moduleConfig.name} module scaffold"`, {
       cwd: workflowPath,
-      encoding: 'utf-8',
+      encoding: "utf-8",
     });
-    logger.info('Git initialized and initial commit made', { moduleName: moduleConfig.name });
+    logger.info("Git initialized and initial commit made", { moduleName: moduleConfig.name });
 
     // Step 4: Create GitHub repo
     let repoUrl: string;
@@ -763,7 +778,7 @@ export async function createNewModule(
       repoUrl = await createGitHubRepo(repoName, moduleConfig.description);
     } catch (error: any) {
       // If GitHub fails, still keep the local scaffold but report the error
-      logger.error('GitHub repo creation failed', error);
+      logger.error("GitHub repo creation failed", error);
       return {
         success: false,
         workflowPath,
@@ -776,19 +791,21 @@ export async function createNewModule(
     try {
       execSync(`git remote add origin ${repoUrl}`, {
         cwd: workflowPath,
-        encoding: 'utf-8',
+        encoding: "utf-8",
         env: getSSHEnvironment(),
       });
 
-      execSync('git push -u origin master', {
+      execSync("git push -u origin master", {
         cwd: workflowPath,
-        encoding: 'utf-8',
+        encoding: "utf-8",
         env: getSSHEnvironment(),
       });
-      logger.info('Pushed to GitHub', { repoUrl });
+      logger.info("Pushed to GitHub", { repoUrl });
       gitHubPushSuccess = true;
     } catch (pushError: any) {
-      logger.warn('Failed to push to GitHub - continuing with local copy', { error: pushError.message });
+      logger.warn("Failed to push to GitHub - continuing with local copy", {
+        error: pushError.message,
+      });
       // Don't fail - we can still use the local copy
     }
 
@@ -797,25 +814,25 @@ export async function createNewModule(
       if (gitHubPushSuccess) {
         execSync(`git clone ${repoUrl} ${moduleConfig.name}`, {
           cwd: modulesPath,
-          encoding: 'utf-8',
+          encoding: "utf-8",
           env: getSSHEnvironment(),
         });
 
         // Explicitly checkout master branch (fixes "remote HEAD refers to nonexistent ref" issue)
-        execSync('git checkout master', {
+        execSync("git checkout master", {
           cwd: finalModulePath,
-          encoding: 'utf-8',
+          encoding: "utf-8",
           env: getSSHEnvironment(),
         });
 
-        logger.info('Cloned to modules directory', { finalModulePath });
+        logger.info("Cloned to modules directory", { finalModulePath });
       } else {
         // Copy the local workflow directory to modules/
         await fs.cp(workflowPath, finalModulePath, { recursive: true });
-        logger.info('Copied to modules directory (GitHub push failed)', { finalModulePath });
+        logger.info("Copied to modules directory (GitHub push failed)", { finalModulePath });
       }
     } catch (copyError: any) {
-      logger.error('Failed to copy to modules directory', copyError);
+      logger.error("Failed to copy to modules directory", copyError);
       return {
         success: false,
         workflowPath,
@@ -826,24 +843,24 @@ export async function createNewModule(
 
     // Step 7: Install dependencies in the final location
     try {
-      execSync('npm install', { cwd: finalModulePath, encoding: 'utf-8' });
-      logger.info('Dependencies installed', { moduleName: moduleConfig.name });
+      execSync("npm install", { cwd: finalModulePath, encoding: "utf-8" });
+      logger.info("Dependencies installed", { moduleName: moduleConfig.name });
 
       // Install frontend dependencies if applicable
       if (moduleConfig.hasFrontend) {
-        const frontendPath = path.join(finalModulePath, 'frontend');
-        execSync('npm install', { cwd: frontendPath, encoding: 'utf-8' });
-        logger.info('Frontend dependencies installed', { moduleName: moduleConfig.name });
+        const frontendPath = path.join(finalModulePath, "frontend");
+        execSync("npm install", { cwd: frontendPath, encoding: "utf-8" });
+        logger.info("Frontend dependencies installed", { moduleName: moduleConfig.name });
       }
     } catch (npmError: any) {
-      logger.warn('Failed to install dependencies', { error: npmError.message });
+      logger.warn("Failed to install dependencies", { error: npmError.message });
       // Don't fail the whole operation for npm install issues
     }
 
     // Step 8: Clean up workflow directory (optional - keep for audit trail)
     // await fs.rm(workflowPath, { recursive: true, force: true });
 
-    logger.info('Module created successfully', {
+    logger.info("Module created successfully", {
       moduleName: moduleConfig.name,
       finalModulePath,
       repoUrl,
@@ -859,7 +876,7 @@ export async function createNewModule(
       repoUrl,
     };
   } catch (error: any) {
-    logger.error('Failed to create module', error);
+    logger.error("Failed to create module", error);
     return {
       success: false,
       workflowPath,

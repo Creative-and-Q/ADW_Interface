@@ -3,13 +3,13 @@
  * Handles discovery and management of ex_nihilo modules
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import { config } from '../config.js';
-import * as logger from './logger.js';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import type { ModuleManifest, ModulePluginMetadata } from '../types/module-plugin.js';
+import fs from "fs/promises";
+import path from "path";
+import { config } from "../config.js";
+import * as logger from "./logger.js";
+import { exec } from "child_process";
+import { promisify } from "util";
+import type { ModuleManifest, ModulePluginMetadata } from "../types/module-plugin.js";
 
 const execAsync = promisify(exec);
 
@@ -46,7 +46,7 @@ export interface Module {
  * Get modules directory path
  */
 export function getModulesPath(): string {
-  return path.join(config.workspace.root, 'modules');
+  return path.join(config.workspace.root, "modules");
 }
 
 /**
@@ -60,22 +60,20 @@ export async function discoverModules(): Promise<Module[]> {
     try {
       await fs.access(modulesPath);
     } catch {
-      logger.warn('Modules directory does not exist', { path: modulesPath });
+      logger.warn("Modules directory does not exist", { path: modulesPath });
       return [];
     }
 
     // Read all directories in modules
     const entries = await fs.readdir(modulesPath, { withFileTypes: true });
-    const moduleDirs = entries.filter(entry => entry.isDirectory());
+    const moduleDirs = entries.filter((entry) => entry.isDirectory());
 
     // Get detailed info for each module
-    const modules = await Promise.all(
-      moduleDirs.map(dir => getModuleInfo(dir.name))
-    );
+    const modules = await Promise.all(moduleDirs.map((dir) => getModuleInfo(dir.name)));
 
     return modules.filter((m): m is Module => m !== null);
   } catch (error) {
-    logger.error('Failed to discover modules', error as Error);
+    logger.error("Failed to discover modules", error as Error);
     return [];
   }
 }
@@ -107,7 +105,7 @@ export async function getModuleInfo(moduleName: string): Promise<Module | null> 
 
     // Check for Git repository
     try {
-      await fs.access(path.join(modulePath, '.git'));
+      await fs.access(path.join(modulePath, ".git"));
       module.hasGit = true;
       module.gitStatus = await getGitStatus(modulePath);
     } catch {
@@ -116,8 +114,8 @@ export async function getModuleInfo(moduleName: string): Promise<Module | null> 
 
     // Check for package.json
     try {
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
       module.hasPackageJson = true;
       module.packageInfo = {
         name: packageJson.name,
@@ -133,11 +131,11 @@ export async function getModuleInfo(moduleName: string): Promise<Module | null> 
 
     // Check for AI prompts directory
     try {
-      const promptsPath = path.join(modulePath, 'config', 'prompts');
+      const promptsPath = path.join(modulePath, "config", "prompts");
       await fs.access(promptsPath);
       const promptFiles = await fs.readdir(promptsPath);
       module.hasPrompts = promptFiles.length > 0;
-      module.prompts = promptFiles.filter(f => f.endsWith('.md'));
+      module.prompts = promptFiles.filter((f) => f.endsWith(".md"));
     } catch {
       // No prompts directory
     }
@@ -178,7 +176,7 @@ async function getGitStatus(modulePath: string): Promise<{
 }> {
   try {
     // Get current branch
-    const { stdout: branchOutput } = await execAsync('git branch --show-current', {
+    const { stdout: branchOutput } = await execAsync("git branch --show-current", {
       cwd: modulePath,
     });
     const branch = branchOutput.trim();
@@ -186,18 +184,17 @@ async function getGitStatus(modulePath: string): Promise<{
     // Get last commit info
     let lastCommit;
     try {
-      const { stdout: commitOutput } = await execAsync(
-        'git log -1 --format="%H|%s|%ai"',
-        { cwd: modulePath }
-      );
-      const [hash, message, date] = commitOutput.trim().split('|');
+      const { stdout: commitOutput } = await execAsync('git log -1 --format="%H|%s|%ai"', {
+        cwd: modulePath,
+      });
+      const [hash, message, date] = commitOutput.trim().split("|");
       lastCommit = { hash, message, date };
     } catch {
       // No commits yet
     }
 
     // Check if working directory is dirty
-    const { stdout: statusOutput } = await execAsync('git status --porcelain', {
+    const { stdout: statusOutput } = await execAsync("git status --porcelain", {
       cwd: modulePath,
     });
     const isDirty = statusOutput.trim().length > 0;
@@ -208,9 +205,9 @@ async function getGitStatus(modulePath: string): Promise<{
       isDirty,
     };
   } catch (error) {
-    logger.error('Failed to get git status', error as Error);
+    logger.error("Failed to get git status", error as Error);
     return {
-      branch: 'unknown',
+      branch: "unknown",
       isDirty: false,
     };
   }
@@ -222,27 +219,28 @@ async function getGitStatus(modulePath: string): Promise<{
 export async function getModuleCommitHistory(
   moduleName: string,
   limit: number = 50
-): Promise<Array<{
-  hash: string;
-  shortHash: string;
-  message: string;
-  author: string;
-  date: string;
-}>> {
+): Promise<
+  Array<{
+    hash: string;
+    shortHash: string;
+    message: string;
+    author: string;
+    date: string;
+  }>
+> {
   try {
     const modulePath = path.join(getModulesPath(), moduleName);
 
-    const { stdout } = await execAsync(
-      `git log -${limit} --format="%H|%h|%s|%an|%ai"`,
-      { cwd: modulePath }
-    );
+    const { stdout } = await execAsync(`git log -${limit} --format="%H|%h|%s|%an|%ai"`, {
+      cwd: modulePath,
+    });
 
     const commits = stdout
       .trim()
-      .split('\n')
-      .filter(line => line.length > 0)
-      .map(line => {
-        const [hash, shortHash, message, author, date] = line.split('|');
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [hash, shortHash, message, author, date] = line.split("|");
         return { hash, shortHash, message, author, date };
       });
 
@@ -256,16 +254,18 @@ export async function getModuleCommitHistory(
 /**
  * Get prompts for a module
  */
-export async function getModulePrompts(moduleName: string): Promise<Array<{
-  name: string;
-  path: string;
-  content?: string;
-}>> {
+export async function getModulePrompts(moduleName: string): Promise<
+  Array<{
+    name: string;
+    path: string;
+    content?: string;
+  }>
+> {
   try {
-    const promptsPath = path.join(getModulesPath(), moduleName, 'config', 'prompts');
+    const promptsPath = path.join(getModulesPath(), moduleName, "config", "prompts");
 
     const files = await fs.readdir(promptsPath);
-    const promptFiles = files.filter(f => f.endsWith('.md'));
+    const promptFiles = files.filter((f) => f.endsWith(".md"));
 
     const prompts = await Promise.all(
       promptFiles.map(async (file) => {
@@ -292,14 +292,8 @@ export async function getModulePromptContent(
   promptName: string
 ): Promise<string | null> {
   try {
-    const promptPath = path.join(
-      getModulesPath(),
-      moduleName,
-      'config',
-      'prompts',
-      promptName
-    );
-    const content = await fs.readFile(promptPath, 'utf-8');
+    const promptPath = path.join(getModulesPath(), moduleName, "config", "prompts", promptName);
+    const content = await fs.readFile(promptPath, "utf-8");
     return content;
   } catch (error) {
     logger.error(`Failed to read prompt ${promptName} for ${moduleName}`, error as Error);
@@ -316,14 +310,8 @@ export async function updateModulePrompt(
   content: string
 ): Promise<boolean> {
   try {
-    const promptPath = path.join(
-      getModulesPath(),
-      moduleName,
-      'config',
-      'prompts',
-      promptName
-    );
-    await fs.writeFile(promptPath, content, 'utf-8');
+    const promptPath = path.join(getModulesPath(), moduleName, "config", "prompts", promptName);
+    await fs.writeFile(promptPath, content, "utf-8");
     logger.info(`Updated prompt ${promptName} for ${moduleName}`);
     return true;
   } catch (error) {
@@ -344,7 +332,9 @@ export async function getModuleStats(moduleName: string): Promise<{
     const modulePath = path.join(getModulesPath(), moduleName);
 
     // Count files recursively
-    const countFiles = async (dir: string): Promise<{
+    const countFiles = async (
+      dir: string
+    ): Promise<{
       files: string[];
       totalLines: number;
     }> => {
@@ -356,7 +346,7 @@ export async function getModuleStats(moduleName: string): Promise<{
         const fullPath = path.join(dir, entry.name);
 
         // Skip node_modules, .git, dist, etc.
-        if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') {
+        if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") {
           continue;
         }
 
@@ -369,8 +359,8 @@ export async function getModuleStats(moduleName: string): Promise<{
 
           // Count lines for text files
           try {
-            const content = await fs.readFile(fullPath, 'utf-8');
-            totalLines += content.split('\n').length;
+            const content = await fs.readFile(fullPath, "utf-8");
+            totalLines += content.split("\n").length;
           } catch {
             // Binary file or read error, skip
           }
@@ -385,7 +375,7 @@ export async function getModuleStats(moduleName: string): Promise<{
     // Group by file type
     const filesByType: Record<string, number> = {};
     for (const file of files) {
-      const ext = path.extname(file).slice(1) || 'no-extension';
+      const ext = path.extname(file).slice(1) || "no-extension";
       filesByType[ext] = (filesByType[ext] || 0) + 1;
     }
 
@@ -410,18 +400,18 @@ export async function getModuleStats(moduleName: string): Promise<{
 export async function readModuleManifest(moduleName: string): Promise<ModuleManifest | null> {
   try {
     const modulePath = path.join(getModulesPath(), moduleName);
-    
+
     // Try module.json first, then aideveloper.json
     const manifestPaths = [
-      path.join(modulePath, 'module.json'),
-      path.join(modulePath, 'aideveloper.json'),
+      path.join(modulePath, "module.json"),
+      path.join(modulePath, "aideveloper.json"),
     ];
 
     for (const manifestPath of manifestPaths) {
       try {
-        const content = await fs.readFile(manifestPath, 'utf-8');
+        const content = await fs.readFile(manifestPath, "utf-8");
         const manifest = JSON.parse(content) as ModuleManifest;
-        
+
         // Validate required fields
         if (!manifest.name || !manifest.version || !manifest.description) {
           logger.warn(`Invalid manifest for ${moduleName}: missing required fields`);
@@ -445,7 +435,9 @@ export async function readModuleManifest(moduleName: string): Promise<ModuleMani
 /**
  * Get module plugin metadata (includes manifest)
  */
-export async function getModulePluginMetadata(moduleName: string): Promise<ModulePluginMetadata | null> {
+export async function getModulePluginMetadata(
+  moduleName: string
+): Promise<ModulePluginMetadata | null> {
   try {
     const module = await getModuleInfo(moduleName);
     if (!module) {
@@ -453,9 +445,9 @@ export async function getModulePluginMetadata(moduleName: string): Promise<Modul
     }
 
     const manifest = await readModuleManifest(moduleName);
-    
+
     // Check for frontend directory
-    const frontendPath = path.join(module.path, 'frontend');
+    const frontendPath = path.join(module.path, "frontend");
     let hasFrontend = false;
     try {
       const stat = await fs.stat(frontendPath);
@@ -498,12 +490,14 @@ export async function getAllModuleManifests(): Promise<Map<string, ModuleManifes
 /**
  * Get all module pages from manifests
  */
-export async function getAllModulePages(): Promise<Array<{
-  module: string;
-  page: import('../types/module-plugin.js').ModulePage;
-}>> {
+export async function getAllModulePages(): Promise<
+  Array<{
+    module: string;
+    page: import("../types/module-plugin.js").ModulePage;
+  }>
+> {
   const manifests = await getAllModuleManifests();
-  const pages: Array<{ module: string; page: import('../types/module-plugin.js').ModulePage }> = [];
+  const pages: Array<{ module: string; page: import("../types/module-plugin.js").ModulePage }> = [];
 
   for (const [moduleName, manifest] of manifests) {
     if (manifest.pages) {
@@ -519,12 +513,17 @@ export async function getAllModulePages(): Promise<Array<{
 /**
  * Get all dashboard widgets from manifests
  */
-export async function getAllDashboardWidgets(): Promise<Array<{
-  module: string;
-  widget: import('../types/module-plugin.js').DashboardWidget;
-}>> {
+export async function getAllDashboardWidgets(): Promise<
+  Array<{
+    module: string;
+    widget: import("../types/module-plugin.js").DashboardWidget;
+  }>
+> {
   const manifests = await getAllModuleManifests();
-  const widgets: Array<{ module: string; widget: import('../types/module-plugin.js').DashboardWidget }> = [];
+  const widgets: Array<{
+    module: string;
+    widget: import("../types/module-plugin.js").DashboardWidget;
+  }> = [];
 
   for (const [moduleName, manifest] of manifests) {
     if (manifest.dashboardWidgets) {
@@ -540,12 +539,17 @@ export async function getAllDashboardWidgets(): Promise<Array<{
 /**
  * Get all environment variables from manifests
  */
-export async function getAllModuleEnvVars(): Promise<Array<{
-  module: string;
-  envVar: import('../types/module-plugin.js').EnvVarDefinition;
-}>> {
+export async function getAllModuleEnvVars(): Promise<
+  Array<{
+    module: string;
+    envVar: import("../types/module-plugin.js").EnvVarDefinition;
+  }>
+> {
   const manifests = await getAllModuleManifests();
-  const envVars: Array<{ module: string; envVar: import('../types/module-plugin.js').EnvVarDefinition }> = [];
+  const envVars: Array<{
+    module: string;
+    envVar: import("../types/module-plugin.js").EnvVarDefinition;
+  }> = [];
 
   for (const [moduleName, manifest] of manifests) {
     if (manifest.envVars) {
@@ -561,12 +565,14 @@ export async function getAllModuleEnvVars(): Promise<Array<{
 /**
  * Get all API routes from manifests
  */
-export async function getAllApiRoutes(): Promise<Array<{
-  module: string;
-  route: import('../types/module-plugin.js').ApiRoute;
-}>> {
+export async function getAllApiRoutes(): Promise<
+  Array<{
+    module: string;
+    route: import("../types/module-plugin.js").ApiRoute;
+  }>
+> {
   const manifests = await getAllModuleManifests();
-  const routes: Array<{ module: string; route: import('../types/module-plugin.js').ApiRoute }> = [];
+  const routes: Array<{ module: string; route: import("../types/module-plugin.js").ApiRoute }> = [];
 
   for (const [moduleName, manifest] of manifests) {
     if (manifest.apiRoutes) {
@@ -602,18 +608,18 @@ export async function importModule(options: ImportModuleOptions): Promise<{
     const { url, category, project, tags, autoInstall = false } = options;
 
     // Validate URL
-    if (!url || typeof url !== 'string') {
-      return { success: false, message: 'Invalid Git URL provided' };
+    if (!url || typeof url !== "string") {
+      return { success: false, message: "Invalid Git URL provided" };
     }
 
     // Extract module name from URL
     // Supports: git@github.com:user/repo.git, https://github.com/user/repo.git
     const urlMatch = url.match(/\/([^/]+?)(\.git)?$/);
     if (!urlMatch) {
-      return { success: false, message: 'Could not extract module name from URL' };
+      return { success: false, message: "Could not extract module name from URL" };
     }
 
-    const moduleName = urlMatch[1].replace('.git', '');
+    const moduleName = urlMatch[1].replace(".git", "");
     const modulesPath = getModulesPath();
     const modulePath = path.join(modulesPath, moduleName);
 
@@ -636,13 +642,13 @@ export async function importModule(options: ImportModuleOptions): Promise<{
         cwd: modulesPath,
       });
 
-      if (stderr && !stderr.includes('Cloning into')) {
+      if (stderr && !stderr.includes("Cloning into")) {
         logger.warn(`Git clone warnings: ${stderr}`);
       }
 
       logger.info(`Git clone output: ${stdout}`);
     } catch (error: any) {
-      logger.error('Git clone failed', error);
+      logger.error("Git clone failed", error);
       return {
         success: false,
         message: `Failed to clone repository: ${error.message}`,
@@ -651,29 +657,29 @@ export async function importModule(options: ImportModuleOptions): Promise<{
 
     // Read existing module.json or package.json for defaults
     let existingManifest: Partial<ModuleManifest> = {};
-    let manifestPath = path.join(modulePath, 'module.json');
+    const manifestPath = path.join(modulePath, "module.json");
 
     try {
-      const content = await fs.readFile(manifestPath, 'utf-8');
+      const content = await fs.readFile(manifestPath, "utf-8");
       existingManifest = JSON.parse(content);
     } catch {
       // No existing module.json, try to create from package.json
       try {
-        const packagePath = path.join(modulePath, 'package.json');
-        const packageContent = await fs.readFile(packagePath, 'utf-8');
+        const packagePath = path.join(modulePath, "package.json");
+        const packageContent = await fs.readFile(packagePath, "utf-8");
         const packageJson = JSON.parse(packageContent);
 
         existingManifest = {
           name: packageJson.name || moduleName,
-          version: packageJson.version || '1.0.0',
-          description: packageJson.description || 'Imported module',
+          version: packageJson.version || "1.0.0",
+          description: packageJson.description || "Imported module",
         };
       } catch {
         // No package.json either, use defaults
         existingManifest = {
           name: moduleName,
-          version: '1.0.0',
-          description: 'Imported module',
+          version: "1.0.0",
+          description: "Imported module",
         };
       }
     }
@@ -681,8 +687,8 @@ export async function importModule(options: ImportModuleOptions): Promise<{
     // Merge with provided metadata
     const updatedManifest: ModuleManifest = {
       name: existingManifest.name || moduleName,
-      version: existingManifest.version || '1.0.0',
-      description: existingManifest.description || 'Imported module',
+      version: existingManifest.version || "1.0.0",
+      description: existingManifest.description || "Imported module",
       category: category || existingManifest.category,
       project: project || existingManifest.project,
       tags: tags || existingManifest.tags,
@@ -693,22 +699,18 @@ export async function importModule(options: ImportModuleOptions): Promise<{
     };
 
     // Write module.json
-    await fs.writeFile(
-      manifestPath,
-      JSON.stringify(updatedManifest, null, 2) + '\n',
-      'utf-8'
-    );
+    await fs.writeFile(manifestPath, JSON.stringify(updatedManifest, null, 2) + "\n", "utf-8");
 
     logger.info(`Created/updated module.json for ${moduleName}`);
 
     // Optionally install dependencies
     if (autoInstall) {
       try {
-        const packagePath = path.join(modulePath, 'package.json');
+        const packagePath = path.join(modulePath, "package.json");
         await fs.access(packagePath);
 
         logger.info(`Installing dependencies for ${moduleName}...`);
-        const { stderr } = await execAsync('npm install', {
+        const { stderr } = await execAsync("npm install", {
           cwd: modulePath,
         });
 
@@ -725,10 +727,10 @@ export async function importModule(options: ImportModuleOptions): Promise<{
     return {
       success: true,
       moduleName,
-      message: `Successfully imported module '${moduleName}'${autoInstall ? ' and installed dependencies' : ''}`,
+      message: `Successfully imported module '${moduleName}'${autoInstall ? " and installed dependencies" : ""}`,
     };
   } catch (error: any) {
-    logger.error('Failed to import module', error);
+    logger.error("Failed to import module", error);
     return {
       success: false,
       message: `Import failed: ${error.message}`,
@@ -767,14 +769,14 @@ export async function getModuleRemoteInfo(moduleName: string): Promise<{
 
     // Check if it's a git repo
     try {
-      await fs.access(path.join(modulePath, '.git'));
+      await fs.access(path.join(modulePath, ".git"));
     } catch {
       return { hasRemote: false };
     }
 
     // Get remote URL
     try {
-      const { stdout } = await execAsync('git remote get-url origin', {
+      const { stdout } = await execAsync("git remote get-url origin", {
         cwd: modulePath,
       });
       const remoteUrl = stdout.trim();
@@ -841,7 +843,7 @@ export async function deleteModule(options: DeleteModuleOptions): Promise<{
 
       if (remoteInfo?.isGitHub && remoteInfo.owner && remoteInfo.repo) {
         try {
-          const axios = (await import('axios')).default;
+          const axios = (await import("axios")).default;
 
           logger.info(`Deleting GitHub repository: ${remoteInfo.owner}/${remoteInfo.repo}`);
 
@@ -850,19 +852,23 @@ export async function deleteModule(options: DeleteModuleOptions): Promise<{
             {
               headers: {
                 Authorization: `token ${githubToken}`,
-                Accept: 'application/vnd.github.v3+json',
+                Accept: "application/vnd.github.v3+json",
               },
             }
           );
 
           remoteDeleted = true;
-          logger.info(`Successfully deleted GitHub repository: ${remoteInfo.owner}/${remoteInfo.repo}`);
+          logger.info(
+            `Successfully deleted GitHub repository: ${remoteInfo.owner}/${remoteInfo.repo}`
+          );
         } catch (error: any) {
           const status = error.response?.status;
           const message = error.response?.data?.message || error.message;
 
           if (status === 404) {
-            logger.warn(`GitHub repository not found (may already be deleted): ${remoteInfo.owner}/${remoteInfo.repo}`);
+            logger.warn(
+              `GitHub repository not found (may already be deleted): ${remoteInfo.owner}/${remoteInfo.repo}`
+            );
             remoteDeleted = true; // Consider it deleted if not found
           } else if (status === 403) {
             return {
@@ -881,7 +887,9 @@ export async function deleteModule(options: DeleteModuleOptions): Promise<{
           }
         }
       } else if (remoteInfo?.hasRemote && !remoteInfo.isGitHub) {
-        logger.warn(`Remote repository is not on GitHub, skipping remote deletion: ${remoteInfo.remoteUrl}`);
+        logger.warn(
+          `Remote repository is not on GitHub, skipping remote deletion: ${remoteInfo.remoteUrl}`
+        );
       }
     }
 
@@ -891,9 +899,10 @@ export async function deleteModule(options: DeleteModuleOptions): Promise<{
 
     return {
       success: true,
-      message: deleteRemoteRepo && remoteDeleted
-        ? `Successfully deleted module '${moduleName}' and its GitHub repository`
-        : `Successfully deleted module '${moduleName}' locally`,
+      message:
+        deleteRemoteRepo && remoteDeleted
+          ? `Successfully deleted module '${moduleName}' and its GitHub repository`
+          : `Successfully deleted module '${moduleName}' locally`,
       localDeleted: true,
       remoteDeleted,
     };

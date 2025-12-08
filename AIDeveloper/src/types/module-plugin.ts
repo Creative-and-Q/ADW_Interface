@@ -10,15 +10,15 @@ export interface ModuleManifest {
   name: string;
   version: string;
   description: string;
-  type?: string;         // e.g., "library", "service", "agent" - library modules are not auto-started
+  type?: string; // e.g., "library", "service", "agent" - library modules are not auto-started
 
   // Module organization
-  category?: string;     // e.g., "AI Agents", "Game Systems", "Controllers"
-  project?: string;      // e.g., "Ex Nihilo", "AIDeveloper"
-  tags?: string[];       // Additional searchable tags
+  category?: string; // e.g., "AI Agents", "Game Systems", "Controllers"
+  project?: string; // e.g., "Ex Nihilo", "AIDeveloper"
+  tags?: string[]; // Additional searchable tags
 
   // Auto-update settings
-  autoUpdate?: boolean;  // If true, check for updates every 2 minutes and pull from master
+  autoUpdate?: boolean; // If true, check for updates every 2 minutes and pull from master
 
   // Frontend pages this module provides
   pages?: ModulePage[];
@@ -37,11 +37,11 @@ export interface ModuleManifest {
  * Frontend page definition
  */
 export interface ModulePage {
-  path: string;           // e.g., "/chains"
-  component: string;     // Path to React component or component name
-  label: string;         // Navigation label
-  icon?: string;         // Icon name (lucide-react icon)
-  navOrder?: number;     // Order in navigation
+  path: string; // e.g., "/chains"
+  component: string; // Path to React component or component name
+  label: string; // Navigation label
+  icon?: string; // Icon name (lucide-react icon)
+  navOrder?: number; // Order in navigation
   requiresAuth?: boolean; // Require authentication
 }
 
@@ -50,11 +50,11 @@ export interface ModulePage {
  */
 export interface DashboardWidget {
   id: string;
-  component: string;     // Path to React component or component name
-  position: 'top' | 'middle' | 'bottom';
-  width: 'full' | 'half' | 'third';
+  component: string; // Path to React component or component name
+  position: "top" | "middle" | "bottom";
+  width: "full" | "half" | "third";
   order?: number;
-  title?: string;        // Widget title
+  title?: string; // Widget title
 }
 
 /**
@@ -65,8 +65,8 @@ export interface EnvVarDefinition {
   description: string;
   required: boolean;
   defaultValue?: string;
-  type?: 'string' | 'number' | 'boolean';
-  secret?: boolean;      // Hide value in UI
+  type?: "string" | "number" | "boolean";
+  secret?: boolean; // Hide value in UI
   modulePrefix?: string; // Prefix for env var (e.g., "AICONTROLLER")
 }
 
@@ -74,9 +74,9 @@ export interface EnvVarDefinition {
  * API proxy route definition
  */
 export interface ApiRoute {
-  prefix: string;        // e.g., "/aicontroller"
-  target: string;        // e.g., "http://localhost:3035"
-  port?: number;        // Port number (alternative to full target URL)
+  prefix: string; // e.g., "/aicontroller"
+  target: string; // e.g., "http://localhost:3035"
+  port?: number; // Port number (alternative to full target URL)
 }
 
 /**
@@ -90,7 +90,3 @@ export interface ModulePluginMetadata {
   hasFrontend: boolean;
   frontendPath?: string;
 }
-
-
-
-

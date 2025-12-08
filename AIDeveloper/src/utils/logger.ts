@@ -3,23 +3,24 @@
  * Provides structured logging with file rotation
  */
 
-import winston from 'winston';
-import DailyRotateFile from 'winston-daily-rotate-file';
-import chalk from 'chalk';
-import path from 'path';
-import { config } from '../config.js';
+import winston from "winston";
+import DailyRotateFile from "winston-daily-rotate-file";
+import chalk from "chalk";
+import path from "path";
+import { config } from "../config.js";
 
 // Custom format for console output with colors
 const consoleFormat = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+  winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
   winston.format.errors({ stack: true }),
   winston.format.printf(({ timestamp, level, message, ...meta }) => {
-    const coloredLevel = {
-      error: chalk.red(level.toUpperCase()),
-      warn: chalk.yellow(level.toUpperCase()),
-      info: chalk.blue(level.toUpperCase()),
-      debug: chalk.gray(level.toUpperCase()),
-    }[level] || level.toUpperCase();
+    const coloredLevel =
+      {
+        error: chalk.red(level.toUpperCase()),
+        warn: chalk.yellow(level.toUpperCase()),
+        info: chalk.blue(level.toUpperCase()),
+        debug: chalk.gray(level.toUpperCase()),
+      }[level] || level.toUpperCase();
 
     let output = `${chalk.gray(timestamp)} ${coloredLevel} ${message}`;
 
@@ -50,20 +51,20 @@ const logger = winston.createLogger({
 
     // File transport for errors
     new DailyRotateFile({
-      filename: path.join(config.logging.dir, 'error-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      level: 'error',
-      maxSize: '20m',
-      maxFiles: '14d',
+      filename: path.join(config.logging.dir, "error-%DATE%.log"),
+      datePattern: "YYYY-MM-DD",
+      level: "error",
+      maxSize: "20m",
+      maxFiles: "14d",
       format: fileFormat,
     }),
 
     // File transport for all logs
     new DailyRotateFile({
-      filename: path.join(config.logging.dir, 'combined-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxSize: '20m',
-      maxFiles: '14d',
+      filename: path.join(config.logging.dir, "combined-%DATE%.log"),
+      datePattern: "YYYY-MM-DD",
+      maxSize: "20m",
+      maxFiles: "14d",
       format: fileFormat,
     }),
   ],
@@ -103,27 +104,25 @@ export function warn(message: string, meta?: Record<string, any>): void {
 export function error(message: string, error?: Error, meta?: Record<string, any>): void {
   logger.error(message, {
     ...meta,
-    error: error ? {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-    } : undefined,
+    error: error
+      ? {
+          message: error.message,
+          stack: error.stack,
+          name: error.name,
+        }
+      : undefined,
   });
 }
 
 /**
  * Log agent execution start
  */
-export function logAgentStart(
-  agentType: string,
-  workflowId: number,
-  executionId: number
-): void {
+export function logAgentStart(agentType: string, workflowId: number, executionId: number): void {
   info(`Agent started: ${agentType}`, {
     agentType,
     workflowId,
     executionId,
-    event: 'agent_start',
+    event: "agent_start",
   });
 }
 
@@ -141,7 +140,7 @@ export function logAgentComplete(
     workflowId,
     executionId,
     duration,
-    event: 'agent_complete',
+    event: "agent_complete",
   });
 }
 
@@ -158,21 +157,18 @@ export function logAgentFailure(
     agentType,
     workflowId,
     executionId,
-    event: 'agent_failure',
+    event: "agent_failure",
   });
 }
 
 /**
  * Log workflow start
  */
-export function logWorkflowStart(
-  workflowId: number,
-  workflowType: string
-): void {
+export function logWorkflowStart(workflowId: number, workflowType: string): void {
   info(`Workflow started: ${workflowType}`, {
     workflowId,
     workflowType,
-    event: 'workflow_start',
+    event: "workflow_start",
   });
 }
 
@@ -188,7 +184,7 @@ export function logWorkflowComplete(
     workflowId,
     workflowType,
     duration,
-    event: 'workflow_complete',
+    event: "workflow_complete",
   });
 }
 
@@ -203,23 +199,19 @@ export function logWorkflowFailure(
   error(`Workflow failed: ${workflowType}`, errorObj, {
     workflowId,
     workflowType,
-    event: 'workflow_failure',
+    event: "workflow_failure",
   });
 }
 
 /**
  * Log webhook received
  */
-export function logWebhookReceived(
-  source: string,
-  eventType: string,
-  webhookId?: string
-): void {
+export function logWebhookReceived(source: string, eventType: string, webhookId?: string): void {
   info(`Webhook received: ${source}/${eventType}`, {
     source,
     eventType,
     webhookId,
-    event: 'webhook_received',
+    event: "webhook_received",
   });
 }
 

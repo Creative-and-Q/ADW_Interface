@@ -3,11 +3,11 @@
  * Handles hierarchical workflow execution and sub-task queuing
  */
 
-import { insert, update, query, queryOne } from './database.js';
-import { SubWorkflowQueueEntry, WorkflowExecution, WorkflowStatus, WorkflowType } from './types.js';
-import { getWorkflow, updateWorkflowStatus } from './workflow-state.js';
-import * as logger from './utils/logger.js';
-import { createClient, RedisClientType } from 'redis';
+import { insert, update, query, queryOne } from "./database.js";
+import { SubWorkflowQueueEntry, WorkflowExecution, WorkflowStatus, WorkflowType } from "./types.js";
+import { getWorkflow, updateWorkflowStatus } from "./workflow-state.js";
+import * as logger from "./utils/logger.js";
+import { createClient, RedisClientType } from "redis";
 
 // Redis client for distributed locking
 let redisClient: RedisClientType | null = null;
@@ -15,9 +15,9 @@ let redisClient: RedisClientType | null = null;
 async function getRedisClient(): Promise<RedisClientType> {
   if (!redisClient) {
     redisClient = createClient({
-      url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`,
+      url: `redis://${process.env.REDIS_HOST || "localhost"}:${process.env.REDIS_PORT || 6379}`,
     });
-    redisClient.on('error', (err: Error) => logger.error('Redis client error', err));
+    redisClient.on("error", (err: Error) => logger.error("Redis client error", err));
     await redisClient.connect();
   }
   return redisClient;
@@ -27,7 +27,10 @@ async function getRedisClient(): Promise<RedisClientType> {
  * Acquire a lock for a master workflow tree
  * Returns true if lock acquired, false otherwise
  */
-async function acquireTreeLock(masterWorkflowId: number, ttlSeconds: number = 300): Promise<boolean> {
+async function acquireTreeLock(
+  masterWorkflowId: number,
+  ttlSeconds: number = 300
+): Promise<boolean> {
   try {
     const client = await getRedisClient();
     const lockKey = `workflow_tree_lock:${masterWorkflowId}`;
@@ -35,9 +38,9 @@ async function acquireTreeLock(masterWorkflowId: number, ttlSeconds: number = 30
       NX: true, // Only set if not exists
       EX: ttlSeconds, // Expire after ttlSeconds
     });
-    return result === 'OK';
+    return result === "OK";
   } catch (error) {
-    logger.error('Failed to acquire tree lock', error as Error);
+    logger.error("Failed to acquire tree lock", error as Error);
     return false;
   }
 }
@@ -51,7 +54,7 @@ async function releaseTreeLock(masterWorkflowId: number): Promise<void> {
     const lockKey = `workflow_tree_lock:${masterWorkflowId}`;
     await client.del(lockKey);
   } catch (error) {
-    logger.error('Failed to release tree lock', error as Error);
+    logger.error("Failed to release tree lock", error as Error);
   }
 }
 
@@ -66,7 +69,7 @@ async function getRootMasterWorkflowId(workflowId: number): Promise<number> {
 
   while (iterations < maxIterations) {
     const workflow = await queryOne<{ parent_workflow_id: number | null }>(
-      'SELECT parent_workflow_id FROM workflows WHERE id = ?',
+      "SELECT parent_workflow_id FROM workflows WHERE id = ?",
       [currentId]
     );
 
@@ -78,7 +81,7 @@ async function getRootMasterWorkflowId(workflowId: number): Promise<number> {
     iterations++;
   }
 
-  logger.warn('Max iterations reached while finding root master workflow', { workflowId });
+  logger.warn("Max iterations reached while finding root master workflow", { workflowId });
   return currentId;
 }
 
@@ -137,7 +140,7 @@ export async function createSubWorkflows(
     // Create each sub-workflow
     for (let i = 0; i < subTasks.length; i++) {
       const subTask = subTasks[i];
-      
+
       // Build payload for sub-workflow
       const subWorkflowPayload: any = {
         taskDescription: subTask.description,
@@ -151,7 +154,7 @@ export async function createSubWorkflows(
       };
 
       // Create the sub-workflow
-      const childWorkflowId = await insert('workflows', {
+      const childWorkflowId = await insert("workflows", {
         parent_workflow_id: parentWorkflowId,
         workflow_type: subTask.workflowType,
         target_module: subTask.targetModule || parentWorkflow.target_module,
@@ -165,11 +168,11 @@ export async function createSubWorkflows(
       childWorkflowIds.push(childWorkflowId);
 
       // Add to queue
-      await insert('sub_workflow_queue', {
+      await insert("sub_workflow_queue", {
         parent_workflow_id: parentWorkflowId,
         child_workflow_id: childWorkflowId,
         execution_order: i,
-        status: 'pending',
+        status: "pending",
         depends_on: subTask.dependsOn ? JSON.stringify(subTask.dependsOn) : null,
       });
 
@@ -182,7 +185,7 @@ export async function createSubWorkflows(
 
     return childWorkflowIds;
   } catch (error) {
-    logger.error('Failed to create sub-workflows', error as Error);
+    logger.error("Failed to create sub-workflows", error as Error);
     throw error;
   }
 }
@@ -207,7 +210,7 @@ export async function getSubWorkflows(parentWorkflowId: number): Promise<Workflo
       target_module: row.target_module,
       task_description: row.task_description,
       status: row.status as WorkflowStatus,
-      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
+      payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
       branchName: row.branch_name,
       createdAt: row.created_at,
       updatedAt: row.updated_at || row.created_at, // Fallback to created_at if updated_at doesn't exist
@@ -215,11 +218,11 @@ export async function getSubWorkflows(parentWorkflowId: number): Promise<Workflo
       parentWorkflowId: row.parent_workflow_id,
       workflowDepth: row.workflow_depth,
       executionOrder: row.execution_order,
-      planJson: typeof row.plan_json === 'string' ? JSON.parse(row.plan_json) : row.plan_json,
+      planJson: typeof row.plan_json === "string" ? JSON.parse(row.plan_json) : row.plan_json,
       autoExecuteChildren: row.auto_execute_children,
     }));
   } catch (error) {
-    logger.error('Failed to get sub-workflows', error as Error);
+    logger.error("Failed to get sub-workflows", error as Error);
     throw error;
   }
 }
@@ -239,7 +242,7 @@ export async function getNextExecutableSubWorkflow(
     const hasRunning = await hasRunningWorkflowInTree(masterWorkflowId);
 
     if (hasRunning) {
-      logger.debug('Another workflow is already running in master tree, waiting...', {
+      logger.debug("Another workflow is already running in master tree, waiting...", {
         parentWorkflowId,
         masterWorkflowId,
       });
@@ -260,11 +263,13 @@ export async function getNextExecutableSubWorkflow(
 
     // Find first pending workflow with all dependencies met
     for (const entry of queueEntries) {
-      if (entry.status !== 'pending') continue;
+      if (entry.status !== "pending") continue;
 
       // Check if dependencies are met
       const dependsOn = entry.depends_on
-        ? (typeof entry.depends_on === 'string' ? JSON.parse(entry.depends_on) : entry.depends_on)
+        ? typeof entry.depends_on === "string"
+          ? JSON.parse(entry.depends_on)
+          : entry.depends_on
         : [];
 
       if (dependsOn.length === 0) {
@@ -273,21 +278,24 @@ export async function getNextExecutableSubWorkflow(
       }
 
       // Check if all dependencies are completed
-      const allDependenciesMet = await checkDependenciesCompleted(entry.parent_workflow_id, dependsOn);
+      const allDependenciesMet = await checkDependenciesCompleted(
+        entry.parent_workflow_id,
+        dependsOn
+      );
       if (allDependenciesMet) {
         return mapQueueEntry(entry);
       }
     }
 
     // Check if there are any in-progress workflows
-    const hasInProgress = queueEntries.some((e) => e.status === 'in_progress');
+    const hasInProgress = queueEntries.some((e) => e.status === "in_progress");
     if (hasInProgress) {
       return null; // Wait for current workflow to complete
     }
 
     // Check if all are completed or failed
     const allCompleted = queueEntries.every((e) =>
-      ['completed', 'failed', 'skipped'].includes(e.status)
+      ["completed", "failed", "skipped"].includes(e.status)
     );
     if (allCompleted) {
       return null; // Queue is finished
@@ -297,7 +305,7 @@ export async function getNextExecutableSubWorkflow(
     logger.warn(`Potential deadlock in workflow ${parentWorkflowId} sub-workflow queue`);
     return null;
   } catch (error) {
-    logger.error('Failed to get next executable sub-workflow', error as Error);
+    logger.error("Failed to get next executable sub-workflow", error as Error);
     throw error;
   }
 }
@@ -312,7 +320,7 @@ async function checkDependenciesCompleted(
   if (dependsOnOrders.length === 0) return true;
 
   try {
-    const placeholders = dependsOnOrders.map(() => '?').join(',');
+    const placeholders = dependsOnOrders.map(() => "?").join(",");
     const completedCount = await queryOne<{ count: number }>(
       `SELECT COUNT(*) as count
        FROM sub_workflow_queue
@@ -324,7 +332,7 @@ async function checkDependenciesCompleted(
 
     return completedCount ? completedCount.count === dependsOnOrders.length : false;
   } catch (error) {
-    logger.error('Failed to check dependencies', error as Error);
+    logger.error("Failed to check dependencies", error as Error);
     return false;
   }
 }
@@ -334,7 +342,7 @@ async function checkDependenciesCompleted(
  */
 export async function updateSubWorkflowStatus(
   childWorkflowId: number,
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped',
+  status: "pending" | "in_progress" | "completed" | "failed" | "skipped",
   errorMessage?: string
 ): Promise<void> {
   try {
@@ -342,14 +350,14 @@ export async function updateSubWorkflowStatus(
       status,
     };
 
-    if (status === 'in_progress') {
+    if (status === "in_progress") {
       const existingEntry = await getQueueEntry(childWorkflowId);
       if (!existingEntry?.startedAt) {
         updateData.started_at = new Date();
       }
     }
 
-    if (['completed', 'failed', 'skipped'].includes(status)) {
+    if (["completed", "failed", "skipped"].includes(status)) {
       updateData.completed_at = new Date();
     }
 
@@ -357,16 +365,11 @@ export async function updateSubWorkflowStatus(
       updateData.error_message = errorMessage;
     }
 
-    await update(
-      'sub_workflow_queue',
-      updateData,
-      'child_workflow_id = ?',
-      [childWorkflowId]
-    );
+    await update("sub_workflow_queue", updateData, "child_workflow_id = ?", [childWorkflowId]);
 
     logger.info(`Updated sub-workflow ${childWorkflowId} status to ${status}`);
   } catch (error) {
-    logger.error('Failed to update sub-workflow status', error as Error);
+    logger.error("Failed to update sub-workflow status", error as Error);
     throw error;
   }
 }
@@ -377,13 +380,13 @@ export async function updateSubWorkflowStatus(
 async function getQueueEntry(childWorkflowId: number): Promise<SubWorkflowQueueEntry | null> {
   try {
     const row = await queryOne<any>(
-      'SELECT * FROM sub_workflow_queue WHERE child_workflow_id = ?',
+      "SELECT * FROM sub_workflow_queue WHERE child_workflow_id = ?",
       [childWorkflowId]
     );
 
     return row ? mapQueueEntry(row) : null;
   } catch (error) {
-    logger.error('Failed to get queue entry', error as Error);
+    logger.error("Failed to get queue entry", error as Error);
     return null;
   }
 }
@@ -399,7 +402,9 @@ function mapQueueEntry(row: any): SubWorkflowQueueEntry {
     executionOrder: row.execution_order,
     status: row.status,
     dependsOn: row.depends_on
-      ? (typeof row.depends_on === 'string' ? JSON.parse(row.depends_on) : row.depends_on)
+      ? typeof row.depends_on === "string"
+        ? JSON.parse(row.depends_on)
+        : row.depends_on
       : undefined,
     createdAt: row.created_at,
     startedAt: row.started_at,
@@ -421,7 +426,7 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
 }> {
   try {
     const rows = await query<any[]>(
-      'SELECT status, COUNT(*) as count FROM sub_workflow_queue WHERE parent_workflow_id = ? GROUP BY status',
+      "SELECT status, COUNT(*) as count FROM sub_workflow_queue WHERE parent_workflow_id = ? GROUP BY status",
       [parentWorkflowId]
     );
 
@@ -437,21 +442,21 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
     for (const row of rows) {
       const count = parseInt(row.count, 10);
       status.total += count;
-      
+
       switch (row.status) {
-        case 'pending':
+        case "pending":
           status.pending = count;
           break;
-        case 'in_progress':
+        case "in_progress":
           status.inProgress = count;
           break;
-        case 'completed':
+        case "completed":
           status.completed = count;
           break;
-        case 'failed':
+        case "failed":
           status.failed = count;
           break;
-        case 'skipped':
+        case "skipped":
           status.skipped = count;
           break;
       }
@@ -459,7 +464,7 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
 
     return status;
   } catch (error) {
-    logger.error('Failed to get queue status', error as Error);
+    logger.error("Failed to get queue status", error as Error);
     throw error;
   }
 }
@@ -471,9 +476,7 @@ export async function getQueueStatus(parentWorkflowId: number): Promise<{
  * 2. NO children have failed (failed children mean parent should also fail)
  * 3. All children that are "completed" have no pending/in-progress grandchildren
  */
-export async function checkParentWorkflowCompletion(
-  parentWorkflowId: number
-): Promise<boolean> {
+export async function checkParentWorkflowCompletion(parentWorkflowId: number): Promise<boolean> {
   const status = await getQueueStatus(parentWorkflowId);
 
   // First check: immediate children must all be in terminal state
@@ -502,10 +505,13 @@ export async function checkParentWorkflowCompletion(
 
     // If child has sub-workflows and they're not all complete, parent isn't complete
     if (childStatus.total > 0 && (childStatus.pending > 0 || childStatus.inProgress > 0)) {
-      logger.debug(`Parent ${parentWorkflowId} not complete: child ${child.child_workflow_id} has incomplete sub-workflows`, {
-        childPending: childStatus.pending,
-        childInProgress: childStatus.inProgress,
-      });
+      logger.debug(
+        `Parent ${parentWorkflowId} not complete: child ${child.child_workflow_id} has incomplete sub-workflows`,
+        {
+          childPending: childStatus.pending,
+          childInProgress: childStatus.inProgress,
+        }
+      );
       return false;
     }
 
@@ -607,7 +613,7 @@ export async function resetFailedSubWorkflows(
     );
 
     if (failedEntries.length === 0) {
-      logger.info('No failed sub-workflows to reset', { parentWorkflowId });
+      logger.info("No failed sub-workflows to reset", { parentWorkflowId });
       return { resetCount: 0, earliestResetOrder: null };
     }
 
@@ -623,14 +629,14 @@ export async function resetFailedSubWorkflows(
 
       // Reset queue entry to pending
       await update(
-        'sub_workflow_queue',
+        "sub_workflow_queue",
         {
-          status: 'pending',
+          status: "pending",
           started_at: null,
           completed_at: null,
           error_message: null,
         },
-        'child_workflow_id = ?',
+        "child_workflow_id = ?",
         [childWorkflowId]
       );
 
@@ -647,18 +653,21 @@ export async function resetFailedSubWorkflows(
 
       // Also recursively reset any failed grandchildren
       const grandchildStatus = await getQueueStatus(childWorkflowId);
-      if (grandchildStatus.total > 0 && (grandchildStatus.failed > 0 || grandchildStatus.inProgress > 0)) {
+      if (
+        grandchildStatus.total > 0 &&
+        (grandchildStatus.failed > 0 || grandchildStatus.inProgress > 0)
+      ) {
         await resetFailedSubWorkflows(childWorkflowId);
       }
 
-      logger.info('Reset failed sub-workflow', {
+      logger.info("Reset failed sub-workflow", {
         childWorkflowId,
         executionOrder: entry.execution_order,
         parentWorkflowId,
       });
     }
 
-    logger.info('Reset all failed sub-workflows', {
+    logger.info("Reset all failed sub-workflows", {
       parentWorkflowId,
       resetCount: failedEntries.length,
       earliestResetOrder,
@@ -666,7 +675,7 @@ export async function resetFailedSubWorkflows(
 
     return { resetCount: failedEntries.length, earliestResetOrder };
   } catch (error) {
-    logger.error('Failed to reset failed sub-workflows', error as Error);
+    logger.error("Failed to reset failed sub-workflows", error as Error);
     throw error;
   }
 }
@@ -676,16 +685,14 @@ export async function resetFailedSubWorkflows(
  * Gets next executable workflow and marks it as ready to execute
  * Uses Redis locking to prevent race conditions in hierarchical workflows
  */
-export async function advanceSubWorkflowQueue(
-  parentWorkflowId: number
-): Promise<number | null> {
+export async function advanceSubWorkflowQueue(parentWorkflowId: number): Promise<number | null> {
   // Get the root master workflow for locking
   const masterWorkflowId = await getRootMasterWorkflowId(parentWorkflowId);
 
   // Try to acquire lock - if we can't, another process is advancing the queue
   const lockAcquired = await acquireTreeLock(masterWorkflowId);
   if (!lockAcquired) {
-    logger.debug('Could not acquire tree lock, another process is advancing the queue', {
+    logger.debug("Could not acquire tree lock, another process is advancing the queue", {
       parentWorkflowId,
       masterWorkflowId,
     });
@@ -705,7 +712,7 @@ export async function advanceSubWorkflowQueue(
         // Check the parent's status to see if it was waiting for a fix
         const parentWorkflow = await getWorkflow(parentWorkflowId);
 
-        logger.warn('Child workflow failed - propagating failure to parent', {
+        logger.warn("Child workflow failed - propagating failure to parent", {
           parentWorkflowId,
           parentStatus: parentWorkflow?.status,
           failedWorkflowId: failureCheck.failedWorkflowId,
@@ -713,17 +720,25 @@ export async function advanceSubWorkflowQueue(
 
         // If parent was in pending_fix status (waiting for bugfix), mark it as failed
         // This prevents subsequent siblings from running
-        if (parentWorkflow?.status === WorkflowStatus.PENDING_FIX ||
-            parentWorkflow?.status === WorkflowStatus.RUNNING) {
-          logger.info('Parent was waiting for fix/children - marking as FAILED due to child failure', {
-            parentWorkflowId,
-            previousStatus: parentWorkflow.status,
-            failedChildId: failureCheck.failedWorkflowId,
-          });
+        if (
+          parentWorkflow?.status === WorkflowStatus.PENDING_FIX ||
+          parentWorkflow?.status === WorkflowStatus.RUNNING
+        ) {
+          logger.info(
+            "Parent was waiting for fix/children - marking as FAILED due to child failure",
+            {
+              parentWorkflowId,
+              previousStatus: parentWorkflow.status,
+              failedChildId: failureCheck.failedWorkflowId,
+            }
+          );
 
           await updateWorkflowStatus(parentWorkflowId, WorkflowStatus.FAILED);
-          await updateSubWorkflowStatus(parentWorkflowId, 'failed',
-            `Child workflow ${failureCheck.failedWorkflowId} failed`);
+          await updateSubWorkflowStatus(
+            parentWorkflowId,
+            "failed",
+            `Child workflow ${failureCheck.failedWorkflowId} failed`
+          );
 
           // Check if this workflow has a grandparent that needs to be notified of the failure
           const grandparentEntry = await queryOne<any>(
@@ -732,7 +747,7 @@ export async function advanceSubWorkflowQueue(
           );
 
           if (grandparentEntry?.parent_workflow_id) {
-            logger.info('Propagating failure to grandparent queue', {
+            logger.info("Propagating failure to grandparent queue", {
               grandparentWorkflowId: grandparentEntry.parent_workflow_id,
               failedWorkflowId: parentWorkflowId,
             });
@@ -759,7 +774,7 @@ export async function advanceSubWorkflowQueue(
 
         // CRITICAL: Update this workflow's entry in the grandparent's queue
         // This ensures the grandparent can advance to the next workflow
-        await updateSubWorkflowStatus(parentWorkflowId, 'completed');
+        await updateSubWorkflowStatus(parentWorkflowId, "completed");
         logger.info(`Updated parent workflow ${parentWorkflowId} queue entry to completed`);
 
         // Check if this workflow has a grandparent that needs advancing
@@ -779,7 +794,9 @@ export async function advanceSubWorkflowQueue(
 
           // Recursively advance the grandparent's queue
           // This will cascade up the tree as needed
-          const nextGrandparentWorkflow = await advanceSubWorkflowQueue(grandparentEntry.parent_workflow_id);
+          const nextGrandparentWorkflow = await advanceSubWorkflowQueue(
+            grandparentEntry.parent_workflow_id
+          );
           if (nextGrandparentWorkflow) {
             logger.info(`Advanced grandparent queue to workflow ${nextGrandparentWorkflow}`);
             // Return the grandparent's next workflow so the caller can execute it
@@ -793,7 +810,7 @@ export async function advanceSubWorkflowQueue(
     }
 
     // Mark as in progress
-    await updateSubWorkflowStatus(nextWorkflow.childWorkflowId, 'in_progress');
+    await updateSubWorkflowStatus(nextWorkflow.childWorkflowId, "in_progress");
 
     logger.info(`Advanced queue: sub-workflow ${nextWorkflow.childWorkflowId} ready for execution`);
 
@@ -802,7 +819,7 @@ export async function advanceSubWorkflowQueue(
     return nextWorkflow.childWorkflowId;
   } catch (error) {
     await releaseTreeLock(masterWorkflowId);
-    logger.error('Failed to advance sub-workflow queue', error as Error);
+    logger.error("Failed to advance sub-workflow queue", error as Error);
     throw error;
   }
 }
@@ -814,6 +831,5 @@ export async function advanceSubWorkflowQueue(
 export async function releaseWorkflowTreeLock(workflowId: number): Promise<void> {
   const masterWorkflowId = await getRootMasterWorkflowId(workflowId);
   await releaseTreeLock(masterWorkflowId);
-  logger.debug('Released tree lock after workflow completion', { workflowId, masterWorkflowId });
+  logger.debug("Released tree lock after workflow completion", { workflowId, masterWorkflowId });
 }
-

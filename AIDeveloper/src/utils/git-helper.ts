@@ -3,10 +3,10 @@
  * Provides utilities for git operations using simple-git
  */
 
-import simpleGit, { SimpleGit, SimpleGitOptions } from 'simple-git';
-import { config } from '../config.js';
-import { GitOperationResult } from '../types.js';
-import * as logger from './logger.js';
+import simpleGit, { SimpleGit, SimpleGitOptions } from "simple-git";
+import { config } from "../config.js";
+import { GitOperationResult } from "../types.js";
+import * as logger from "./logger.js";
 
 /**
  * Get configured git instance for workspace
@@ -14,15 +14,15 @@ import * as logger from './logger.js';
 export function getGit(workingDir?: string): SimpleGit {
   const options: Partial<SimpleGitOptions> = {
     baseDir: workingDir || config.workspace.root,
-    binary: 'git',
+    binary: "git",
     maxConcurrentProcesses: 6,
   };
 
   const git = simpleGit(options);
 
   // Configure git user
-  git.addConfig('user.name', config.git.userName, false, 'global').catch(() => {});
-  git.addConfig('user.email', config.git.userEmail, false, 'global').catch(() => {});
+  git.addConfig("user.name", config.git.userName, false, "global").catch(() => {});
+  git.addConfig("user.email", config.git.userEmail, false, "global").catch(() => {});
 
   return git;
 }
@@ -36,7 +36,7 @@ export async function getCurrentBranch(workingDir?: string): Promise<string> {
     const status = await git.status();
     return status.current || config.git.defaultBranch;
   } catch (error) {
-    logger.error('Failed to get current branch', error as Error);
+    logger.error("Failed to get current branch", error as Error);
     throw error;
   }
 }
@@ -80,7 +80,7 @@ export async function createBranch(
  */
 export async function commitChanges(
   message: string,
-  files: string[] = ['.'],
+  files: string[] = ["."],
   workingDir?: string
 ): Promise<GitOperationResult> {
   try {
@@ -92,10 +92,10 @@ export async function commitChanges(
     // Check if there are changes to commit
     const status = await git.status();
     if (status.staged.length === 0) {
-      logger.warn('No changes to commit');
+      logger.warn("No changes to commit");
       return {
         success: true,
-        message: 'No changes to commit',
+        message: "No changes to commit",
       };
     }
 
@@ -110,7 +110,7 @@ export async function commitChanges(
       message: `Changes committed successfully: ${result.summary.changes} changes`,
     };
   } catch (error) {
-    logger.error('Failed to commit changes', error as Error);
+    logger.error("Failed to commit changes", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -129,14 +129,14 @@ export async function getRecentCommits(
     const git = getGit(workingDir);
     const log = await git.log({ maxCount: count });
 
-    return log.all.map(commit => ({
+    return log.all.map((commit) => ({
       hash: commit.hash,
       message: commit.message,
       author: commit.author_name,
       date: commit.date,
     }));
   } catch (error) {
-    logger.error('Failed to get recent commits', error as Error);
+    logger.error("Failed to get recent commits", error as Error);
     return [];
   }
 }
@@ -162,7 +162,7 @@ export async function diffFiles(
       return diff;
     }
   } catch (error) {
-    logger.error('Failed to get diff', error as Error);
+    logger.error("Failed to get diff", error as Error);
     throw error;
   }
 }
@@ -185,11 +185,11 @@ export async function getStatus(workingDir?: string): Promise<{
       modified: status.modified,
       created: status.not_added,
       deleted: status.deleted,
-      renamed: status.renamed.map(r => `${r.from} -> ${r.to}`),
+      renamed: status.renamed.map((r) => `${r.from} -> ${r.to}`),
       staged: status.staged,
     };
   } catch (error) {
-    logger.error('Failed to get git status', error as Error);
+    logger.error("Failed to get git status", error as Error);
     throw error;
   }
 }
@@ -203,16 +203,16 @@ export async function stashChanges(
 ): Promise<GitOperationResult> {
   try {
     const git = getGit(workingDir);
-    await git.stash(['push', ...(message ? ['-m', message] : [])]);
+    await git.stash(["push", ...(message ? ["-m", message] : [])]);
 
-    logger.info('Changes stashed successfully');
+    logger.info("Changes stashed successfully");
 
     return {
       success: true,
-      message: 'Changes stashed successfully',
+      message: "Changes stashed successfully",
     };
   } catch (error) {
-    logger.error('Failed to stash changes', error as Error);
+    logger.error("Failed to stash changes", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -226,16 +226,16 @@ export async function stashChanges(
 export async function popStash(workingDir?: string): Promise<GitOperationResult> {
   try {
     const git = getGit(workingDir);
-    await git.stash(['pop']);
+    await git.stash(["pop"]);
 
-    logger.info('Stashed changes popped successfully');
+    logger.info("Stashed changes popped successfully");
 
     return {
       success: true,
-      message: 'Stashed changes applied successfully',
+      message: "Stashed changes applied successfully",
     };
   } catch (error) {
-    logger.error('Failed to pop stash', error as Error);
+    logger.error("Failed to pop stash", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -252,7 +252,7 @@ export async function isWorkingDirectoryClean(workingDir?: string): Promise<bool
     const status = await git.status();
     return status.isClean();
   } catch (error) {
-    logger.error('Failed to check working directory status', error as Error);
+    logger.error("Failed to check working directory status", error as Error);
     return false;
   }
 }
@@ -268,19 +268,19 @@ export async function resetChanges(
     const git = getGit(workingDir);
 
     if (hard) {
-      await git.reset(['--hard']);
-      logger.info('Hard reset completed');
+      await git.reset(["--hard"]);
+      logger.info("Hard reset completed");
     } else {
-      await git.reset(['--soft']);
-      logger.info('Soft reset completed');
+      await git.reset(["--soft"]);
+      logger.info("Soft reset completed");
     }
 
     return {
       success: true,
-      message: `Reset completed (${hard ? 'hard' : 'soft'})`,
+      message: `Reset completed (${hard ? "hard" : "soft"})`,
     };
   } catch (error) {
-    logger.error('Failed to reset changes', error as Error);
+    logger.error("Failed to reset changes", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -298,7 +298,7 @@ export async function pullChanges(
   try {
     const git = getGit(workingDir);
     const currentBranch = branch || (await getCurrentBranch(workingDir));
-    await git.pull('origin', currentBranch);
+    await git.pull("origin", currentBranch);
 
     logger.info(`Pulled latest changes from origin/${currentBranch}`);
 
@@ -307,7 +307,7 @@ export async function pullChanges(
       message: `Pulled changes from origin/${currentBranch}`,
     };
   } catch (error) {
-    logger.error('Failed to pull changes', error as Error);
+    logger.error("Failed to pull changes", error as Error);
     return {
       success: false,
       error: (error as Error).message,
@@ -325,7 +325,7 @@ export async function pushChanges(
   try {
     const git = getGit(workingDir);
     const currentBranch = branch || (await getCurrentBranch(workingDir));
-    await git.push('origin', currentBranch);
+    await git.push("origin", currentBranch);
 
     logger.info(`Pushed changes to origin/${currentBranch}`);
 
@@ -334,7 +334,7 @@ export async function pushChanges(
       message: `Pushed changes to origin/${currentBranch}`,
     };
   } catch (error) {
-    logger.error('Failed to push changes', error as Error);
+    logger.error("Failed to push changes", error as Error);
     return {
       success: false,
       error: (error as Error).message,

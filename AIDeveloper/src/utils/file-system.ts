@@ -3,10 +3,10 @@
  * Provides safe file system utilities with validation
  */
 
-import fs from 'fs/promises';
-import path from 'path';
-import * as logger from './logger.js';
-import { config } from '../config.js';
+import fs from "fs/promises";
+import path from "path";
+import * as logger from "./logger.js";
+import { config } from "../config.js";
 
 /**
  * Validate that path is within workspace
@@ -35,7 +35,7 @@ export async function readFile(filePath: string): Promise<string> {
       throw new Error(`Path is outside workspace: ${filePath}`);
     }
 
-    const content = await fs.readFile(absolutePath, 'utf-8');
+    const content = await fs.readFile(absolutePath, "utf-8");
     logger.debug(`Read file: ${filePath}`);
     return content;
   } catch (error) {
@@ -66,10 +66,10 @@ export async function writeFile(
     if (options?.atomic) {
       // Atomic write using temp file
       const tempPath = `${absolutePath}.tmp`;
-      await fs.writeFile(tempPath, content, 'utf-8');
+      await fs.writeFile(tempPath, content, "utf-8");
       await fs.rename(tempPath, absolutePath);
     } else {
-      await fs.writeFile(absolutePath, content, 'utf-8');
+      await fs.writeFile(absolutePath, content, "utf-8");
     }
 
     logger.debug(`Wrote file: ${filePath}`);
@@ -82,10 +82,7 @@ export async function writeFile(
 /**
  * Append content to file
  */
-export async function appendFile(
-  filePath: string,
-  content: string
-): Promise<void> {
+export async function appendFile(filePath: string, content: string): Promise<void> {
   try {
     const absolutePath = path.isAbsolute(filePath) ? filePath : getAbsolutePath(filePath);
 
@@ -93,7 +90,7 @@ export async function appendFile(
       throw new Error(`Path is outside workspace: ${filePath}`);
     }
 
-    await fs.appendFile(absolutePath, content, 'utf-8');
+    await fs.appendFile(absolutePath, content, "utf-8");
     logger.debug(`Appended to file: ${filePath}`);
   } catch (error) {
     logger.error(`Failed to append to file: ${filePath}`, error as Error);
@@ -160,10 +157,7 @@ export async function createDirectory(dirPath: string): Promise<void> {
 /**
  * List files in directory
  */
-export async function listFiles(
-  dirPath: string,
-  pattern?: RegExp
-): Promise<string[]> {
+export async function listFiles(dirPath: string, pattern?: RegExp): Promise<string[]> {
   try {
     const absolutePath = path.isAbsolute(dirPath) ? dirPath : getAbsolutePath(dirPath);
 
@@ -173,11 +167,11 @@ export async function listFiles(
 
     const entries = await fs.readdir(absolutePath, { withFileTypes: true });
     let files = entries
-      .filter(entry => entry.isFile())
-      .map(entry => path.join(dirPath, entry.name));
+      .filter((entry) => entry.isFile())
+      .map((entry) => path.join(dirPath, entry.name));
 
     if (pattern) {
-      files = files.filter(file => pattern.test(file));
+      files = files.filter((file) => pattern.test(file));
     }
 
     return files;
@@ -200,8 +194,8 @@ export async function listDirectories(dirPath: string): Promise<string[]> {
 
     const entries = await fs.readdir(absolutePath, { withFileTypes: true });
     return entries
-      .filter(entry => entry.isDirectory())
-      .map(entry => path.join(dirPath, entry.name));
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(dirPath, entry.name));
   } catch (error) {
     logger.error(`Failed to list directories in: ${dirPath}`, error as Error);
     throw error;
@@ -236,7 +230,7 @@ export async function listFilesRecursive(
       // Skip node_modules, .git, dist, and other common excluded directories
       if (
         entry.isDirectory() &&
-        !['node_modules', '.git', 'dist', 'build', '.cache', 'coverage'].includes(entry.name)
+        !["node_modules", ".git", "dist", "build", ".cache", "coverage"].includes(entry.name)
       ) {
         const subFiles = await listFilesRecursive(fullPath, pattern, maxDepth - 1);
         files.push(...subFiles);
@@ -289,16 +283,13 @@ export async function getFileStats(filePath: string): Promise<{
 /**
  * Copy file
  */
-export async function copyFile(
-  sourcePath: string,
-  destPath: string
-): Promise<void> {
+export async function copyFile(sourcePath: string, destPath: string): Promise<void> {
   try {
     const absoluteSource = path.isAbsolute(sourcePath) ? sourcePath : getAbsolutePath(sourcePath);
     const absoluteDest = path.isAbsolute(destPath) ? destPath : getAbsolutePath(destPath);
 
     if (!validatePath(absoluteSource) || !validatePath(absoluteDest)) {
-      throw new Error('Path is outside workspace');
+      throw new Error("Path is outside workspace");
     }
 
     // Ensure destination directory exists
@@ -316,16 +307,13 @@ export async function copyFile(
 /**
  * Move/rename file
  */
-export async function moveFile(
-  sourcePath: string,
-  destPath: string
-): Promise<void> {
+export async function moveFile(sourcePath: string, destPath: string): Promise<void> {
   try {
     const absoluteSource = path.isAbsolute(sourcePath) ? sourcePath : getAbsolutePath(sourcePath);
     const absoluteDest = path.isAbsolute(destPath) ? destPath : getAbsolutePath(destPath);
 
     if (!validatePath(absoluteSource) || !validatePath(absoluteDest)) {
-      throw new Error('Path is outside workspace');
+      throw new Error("Path is outside workspace");
     }
 
     // Ensure destination directory exists

@@ -1,17 +1,24 @@
-import { exec, spawn, ChildProcess } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
-import fs from 'fs/promises';
-import { createWriteStream, WriteStream } from 'fs';
-import { EventEmitter } from 'events';
+import { exec, spawn, ChildProcess } from "child_process";
+import { promisify } from "util";
+import path from "path";
+import fs from "fs/promises";
+import { createWriteStream, WriteStream } from "fs";
+import { EventEmitter } from "events";
 
 const execAsync = promisify(exec);
+
+// Interface for exec errors that include stdout/stderr
+interface ExecError extends Error {
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+}
 
 export interface DeploymentOperation {
   id: string;
   moduleName: string;
   operation: string; // Any script name from module.json
-  status: 'pending' | 'running' | 'success' | 'failed';
+  status: "pending" | "running" | "success" | "failed";
   startedAt?: Date;
   completedAt?: Date;
   output: string[];
@@ -24,17 +31,17 @@ class DeploymentManager extends EventEmitter {
   private moduleLogs: Map<string, string[]> = new Map(); // Rolling log buffer per module
   private logStreams: Map<string, WriteStream> = new Map(); // File streams for persistent logging
   private readonly MAX_LOG_LINES = 500; // Keep last 500 lines per module in memory
-  private readonly LOG_DIR = path.join(process.cwd(), 'logs', 'modules');
+  private readonly LOG_DIR = path.join(process.cwd(), "logs", "modules");
 
   /**
    * Install dependencies for a module
    */
   async installModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'install');
+    const operationId = this.createOperation(moduleName, "install");
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -43,7 +50,7 @@ class DeploymentManager extends EventEmitter {
       const startMarker = `\n========== Install Started: ${new Date().toISOString()} ==========`;
       await this.addModuleLog(moduleName, startMarker);
 
-      const { stdout, stderr } = await execAsync('npm install', {
+      const { stdout, stderr } = await execAsync("npm install", {
         cwd: modulePath,
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
       });
@@ -59,13 +66,14 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== Install Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
-      this.updateOperationStatus(operationId, 'failed', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateOperationStatus(operationId, "failed", message);
       const errorMarker = `========== Install Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, `Error: ${error.message}`);
-      await this.addModuleLog(moduleName, errorMarker + '\n');
+      await this.addModuleLog(moduleName, `Error: ${message}`);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
       throw error;
     }
   }
@@ -74,11 +82,11 @@ class DeploymentManager extends EventEmitter {
    * Build a module
    */
   async buildModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'build');
+    const operationId = this.createOperation(moduleName, "build");
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -88,20 +96,20 @@ class DeploymentManager extends EventEmitter {
       await this.addModuleLog(moduleName, startMarker);
 
       // Check if package.json has a build script
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 
       if (!packageJson.scripts?.build) {
-        const message = 'No build script found in package.json - skipping';
+        const message = "No build script found in package.json - skipping";
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
         const endMarker = `========== Build Completed (Skipped): ${new Date().toISOString()} ==========\n`;
         await this.addModuleLog(moduleName, endMarker);
-        this.updateOperationStatus(operationId, 'success');
+        this.updateOperationStatus(operationId, "success");
         return operationId;
       }
 
-      const { stdout, stderr } = await execAsync('npm run build', {
+      const { stdout, stderr } = await execAsync("npm run build", {
         cwd: modulePath,
         maxBuffer: 10 * 1024 * 1024,
       });
@@ -117,13 +125,14 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== Build Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
-      this.updateOperationStatus(operationId, 'failed', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateOperationStatus(operationId, "failed", message);
       const errorMarker = `========== Build Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, `Error: ${error.message}`);
-      await this.addModuleLog(moduleName, errorMarker + '\n');
+      await this.addModuleLog(moduleName, `Error: ${message}`);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
       throw error;
     }
   }
@@ -132,11 +141,11 @@ class DeploymentManager extends EventEmitter {
    * Run tests for a module
    */
   async testModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'test');
+    const operationId = this.createOperation(moduleName, "test");
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -146,20 +155,20 @@ class DeploymentManager extends EventEmitter {
       await this.addModuleLog(moduleName, startMarker);
 
       // Check if package.json has a test script
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 
       if (!packageJson.scripts?.test) {
-        const message = 'No test script found in package.json - skipping';
+        const message = "No test script found in package.json - skipping";
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
         const endMarker = `========== Test Completed (Skipped): ${new Date().toISOString()} ==========\n`;
         await this.addModuleLog(moduleName, endMarker);
-        this.updateOperationStatus(operationId, 'success');
+        this.updateOperationStatus(operationId, "success");
         return operationId;
       }
 
-      const { stdout, stderr } = await execAsync('npm test', {
+      const { stdout, stderr } = await execAsync("npm test", {
         cwd: modulePath,
         maxBuffer: 10 * 1024 * 1024,
       });
@@ -175,13 +184,14 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== Test Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
-      this.updateOperationStatus(operationId, 'failed', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateOperationStatus(operationId, "failed", message);
       const errorMarker = `========== Test Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, `Error: ${error.message}`);
-      await this.addModuleLog(moduleName, errorMarker + '\n');
+      await this.addModuleLog(moduleName, `Error: ${message}`);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
       throw error;
     }
   }
@@ -190,11 +200,11 @@ class DeploymentManager extends EventEmitter {
    * Run type checking for a module
    */
   async typecheckModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'typecheck');
+    const operationId = this.createOperation(moduleName, "typecheck");
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -204,20 +214,20 @@ class DeploymentManager extends EventEmitter {
       await this.addModuleLog(moduleName, startMarker);
 
       // Check if package.json has a typecheck script
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 
       if (!packageJson.scripts?.typecheck) {
-        const message = 'No typecheck script found in package.json - skipping';
+        const message = "No typecheck script found in package.json - skipping";
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
         const endMarker = `========== Typecheck Completed (Skipped): ${new Date().toISOString()} ==========\n`;
         await this.addModuleLog(moduleName, endMarker);
-        this.updateOperationStatus(operationId, 'success');
+        this.updateOperationStatus(operationId, "success");
         return operationId;
       }
 
-      const { stdout, stderr } = await execAsync('npm run typecheck', {
+      const { stdout, stderr } = await execAsync("npm run typecheck", {
         cwd: modulePath,
         maxBuffer: 10 * 1024 * 1024,
       });
@@ -233,24 +243,26 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== Typecheck Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Capture stdout and stderr from the failed command
-      if (error.stdout) {
-        this.addOperationOutput(operationId, error.stdout);
-        await this.addModuleLog(moduleName, error.stdout);
+      const execErr = error as ExecError;
+      if (execErr.stdout) {
+        this.addOperationOutput(operationId, execErr.stdout);
+        await this.addModuleLog(moduleName, execErr.stdout);
       }
-      if (error.stderr) {
-        this.addOperationOutput(operationId, error.stderr);
-        await this.addModuleLog(moduleName, error.stderr);
+      if (execErr.stderr) {
+        this.addOperationOutput(operationId, execErr.stderr);
+        await this.addModuleLog(moduleName, execErr.stderr);
       }
-      const errorMsg = `Error: ${error.message}`;
+      const message = error instanceof Error ? error.message : String(error);
+      const errorMsg = `Error: ${message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
       const errorMarker = `========== Typecheck Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, errorMarker + '\n');
-      this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
+      this.updateOperationStatus(operationId, "failed", message);
       throw error;
     }
   }
@@ -264,7 +276,7 @@ class DeploymentManager extends EventEmitter {
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -274,8 +286,8 @@ class DeploymentManager extends EventEmitter {
       await this.addModuleLog(moduleName, startMarker);
 
       // Load module.json to get the script command
-      const moduleJsonPath = path.join(modulePath, 'module.json');
-      const moduleJson = JSON.parse(await fs.readFile(moduleJsonPath, 'utf-8'));
+      const moduleJsonPath = path.join(modulePath, "module.json");
+      const moduleJson = JSON.parse(await fs.readFile(moduleJsonPath, "utf-8"));
 
       // Check if script exists in module.json
       if (!moduleJson.scripts || !moduleJson.scripts[scriptName]) {
@@ -284,7 +296,7 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, message);
         const errorMarker = `========== Script "${scriptName}" Failed: ${new Date().toISOString()} ==========\n`;
         await this.addModuleLog(moduleName, errorMarker);
-        this.updateOperationStatus(operationId, 'failed', message);
+        this.updateOperationStatus(operationId, "failed", message);
         throw new Error(message);
       }
 
@@ -310,24 +322,26 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== Script "${scriptName}" Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Capture stdout and stderr from the failed command
-      if (error.stdout) {
-        this.addOperationOutput(operationId, error.stdout);
-        await this.addModuleLog(moduleName, error.stdout);
+      const execErr = error as ExecError;
+      if (execErr.stdout) {
+        this.addOperationOutput(operationId, execErr.stdout);
+        await this.addModuleLog(moduleName, execErr.stdout);
       }
-      if (error.stderr) {
-        this.addOperationOutput(operationId, error.stderr);
-        await this.addModuleLog(moduleName, error.stderr);
+      if (execErr.stderr) {
+        this.addOperationOutput(operationId, execErr.stderr);
+        await this.addModuleLog(moduleName, execErr.stderr);
       }
-      const errorMsg = `Error: ${error.message}`;
+      const message = error instanceof Error ? error.message : String(error);
+      const errorMsg = `Error: ${message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
       const errorMarker = `========== Script "${scriptName}" Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, errorMarker + '\n');
-      this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
+      this.updateOperationStatus(operationId, "failed", message);
       throw error;
     }
   }
@@ -340,14 +354,14 @@ class DeploymentManager extends EventEmitter {
     const modulePath = this.getModulePath(moduleName);
 
     // Built-in npm commands that run directly (npm <command>) not as scripts
-    const builtInCommands = ['install', 'ci', 'update', 'outdated', 'prune'];
+    const builtInCommands = ["install", "ci", "update", "outdated", "prune"];
     const isBuiltIn = builtInCommands.includes(scriptName);
 
     // Determine the actual command to run
     const command = isBuiltIn ? `npm ${scriptName}` : `npm run ${scriptName}`;
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Clear in-memory logs for this operation (disk logs are preserved)
       this.clearModuleLogs(moduleName);
@@ -357,8 +371,8 @@ class DeploymentManager extends EventEmitter {
       await this.addModuleLog(moduleName, startMarker);
 
       // Verify package.json exists
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 
       // For non-built-in commands, verify the script exists in package.json
       if (!isBuiltIn && (!packageJson.scripts || !packageJson.scripts[scriptName])) {
@@ -367,7 +381,7 @@ class DeploymentManager extends EventEmitter {
         await this.addModuleLog(moduleName, message);
         const errorMarker = `========== ${command} Failed: ${new Date().toISOString()} ==========\n`;
         await this.addModuleLog(moduleName, errorMarker);
-        this.updateOperationStatus(operationId, 'failed', message);
+        this.updateOperationStatus(operationId, "failed", message);
         throw new Error(message);
       }
 
@@ -392,24 +406,26 @@ class DeploymentManager extends EventEmitter {
       const endMarker = `========== ${command} Completed: ${new Date().toISOString()} ==========\n`;
       await this.addModuleLog(moduleName, endMarker);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Capture stdout and stderr from the failed command
-      if (error.stdout) {
-        this.addOperationOutput(operationId, error.stdout);
-        await this.addModuleLog(moduleName, error.stdout);
+      const execErr = error as ExecError;
+      if (execErr.stdout) {
+        this.addOperationOutput(operationId, execErr.stdout);
+        await this.addModuleLog(moduleName, execErr.stdout);
       }
-      if (error.stderr) {
-        this.addOperationOutput(operationId, error.stderr);
-        await this.addModuleLog(moduleName, error.stderr);
+      if (execErr.stderr) {
+        this.addOperationOutput(operationId, execErr.stderr);
+        await this.addModuleLog(moduleName, execErr.stderr);
       }
-      const errorMsg = `Error: ${error.message}`;
+      const message = error instanceof Error ? error.message : String(error);
+      const errorMsg = `Error: ${message}`;
       this.addOperationOutput(operationId, errorMsg);
       await this.addModuleLog(moduleName, errorMsg);
       const errorMarker = `========== ${command} Failed: ${new Date().toISOString()} ==========`;
-      await this.addModuleLog(moduleName, errorMarker + '\n');
-      this.updateOperationStatus(operationId, 'failed', error.message);
+      await this.addModuleLog(moduleName, errorMarker + "\n");
+      this.updateOperationStatus(operationId, "failed", message);
       throw error;
     }
   }
@@ -427,7 +443,7 @@ class DeploymentManager extends EventEmitter {
         console.log(`[DeploymentManager] Killing process ${pid} on port ${port}`);
         await execAsync(`kill -9 ${pid}`);
         // Wait a moment for the port to be released
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     } catch (error) {
       // No process found on port or error - that's fine
@@ -440,8 +456,8 @@ class DeploymentManager extends EventEmitter {
    */
   private async getModulePort(modulePath: string): Promise<number | null> {
     try {
-      const envPath = path.join(modulePath, '.env');
-      const envContent = await fs.readFile(envPath, 'utf-8');
+      const envPath = path.join(modulePath, ".env");
+      const envContent = await fs.readFile(envPath, "utf-8");
 
       // Parse PORT= line from .env
       const portMatch = envContent.match(/^PORT=(\d+)/m);
@@ -458,26 +474,26 @@ class DeploymentManager extends EventEmitter {
    * Start a module server
    */
   async startModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'start');
+    const operationId = this.createOperation(moduleName, "start");
     const modulePath = this.getModulePath(moduleName);
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       // Check if module is already running
       if (this.moduleProcesses.has(moduleName)) {
-        throw new Error('Module is already running');
+        throw new Error("Module is already running");
       }
 
       // Check if package.json has a start script
-      const packageJsonPath = path.join(modulePath, 'package.json');
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+      const packageJsonPath = path.join(modulePath, "package.json");
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
 
       if (!packageJson.scripts?.start) {
-        const message = 'No start script found in package.json - skipping auto-start';
+        const message = "No start script found in package.json - skipping auto-start";
         this.addOperationOutput(operationId, message);
         await this.addModuleLog(moduleName, message);
-        this.updateOperationStatus(operationId, 'success');
+        this.updateOperationStatus(operationId, "success");
         return operationId;
       }
 
@@ -499,9 +515,9 @@ class DeploymentManager extends EventEmitter {
       // Remove variables that might conflict with module configuration
       delete cleanEnv.PORT;
 
-      const child = spawn('npm', ['start'], {
+      const child = spawn("npm", ["start"], {
         cwd: modulePath,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ["ignore", "pipe", "pipe"],
         detached: false,
         env: cleanEnv,
       });
@@ -512,59 +528,62 @@ class DeploymentManager extends EventEmitter {
       this.moduleProcesses.set(moduleName, child);
 
       // Capture output
-      child.stdout?.on('data', (data) => {
+      child.stdout?.on("data", (data) => {
         const logLine = data.toString();
         console.log(`[DeploymentManager] ${moduleName} stdout:`, logLine.substring(0, 200));
         this.addOperationOutput(operationId, logLine);
         this.addModuleLog(moduleName, logLine);
-        this.emit('moduleOutput', { moduleName, data: logLine });
+        this.emit("moduleOutput", { moduleName, data: logLine });
       });
 
-      child.stderr?.on('data', (data) => {
+      child.stderr?.on("data", (data) => {
         const logLine = data.toString();
         console.log(`[DeploymentManager] ${moduleName} stderr:`, logLine.substring(0, 200));
         this.addOperationOutput(operationId, logLine);
         this.addModuleLog(moduleName, logLine);
-        this.emit('moduleOutput', { moduleName, data: logLine });
+        this.emit("moduleOutput", { moduleName, data: logLine });
       });
 
       // Track if process exits
       let hasExited = false;
-      child.on('exit', (code) => {
+      child.on("exit", (code) => {
         console.log(`[DeploymentManager] ${moduleName} process exited with code: ${code}`);
         hasExited = true;
         this.moduleProcesses.delete(moduleName);
         this.closeLogStream(moduleName, code || undefined);
         if (code === 0) {
-          this.updateOperationStatus(operationId, 'success');
+          this.updateOperationStatus(operationId, "success");
         } else {
-          this.updateOperationStatus(operationId, 'failed', `Process exited with code ${code}`);
+          this.updateOperationStatus(operationId, "failed", `Process exited with code ${code}`);
         }
       });
 
-      child.on('error', (err) => {
+      child.on("error", (err) => {
         console.error(`[DeploymentManager] ${moduleName} spawn error:`, err);
         hasExited = true;
         this.moduleProcesses.delete(moduleName);
         this.closeLogStream(moduleName);
-        this.updateOperationStatus(operationId, 'failed', err.message);
+        this.updateOperationStatus(operationId, "failed", err.message);
       });
 
       // Wait a bit to see if it starts successfully
       console.log(`[DeploymentManager] Waiting 2 seconds to verify startup...`);
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      console.log(`[DeploymentManager] After wait: hasExited=${hasExited}, isInMap=${this.moduleProcesses.has(moduleName)}`);
+      console.log(
+        `[DeploymentManager] After wait: hasExited=${hasExited}, isInMap=${this.moduleProcesses.has(moduleName)}`
+      );
       if (hasExited || !this.moduleProcesses.has(moduleName)) {
-        throw new Error('Module failed to start');
+        throw new Error("Module failed to start");
       }
 
       console.log(`[DeploymentManager] Module ${moduleName} started successfully!`);
 
-      this.updateOperationStatus(operationId, 'success');
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
-      this.updateOperationStatus(operationId, 'failed', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateOperationStatus(operationId, "failed", message);
       throw error;
     }
   }
@@ -573,25 +592,26 @@ class DeploymentManager extends EventEmitter {
    * Stop a running module
    */
   async stopModule(moduleName: string): Promise<string> {
-    const operationId = this.createOperation(moduleName, 'stop');
+    const operationId = this.createOperation(moduleName, "stop");
 
     try {
-      this.updateOperationStatus(operationId, 'running');
+      this.updateOperationStatus(operationId, "running");
 
       const child = this.moduleProcesses.get(moduleName);
       if (!child) {
-        throw new Error('Module is not running');
+        throw new Error("Module is not running");
       }
 
-      child.kill('SIGTERM');
+      child.kill("SIGTERM");
       this.moduleProcesses.delete(moduleName);
       await this.closeLogStream(moduleName);
 
-      this.addOperationOutput(operationId, 'Module stopped successfully');
-      this.updateOperationStatus(operationId, 'success');
+      this.addOperationOutput(operationId, "Module stopped successfully");
+      this.updateOperationStatus(operationId, "success");
       return operationId;
-    } catch (error: any) {
-      this.updateOperationStatus(operationId, 'failed', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.updateOperationStatus(operationId, "failed", message);
       throw error;
     }
   }
@@ -614,9 +634,7 @@ class DeploymentManager extends EventEmitter {
    * Get operations for a specific module
    */
   getModuleOperations(moduleName: string): DeploymentOperation[] {
-    return Array.from(this.operations.values()).filter(
-      (op) => op.moduleName === moduleName
-    );
+    return Array.from(this.operations.values()).filter((op) => op.moduleName === moduleName);
   }
 
   /**
@@ -646,8 +664,8 @@ class DeploymentManager extends EventEmitter {
     // Otherwise, try to read from disk
     try {
       const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
-      const content = await fs.readFile(logFilePath, 'utf-8');
-      const allLines = content.split('\n').filter(line => line.trim());
+      const content = await fs.readFile(logFilePath, "utf-8");
+      const allLines = content.split("\n").filter((line) => line.trim());
       return allLines.slice(-lines);
     } catch (error) {
       // Log file doesn't exist or can't be read
@@ -664,43 +682,40 @@ class DeploymentManager extends EventEmitter {
 
   // Private helper methods
 
-  private createOperation(
-    moduleName: string,
-    operation: DeploymentOperation['operation']
-  ): string {
+  private createOperation(moduleName: string, operation: DeploymentOperation["operation"]): string {
     const id = `${moduleName}-${operation}-${Date.now()}`;
     const deploymentOp: DeploymentOperation = {
       id,
       moduleName,
       operation,
-      status: 'pending',
+      status: "pending",
       output: [],
     };
 
     this.operations.set(id, deploymentOp);
-    this.emit('operationCreated', deploymentOp);
+    this.emit("operationCreated", deploymentOp);
     return id;
   }
 
   private updateOperationStatus(
     operationId: string,
-    status: DeploymentOperation['status'],
+    status: DeploymentOperation["status"],
     error?: string
   ): void {
     const operation = this.operations.get(operationId);
     if (!operation) return;
 
     operation.status = status;
-    if (status === 'running') {
+    if (status === "running") {
       operation.startedAt = new Date();
-    } else if (status === 'success' || status === 'failed') {
+    } else if (status === "success" || status === "failed") {
       operation.completedAt = new Date();
     }
     if (error) {
       operation.error = error;
     }
 
-    this.emit('operationUpdated', operation);
+    this.emit("operationUpdated", operation);
   }
 
   private addOperationOutput(operationId: string, output: string): void {
@@ -708,7 +723,7 @@ class DeploymentManager extends EventEmitter {
     if (!operation) return;
 
     operation.output.push(output);
-    this.emit('operationOutput', { operationId, output });
+    this.emit("operationOutput", { operationId, output });
   }
 
   private async addModuleLog(moduleName: string, logLine: string): Promise<void> {
@@ -718,7 +733,7 @@ class DeploymentManager extends EventEmitter {
 
     const logs = this.moduleLogs.get(moduleName)!;
     // Split by newlines and add each line
-    const lines = logLine.split('\n').filter(line => line.trim());
+    const lines = logLine.split("\n").filter((line) => line.trim());
     logs.push(...lines);
 
     // Keep only last MAX_LOG_LINES in memory
@@ -741,7 +756,7 @@ class DeploymentManager extends EventEmitter {
       const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
 
       // Create write stream in append mode
-      const stream = createWriteStream(logFilePath, { flags: 'a' });
+      const stream = createWriteStream(logFilePath, { flags: "a" });
       this.logStreams.set(moduleName, stream);
 
       // Add timestamp separator when starting a new session
@@ -760,9 +775,10 @@ class DeploymentManager extends EventEmitter {
     if (stream) {
       // Add exit marker
       const timestamp = new Date().toISOString();
-      const exitMsg = exitCode !== undefined
-        ? `\n========== Module Exited (code: ${exitCode}): ${timestamp} ==========\n\n`
-        : `\n========== Module Stopped: ${timestamp} ==========\n\n`;
+      const exitMsg =
+        exitCode !== undefined
+          ? `\n========== Module Exited (code: ${exitCode}): ${timestamp} ==========\n\n`
+          : `\n========== Module Stopped: ${timestamp} ==========\n\n`;
 
       stream.write(exitMsg);
       stream.end();
@@ -778,15 +794,15 @@ class DeploymentManager extends EventEmitter {
     if (stream) {
       // If we have an active stream, use it
       for (const line of lines) {
-        stream.write(line + '\n');
+        stream.write(line + "\n");
       }
     } else {
       // If no stream, append directly to log file (for one-off operations like install/build)
       try {
         await fs.mkdir(this.LOG_DIR, { recursive: true });
         const logFilePath = path.join(this.LOG_DIR, `${moduleName}.log`);
-        const logContent = lines.join('\n') + '\n';
-        await fs.appendFile(logFilePath, logContent, 'utf-8');
+        const logContent = lines.join("\n") + "\n";
+        await fs.appendFile(logFilePath, logContent, "utf-8");
       } catch (error) {
         console.error(`Failed to write logs to disk for ${moduleName}:`, error);
       }
@@ -796,7 +812,7 @@ class DeploymentManager extends EventEmitter {
   private getModulePath(moduleName: string): string {
     // Modules are located at the project parent level (../modules/)
     // process.cwd() is typically /path/to/workspace/AIDeveloper when running
-    return path.join(process.cwd(), '..', 'modules', moduleName);
+    return path.join(process.cwd(), "..", "modules", moduleName);
   }
 }
 

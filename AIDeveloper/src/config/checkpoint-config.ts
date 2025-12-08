@@ -1,5 +1,5 @@
-import { config as dotenvConfig } from 'dotenv';
-import * as path from 'path';
+import { config as dotenvConfig } from "dotenv";
+import * as path from "path";
 
 dotenvConfig(); // Load environment variables
 
@@ -15,17 +15,19 @@ export const config = {
    */
   encryptionKey: (() => {
     const key = process.env.CHECKPOINT_ENCRYPTION_KEY;
-    if (!key || Buffer.from(key, 'hex').length !== 32) {
-      throw new Error('Invalid or missing CHECKPOINT_ENCRYPTION_KEY. Must be a 64-character hex string (32 bytes).');
+    if (!key || Buffer.from(key, "hex").length !== 32) {
+      throw new Error(
+        "Invalid or missing CHECKPOINT_ENCRYPTION_KEY. Must be a 64-character hex string (32 bytes)."
+      );
     }
-    return Buffer.from(key, 'hex');
+    return Buffer.from(key, "hex");
   })(),
 
   /**
    * Directory path for storing checkpoint files.
    * Uses absolute path for reliability.
    */
-  checkpointDir: path.join(process.cwd(), 'checkpoints'),
+  checkpointDir: path.join(process.cwd(), "checkpoints"),
 
   /**
    * Options for serialize-javascript.

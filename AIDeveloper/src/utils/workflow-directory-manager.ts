@@ -3,24 +3,24 @@
  * Manages workflow-specific directories for logs, artifacts, and documentation
  */
 
-import fs from 'fs/promises';
-import { readFileSync } from 'fs';
-import path from 'path';
-import { execSync } from 'child_process';
-import { config } from '../config.js';
-import * as logger from './logger.js';
-import { WorkflowType, AgentType } from '../types.js';
-import { getGit } from './git-helper.js';
+import fs from "fs/promises";
+import { readFileSync } from "fs";
+import path from "path";
+import { execSync } from "child_process";
+import { config } from "../config.js";
+import * as logger from "./logger.js";
+import { WorkflowType, AgentType } from "../types.js";
+import { getGit } from "./git-helper.js";
 
 /**
  * Load SSH environment for git operations
  */
 function getSSHEnvironment(): NodeJS.ProcessEnv {
-  const homeDir = process.env.HOME || process.env.USERPROFILE || '/root';
-  const sshEnvFile = path.join(homeDir, '.ssh', 'agent-environment');
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "/root";
+  const sshEnvFile = path.join(homeDir, ".ssh", "agent-environment");
 
   try {
-    const envContent = readFileSync(sshEnvFile, 'utf-8');
+    const envContent = readFileSync(sshEnvFile, "utf-8");
     const env: NodeJS.ProcessEnv = { ...process.env };
 
     // Parse the environment file
@@ -28,22 +28,22 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
     for (const match of matches) {
       const [, key, value] = match;
       // Remove quotes if present
-      env[key] = value.replace(/^['"]|['"]$/g, '');
+      env[key] = value.replace(/^['"]|['"]$/g, "");
     }
 
-    logger.debug('SSH environment loaded', {
+    logger.debug("SSH environment loaded", {
       hasAuthSock: !!env.SSH_AUTH_SOCK,
-      hasAgentPid: !!env.SSH_AGENT_PID
+      hasAgentPid: !!env.SSH_AGENT_PID,
     });
 
     return env;
   } catch (error) {
-    logger.warn('Could not load SSH environment, using default', error as Error);
-    const sshDir = path.join(homeDir, '.ssh');
-    const sshKeyName = process.env.SSH_KEY_NAME || 'id_ed25519';
+    logger.warn("Could not load SSH environment, using default", error as Error);
+    const sshDir = path.join(homeDir, ".ssh");
+    const sshKeyName = process.env.SSH_KEY_NAME || "id_ed25519";
     return {
       ...process.env,
-      GIT_SSH_COMMAND: `ssh -i ${path.join(sshDir, sshKeyName)} -F ${path.join(sshDir, 'config')}`,
+      GIT_SSH_COMMAND: `ssh -i ${path.join(sshDir, sshKeyName)} -F ${path.join(sshDir, "config")}`,
     };
   }
 }
@@ -52,8 +52,8 @@ function getSSHEnvironment(): NodeJS.ProcessEnv {
  * Get workflow directory path
  */
 export function getWorkflowDirectory(workflowId: number, branchName: string): string {
-  const workflowsRoot = path.join(config.workspace.root, 'workflows');
-  const sanitizedBranch = branchName.replace(/[^a-zA-Z0-9-_]/g, '-');
+  const workflowsRoot = path.join(config.workspace.root, "workflows");
+  const sanitizedBranch = branchName.replace(/[^a-zA-Z0-9-_]/g, "-");
   return path.join(workflowsRoot, `workflow-${workflowId}-${sanitizedBranch}`);
 }
 
@@ -62,7 +62,7 @@ export function getWorkflowDirectory(workflowId: number, branchName: string): st
  */
 export function getWorkflowRepoPath(workflowId: number, branchName: string): string {
   const workflowDir = getWorkflowDirectory(workflowId, branchName);
-  return path.join(workflowDir, 'repo');
+  return path.join(workflowDir, "repo");
 }
 
 /**
@@ -74,83 +74,84 @@ export function getWorkflowRepoPath(workflowId: number, branchName: string): str
 async function cloneRepository(
   workflowDir: string,
   targetModule: string,
-  baseBranch: string = 'master'
+  baseBranch: string = "master"
 ): Promise<void> {
   try {
-    logger.info('Cloning module repository into workflow directory', { workflowDir, targetModule });
+    logger.info("Cloning module repository into workflow directory", { workflowDir, targetModule });
 
     // Get the repository URL from the target module
     // Note: config.workspace.root is the monorepo root, not the AIDeveloper directory
-    const modulePath = targetModule === 'AIDeveloper'
-      ? path.join(config.workspace.root, 'AIDeveloper')
-      : path.join(config.workspace.root, 'modules', targetModule);
+    const modulePath =
+      targetModule === "AIDeveloper"
+        ? path.join(config.workspace.root, "AIDeveloper")
+        : path.join(config.workspace.root, "modules", targetModule);
 
     const git = getGit(modulePath);
 
     // Get remote URL
     const remotes = await git.getRemotes(true);
-    const origin = remotes.find(r => r.name === 'origin');
+    const origin = remotes.find((r) => r.name === "origin");
 
     if (!origin || !origin.refs.fetch) {
       throw new Error(`No origin remote found for ${targetModule}`);
     }
 
     const repoUrl = origin.refs.fetch;
-    const repoDir = path.join(workflowDir, 'repo');
+    const repoDir = path.join(workflowDir, "repo");
 
     // Clone the repository
-    logger.info('Cloning repository', { module: targetModule, url: repoUrl, target: repoDir });
+    logger.info("Cloning repository", { module: targetModule, url: repoUrl, target: repoDir });
     execSync(`git clone ${repoUrl} ${repoDir}`, {
-      stdio: 'inherit',
+      stdio: "inherit",
       cwd: workflowDir,
       env: getSSHEnvironment(),
     });
 
     // Checkout base branch (master for modules, develop for AIDeveloper)
-    logger.info('Checking out base branch', { branch: baseBranch });
+    logger.info("Checking out base branch", { branch: baseBranch });
     const workflowGit = getGit(repoDir);
     await workflowGit.checkout(baseBranch);
 
     // Install dependencies if package.json exists
-    const packageJsonPath = path.join(repoDir, 'package.json');
+    const packageJsonPath = path.join(repoDir, "package.json");
     try {
       await fs.access(packageJsonPath);
-      logger.info('Installing dependencies');
+      logger.info("Installing dependencies");
 
-      const installOutput = execSync('npm install --include=dev', {
+      const installOutput = execSync("npm install --include=dev", {
         cwd: repoDir,
-        encoding: 'utf-8',
+        encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-        env: { ...process.env, NODE_ENV: 'development' },
+        env: { ...process.env, NODE_ENV: "development" },
       });
-      logger.info('Dependencies installed successfully', { output: installOutput.slice(-500) });
+      logger.info("Dependencies installed successfully", { output: installOutput.slice(-500) });
 
       // Build the project if build script exists
       try {
-        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8'));
+        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
         if (packageJson.scripts && packageJson.scripts.build) {
-          logger.info('Building project');
-          const buildOutput = execSync('npm run build', {
+          logger.info("Building project");
+          const buildOutput = execSync("npm run build", {
             cwd: repoDir,
-            encoding: 'utf-8',
+            encoding: "utf-8",
             maxBuffer: 10 * 1024 * 1024,
           });
-          logger.info('Build completed successfully', { output: buildOutput.slice(-500) });
+          logger.info("Build completed successfully", { output: buildOutput.slice(-500) });
         }
       } catch (buildError: any) {
-        logger.warn('Build step skipped or failed', {
+        logger.warn("Build step skipped or failed", {
           error: buildError.message,
           stdout: buildError.stdout?.toString().slice(-500),
           stderr: buildError.stderr?.toString().slice(-500),
         });
       }
     } catch (error) {
-      logger.info('No package.json found, skipping npm install');
+      logger.info("No package.json found, skipping npm install");
     }
 
-    logger.info('Repository cloned successfully', { module: targetModule });
+    logger.info("Repository cloned successfully", { module: targetModule });
   } catch (error) {
-    logger.error('Failed to clone repository', error as Error);
+    logger.error("Failed to clone repository", error as Error);
     throw error;
   }
 }
@@ -160,23 +161,21 @@ async function cloneRepository(
  * @param workflowDir - The workflow directory path
  * @param moduleName - The module to clone
  */
-async function cloneAdditionalModule(
-  workflowDir: string,
-  moduleName: string
-): Promise<void> {
+async function cloneAdditionalModule(workflowDir: string, moduleName: string): Promise<void> {
   try {
-    logger.info('Cloning additional module for multi-module workflow', { workflowDir, moduleName });
+    logger.info("Cloning additional module for multi-module workflow", { workflowDir, moduleName });
 
     // Get the repository URL from the module
-    const modulePath = moduleName === 'AIDeveloper'
-      ? path.join(config.workspace.root, 'AIDeveloper')
-      : path.join(config.workspace.root, 'modules', moduleName);
+    const modulePath =
+      moduleName === "AIDeveloper"
+        ? path.join(config.workspace.root, "AIDeveloper")
+        : path.join(config.workspace.root, "modules", moduleName);
 
     const git = getGit(modulePath);
 
     // Get remote URL
     const remotes = await git.getRemotes(true);
-    const origin = remotes.find(r => r.name === 'origin');
+    const origin = remotes.find((r) => r.name === "origin");
 
     if (!origin || !origin.refs.fetch) {
       throw new Error(`No origin remote found for ${moduleName}`);
@@ -184,26 +183,30 @@ async function cloneAdditionalModule(
 
     const repoUrl = origin.refs.fetch;
     // Additional modules are cloned into 'modules/' directory under workflow
-    const modulesDir = path.join(workflowDir, 'modules');
+    const modulesDir = path.join(workflowDir, "modules");
     await fs.mkdir(modulesDir, { recursive: true });
     const targetDir = path.join(modulesDir, moduleName);
 
     // Clone the repository
-    logger.info('Cloning additional module', { module: moduleName, url: repoUrl, target: targetDir });
+    logger.info("Cloning additional module", {
+      module: moduleName,
+      url: repoUrl,
+      target: targetDir,
+    });
     execSync(`git clone ${repoUrl} ${targetDir}`, {
-      stdio: 'inherit',
+      stdio: "inherit",
       cwd: workflowDir,
       env: getSSHEnvironment(),
     });
 
     // Checkout appropriate branch
-    const baseBranch = moduleName === 'AIDeveloper' ? 'develop' : 'master';
+    const baseBranch = moduleName === "AIDeveloper" ? "develop" : "master";
     const moduleGit = getGit(targetDir);
     await moduleGit.checkout(baseBranch);
 
-    logger.info('Additional module cloned successfully', { module: moduleName });
+    logger.info("Additional module cloned successfully", { module: moduleName });
   } catch (error) {
-    logger.error('Failed to clone additional module', error as Error, { moduleName });
+    logger.error("Failed to clone additional module", error as Error, { moduleName });
     throw error;
   }
 }
@@ -226,12 +229,12 @@ export async function createWorkflowDirectory(
     await fs.mkdir(workflowDir, { recursive: true });
 
     // Create subdirectories
-    await fs.mkdir(path.join(workflowDir, 'logs'), { recursive: true });
-    await fs.mkdir(path.join(workflowDir, 'artifacts'), { recursive: true });
-    await fs.mkdir(path.join(workflowDir, 'stages'), { recursive: true });
+    await fs.mkdir(path.join(workflowDir, "logs"), { recursive: true });
+    await fs.mkdir(path.join(workflowDir, "artifacts"), { recursive: true });
+    await fs.mkdir(path.join(workflowDir, "stages"), { recursive: true });
 
     // Determine base branch: 'develop' for AIDeveloper, 'master' for modules
-    const baseBranch = targetModule === 'AIDeveloper' ? 'develop' : 'master';
+    const baseBranch = targetModule === "AIDeveloper" ? "develop" : "master";
 
     // Clone the primary module's repository into workflow directory (as 'repo')
     await cloneRepository(workflowDir, targetModule, baseBranch);
@@ -241,9 +244,9 @@ export async function createWorkflowDirectory(
     const additionalModules = allModules.slice(1); // Skip the primary module
 
     if (additionalModules.length > 0) {
-      logger.info('Cloning additional modules for multi-module workflow', {
+      logger.info("Cloning additional modules for multi-module workflow", {
         additionalModules,
-        primaryModule: targetModule
+        primaryModule: targetModule,
       });
 
       for (const moduleName of additionalModules) {
@@ -252,16 +255,17 @@ export async function createWorkflowDirectory(
     }
 
     // Create README
-    const modulesSection = allModules.length > 1
-      ? `- \`modules/\` - Additional target modules for cross-module work\n  ${additionalModules.map(m => `- \`${m}/\``).join('\n  ')}`
-      : '';
+    const modulesSection =
+      allModules.length > 1
+        ? `- \`modules/\` - Additional target modules for cross-module work\n  ${additionalModules.map((m) => `- \`${m}/\``).join("\n  ")}`
+        : "";
 
     const readme = `# Workflow ${workflowId}: ${workflowType}
 
 **Branch:** \`${branchName}\`
 **Created:** ${new Date().toISOString()}
 **Status:** In Progress
-**Target Modules:** ${allModules.join(', ')}
+**Target Modules:** ${allModules.join(", ")}
 
 ## Directory Structure
 
@@ -277,16 +281,16 @@ This directory tracks the complete history of this workflow execution.
 Future agents can traverse this history to understand decisions and outcomes.
 `;
 
-    await fs.writeFile(path.join(workflowDir, 'README.md'), readme);
+    await fs.writeFile(path.join(workflowDir, "README.md"), readme);
 
     logger.info(`Workflow directory created: ${workflowDir}`, {
       targetModules: allModules,
-      primaryModule: targetModule
+      primaryModule: targetModule,
     });
 
     return workflowDir;
   } catch (error) {
-    logger.error('Failed to create workflow directory', error as Error);
+    logger.error("Failed to create workflow directory", error as Error);
     throw error;
   }
 }
@@ -298,7 +302,7 @@ export async function logAgentStage(
   workflowId: number,
   branchName: string,
   agentType: AgentType,
-  stage: 'start' | 'complete' | 'failed',
+  stage: "start" | "complete" | "failed",
   details: {
     input?: any;
     output?: any;
@@ -311,8 +315,8 @@ export async function logAgentStage(
     const timestamp = new Date().toISOString();
     const logFile = path.join(
       workflowDir,
-      'logs',
-      `${agentType}-${stage}-${timestamp.replace(/:/g, '-')}.json`
+      "logs",
+      `${agentType}-${stage}-${timestamp.replace(/:/g, "-")}.json`
     );
 
     const logEntry = {
@@ -328,7 +332,7 @@ export async function logAgentStage(
 
     logger.debug(`Agent stage logged: ${agentType} ${stage}`);
   } catch (error) {
-    logger.error('Failed to log agent stage', error as Error);
+    logger.error("Failed to log agent stage", error as Error);
     // Don't throw - logging failure shouldn't stop workflow
   }
 }
@@ -355,15 +359,15 @@ export async function createStageDoc(
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
     const stageFile = path.join(
       workflowDir,
-      'stages',
-      `${String(stageNumber).padStart(2, '0')}-${agentType}.md`
+      "stages",
+      `${String(stageNumber).padStart(2, "0")}-${agentType}.md`
     );
 
     const doc = `# Stage ${stageNumber}: ${content.title}
 
 **Agent:** ${agentType}
 **Timestamp:** ${new Date().toISOString()}
-${content.duration ? `**Duration:** ${content.duration}ms\n` : ''}
+${content.duration ? `**Duration:** ${content.duration}ms\n` : ""}
 
 ## Summary
 
@@ -385,17 +389,17 @@ ${
   content.artifacts && content.artifacts.length > 0
     ? `## Artifacts Generated
 
-${content.artifacts.map((a) => `- ${a}`).join('\n')}
+${content.artifacts.map((a) => `- ${a}`).join("\n")}
 `
-    : ''
+    : ""
 }
 ${
   content.notes && content.notes.length > 0
     ? `## Notes
 
-${content.notes.map((n) => `- ${n}`).join('\n')}
+${content.notes.map((n) => `- ${n}`).join("\n")}
 `
-    : ''
+    : ""
 }
 
 ---
@@ -407,7 +411,7 @@ ${content.notes.map((n) => `- ${n}`).join('\n')}
 
     logger.debug(`Stage documentation created: ${agentType}`);
   } catch (error) {
-    logger.error('Failed to create stage documentation', error as Error);
+    logger.error("Failed to create stage documentation", error as Error);
     // Don't throw - documentation failure shouldn't stop workflow
   }
 }
@@ -423,7 +427,7 @@ export async function saveWorkflowArtifact(
 ): Promise<void> {
   try {
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
-    const artifactPath = path.join(workflowDir, 'artifacts', artifactName);
+    const artifactPath = path.join(workflowDir, "artifacts", artifactName);
 
     // Create subdirectories if artifact has path
     const artifactDir = path.dirname(artifactPath);
@@ -433,7 +437,7 @@ export async function saveWorkflowArtifact(
 
     logger.debug(`Artifact saved: ${artifactName}`);
   } catch (error) {
-    logger.error('Failed to save workflow artifact', error as Error);
+    logger.error("Failed to save workflow artifact", error as Error);
     throw error;
   }
 }
@@ -444,24 +448,24 @@ export async function saveWorkflowArtifact(
 export async function updateWorkflowStatus(
   workflowId: number,
   branchName: string,
-  status: 'completed' | 'failed',
+  status: "completed" | "failed",
   summary: string
 ): Promise<void> {
   try {
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
-    const readmePath = path.join(workflowDir, 'README.md');
+    const readmePath = path.join(workflowDir, "README.md");
 
     // Read existing README
-    let readme = await fs.readFile(readmePath, 'utf-8');
+    let readme = await fs.readFile(readmePath, "utf-8");
 
     // Update status line (handle both initial "In Progress" and subsequent updates)
     readme = readme.replace(
       /\*\*Status:\*\* (?:In Progress|✅ Completed|❌ Failed)/,
-      `**Status:** ${status === 'completed' ? '✅ Completed' : '❌ Failed'}`
+      `**Status:** ${status === "completed" ? "✅ Completed" : "❌ Failed"}`
     );
 
     // Update or add completed timestamp
-    if (readme.includes('**Completed:**')) {
+    if (readme.includes("**Completed:**")) {
       // Replace existing timestamp
       readme = readme.replace(
         /\*\*Completed:\*\* .+/,
@@ -476,7 +480,7 @@ export async function updateWorkflowStatus(
     }
 
     // Remove any existing Final Summary sections to avoid duplicates
-    readme = readme.replace(/\n+## Final Summary\n+[\s\S]*/g, '');
+    readme = readme.replace(/\n+## Final Summary\n+[\s\S]*/g, "");
 
     // Append new summary
     const finalReadme = `${readme}
@@ -490,7 +494,7 @@ ${summary}
 
     logger.debug(`Workflow status updated: ${status}`);
   } catch (error) {
-    logger.error('Failed to update workflow status', error as Error);
+    logger.error("Failed to update workflow status", error as Error);
     // Don't throw
   }
 }
@@ -510,9 +514,9 @@ export async function getWorkflowHistory(
     const workflowDir = getWorkflowDirectory(workflowId, branchName);
 
     const [logs, stages, artifacts] = await Promise.all([
-      fs.readdir(path.join(workflowDir, 'logs')).catch(() => []),
-      fs.readdir(path.join(workflowDir, 'stages')).catch(() => []),
-      fs.readdir(path.join(workflowDir, 'artifacts')).catch(() => []),
+      fs.readdir(path.join(workflowDir, "logs")).catch(() => []),
+      fs.readdir(path.join(workflowDir, "stages")).catch(() => []),
+      fs.readdir(path.join(workflowDir, "artifacts")).catch(() => []),
     ]);
 
     return {
@@ -521,7 +525,7 @@ export async function getWorkflowHistory(
       artifacts: artifacts.sort(),
     };
   } catch (error) {
-    logger.error('Failed to get workflow history', error as Error);
+    logger.error("Failed to get workflow history", error as Error);
     return { logs: [], stages: [], artifacts: [] };
   }
 }

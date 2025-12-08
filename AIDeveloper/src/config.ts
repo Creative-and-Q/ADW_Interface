@@ -3,8 +3,8 @@
  * Loads and validates environment variables
  */
 
-import dotenv from 'dotenv';
-import { AppConfig } from './types.js';
+import dotenv from "dotenv";
+import { AppConfig } from "./types.js";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -45,8 +45,8 @@ function validateConfig(config: AppConfig): void {
   }
 
   // Validate OpenRouter API key format
-  if (!config.openrouter.apiKey.startsWith('sk-or-')) {
-    throw new Error('Invalid OpenRouter API key format (should start with sk-or-)');
+  if (!config.openrouter.apiKey.startsWith("sk-or-")) {
+    throw new Error("Invalid OpenRouter API key format (should start with sk-or-)");
   }
 
   // Validate database port
@@ -61,20 +61,20 @@ function validateConfig(config: AppConfig): void {
 
   // Validate agent configuration
   if (config.agents.maxConcurrent < 1) {
-    throw new Error('MAX_CONCURRENT_AGENTS must be at least 1');
+    throw new Error("MAX_CONCURRENT_AGENTS must be at least 1");
   }
 
   if (config.agents.timeoutMs < 1000) {
-    throw new Error('AGENT_TIMEOUT_MS must be at least 1000ms');
+    throw new Error("AGENT_TIMEOUT_MS must be at least 1000ms");
   }
 
   if (config.agents.maxRetryAttempts < 0) {
-    throw new Error('MAX_RETRY_ATTEMPTS must be non-negative');
+    throw new Error("MAX_RETRY_ATTEMPTS must be non-negative");
   }
 
   // Validate workspace root exists (will be checked at runtime)
   if (!config.workspace.root) {
-    throw new Error('WORKSPACE_ROOT must be specified');
+    throw new Error("WORKSPACE_ROOT must be specified");
   }
 }
 
@@ -82,68 +82,68 @@ function validateConfig(config: AppConfig): void {
  * Load and export application configuration
  */
 export const config: AppConfig = {
-  nodeEnv: getOptionalEnv('NODE_ENV', 'development'),
-  port: getOptionalNumericEnv('PORT', 3000),
+  nodeEnv: getOptionalEnv("NODE_ENV", "development"),
+  port: getOptionalNumericEnv("PORT", 3000),
 
   openrouter: {
-    apiKey: getRequiredEnv('OPENROUTER_API_KEY'),
+    apiKey: getRequiredEnv("OPENROUTER_API_KEY"),
     models: {
-      planning: getOptionalEnv('OPENROUTER_MODEL_PLANNING', 'anthropic/claude-3.5-sonnet'),
-      coding: getOptionalEnv('OPENROUTER_MODEL_CODING', 'anthropic/claude-3.5-sonnet'),
-      testing: getOptionalEnv('OPENROUTER_MODEL_TESTING', 'anthropic/claude-3.5-haiku'),
-      review: getOptionalEnv('OPENROUTER_MODEL_REVIEW', 'anthropic/claude-3.5-sonnet'),
-      docs: getOptionalEnv('OPENROUTER_MODEL_DOCS', 'anthropic/claude-3.5-haiku'),
+      planning: getOptionalEnv("OPENROUTER_MODEL_PLANNING", "anthropic/claude-3.5-sonnet"),
+      coding: getOptionalEnv("OPENROUTER_MODEL_CODING", "anthropic/claude-3.5-sonnet"),
+      testing: getOptionalEnv("OPENROUTER_MODEL_TESTING", "anthropic/claude-3.5-haiku"),
+      review: getOptionalEnv("OPENROUTER_MODEL_REVIEW", "anthropic/claude-3.5-sonnet"),
+      docs: getOptionalEnv("OPENROUTER_MODEL_DOCS", "anthropic/claude-3.5-haiku"),
     },
   },
 
   database: {
-    host: getOptionalEnv('DB_HOST', 'localhost'),
-    port: getOptionalNumericEnv('DB_PORT', 3308),
-    user: getOptionalEnv('DB_USER', 'root'),
-    password: getOptionalEnv('DB_PASSWORD', ''),
-    name: getOptionalEnv('DB_NAME', 'aideveloper'),
+    host: getOptionalEnv("DB_HOST", "localhost"),
+    port: getOptionalNumericEnv("DB_PORT", 3308),
+    user: getOptionalEnv("DB_USER", "root"),
+    password: getOptionalEnv("DB_PASSWORD", ""),
+    name: getOptionalEnv("DB_NAME", "aideveloper"),
   },
 
   redis: {
-    host: getOptionalEnv('REDIS_HOST', 'localhost'),
-    port: getOptionalNumericEnv('REDIS_PORT', 6379),
+    host: getOptionalEnv("REDIS_HOST", "localhost"),
+    port: getOptionalNumericEnv("REDIS_PORT", 6379),
     password: process.env.REDIS_PASSWORD,
   },
 
   webhooks: {
     secrets: {
-      github: getOptionalEnv('WEBHOOK_SECRET_GITHUB', 'development-secret'),
-      gitlab: getOptionalEnv('WEBHOOK_SECRET_GITLAB', 'development-secret'),
-      custom: getOptionalEnv('WEBHOOK_SECRET_CUSTOM', 'development-secret'),
+      github: getOptionalEnv("WEBHOOK_SECRET_GITHUB", "development-secret"),
+      gitlab: getOptionalEnv("WEBHOOK_SECRET_GITLAB", "development-secret"),
+      custom: getOptionalEnv("WEBHOOK_SECRET_CUSTOM", "development-secret"),
     },
   },
 
   git: {
-    userName: getOptionalEnv('GIT_USER_NAME', 'AIDeveloper Bot'),
-    userEmail: getOptionalEnv('GIT_USER_EMAIL', 'aideveloper@bot.local'),
-    defaultBranch: getOptionalEnv('GIT_DEFAULT_BRANCH', 'main'),
-    sshKeyName: getOptionalEnv('SSH_KEY_NAME', 'id_ed25519'),
+    userName: getOptionalEnv("GIT_USER_NAME", "AIDeveloper Bot"),
+    userEmail: getOptionalEnv("GIT_USER_EMAIL", "aideveloper@bot.local"),
+    defaultBranch: getOptionalEnv("GIT_DEFAULT_BRANCH", "main"),
+    sshKeyName: getOptionalEnv("SSH_KEY_NAME", "id_ed25519"),
   },
 
   github: {
     token: process.env.GITHUB_TOKEN, // Optional: for PR creation
-    owner: getOptionalEnv('GITHUB_OWNER', ''), // e.g., 'QoobSweet'
-    repo: getOptionalEnv('GITHUB_REPO', ''), // e.g., 'ex_nihilo'
+    owner: getOptionalEnv("GITHUB_OWNER", ""), // e.g., 'QoobSweet'
+    repo: getOptionalEnv("GITHUB_REPO", ""), // e.g., 'ex_nihilo'
   },
 
   agents: {
-    maxConcurrent: getOptionalNumericEnv('MAX_CONCURRENT_AGENTS', 5),
-    timeoutMs: getOptionalNumericEnv('AGENT_TIMEOUT_MS', 300000),
-    maxRetryAttempts: getOptionalNumericEnv('MAX_RETRY_ATTEMPTS', 3),
+    maxConcurrent: getOptionalNumericEnv("MAX_CONCURRENT_AGENTS", 5),
+    timeoutMs: getOptionalNumericEnv("AGENT_TIMEOUT_MS", 300000),
+    maxRetryAttempts: getOptionalNumericEnv("MAX_RETRY_ATTEMPTS", 3),
   },
 
   workspace: {
-    root: getRequiredEnv('WORKSPACE_ROOT'),
+    root: getRequiredEnv("WORKSPACE_ROOT"),
   },
 
   logging: {
-    level: getOptionalEnv('LOG_LEVEL', 'info'),
-    dir: getOptionalEnv('LOG_DIR', './logs'),
+    level: getOptionalEnv("LOG_LEVEL", "info"),
+    dir: getOptionalEnv("LOG_DIR", "./logs"),
   },
 };
 
@@ -151,22 +151,22 @@ export const config: AppConfig = {
 validateConfig(config);
 
 // Log configuration (excluding sensitive values)
-if (config.nodeEnv === 'development') {
-  console.log('Configuration loaded:', {
+if (config.nodeEnv === "development") {
+  console.log("Configuration loaded:", {
     ...config,
     openrouter: {
       ...config.openrouter,
-      apiKey: '[REDACTED]',
+      apiKey: "[REDACTED]",
     },
     database: {
       ...config.database,
-      password: '[REDACTED]',
+      password: "[REDACTED]",
     },
     webhooks: {
       secrets: {
-        github: '[REDACTED]',
-        gitlab: '[REDACTED]',
-        custom: '[REDACTED]',
+        github: "[REDACTED]",
+        gitlab: "[REDACTED]",
+        custom: "[REDACTED]",
       },
     },
   });

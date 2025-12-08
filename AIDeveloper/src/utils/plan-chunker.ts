@@ -4,7 +4,7 @@
  * to avoid hitting LLM token limits
  */
 
-import * as logger from './logger.js';
+import * as logger from "./logger.js";
 
 /**
  * Configuration for chunking
@@ -28,7 +28,7 @@ const CHUNK_CONFIG = {
  */
 interface PlanFile {
   path: string;
-  action: 'create' | 'modify' | 'delete';
+  action: "create" | "modify" | "delete";
   description?: string;
   priority?: number; // Lower number = higher priority
 }
@@ -95,7 +95,7 @@ export function needsChunking(plan: Plan): boolean {
     (plan.files?.delete?.length || 0);
 
   if (totalFiles > CHUNK_CONFIG.WARN_THRESHOLD) {
-    logger.info('Plan may need chunking', {
+    logger.info("Plan may need chunking", {
       totalFiles,
       threshold: CHUNK_CONFIG.MAX_FILES_PER_CHUNK,
     });
@@ -114,11 +114,11 @@ export function chunkPlan(plan: Plan): PlanChunk[] {
     (plan.files?.delete?.length || 0);
 
   if (!needsChunking(plan)) {
-    logger.info('Plan does not need chunking', { totalFiles });
+    logger.info("Plan does not need chunking", { totalFiles });
     return [];
   }
 
-  logger.info('Chunking plan into smaller pieces', {
+  logger.info("Chunking plan into smaller pieces", {
     totalFiles,
     maxPerChunk: CHUNK_CONFIG.MAX_FILES_PER_CHUNK,
   });
@@ -127,17 +127,17 @@ export function chunkPlan(plan: Plan): PlanChunk[] {
   const allFiles: PlanFile[] = [
     ...(plan.files?.create || []).map((path) => ({
       path,
-      action: 'create' as const,
+      action: "create" as const,
       priority: getFilePriority(path, plan),
     })),
     ...(plan.files?.modify || []).map((path) => ({
       path,
-      action: 'modify' as const,
+      action: "modify" as const,
       priority: getFilePriority(path, plan),
     })),
     ...(plan.files?.delete || []).map((path) => ({
       path,
-      action: 'delete' as const,
+      action: "delete" as const,
       priority: getFilePriority(path, plan),
     })),
   ];
@@ -154,15 +154,9 @@ export function chunkPlan(plan: Plan): PlanChunk[] {
     const chunkIndex = Math.floor(i / filesPerChunk);
 
     // Separate by action type
-    const create = chunkFiles
-      .filter((f) => f.action === 'create')
-      .map((f) => f.path);
-    const modify = chunkFiles
-      .filter((f) => f.action === 'modify')
-      .map((f) => f.path);
-    const deleteFiles = chunkFiles
-      .filter((f) => f.action === 'delete')
-      .map((f) => f.path);
+    const create = chunkFiles.filter((f) => f.action === "create").map((f) => f.path);
+    const modify = chunkFiles.filter((f) => f.action === "modify").map((f) => f.path);
+    const deleteFiles = chunkFiles.filter((f) => f.action === "delete").map((f) => f.path);
 
     // Find relevant steps for this chunk
     const relevantSteps = plan.steps.filter((step) =>
@@ -198,7 +192,7 @@ export function chunkPlan(plan: Plan): PlanChunk[] {
     chunks.push(chunk);
   }
 
-  logger.info('Plan chunked successfully', {
+  logger.info("Plan chunked successfully", {
     totalFiles: allFiles.length,
     chunksCreated: chunks.length,
     filesPerChunk: chunks.map((c) => c.estimatedFiles),
@@ -222,11 +216,12 @@ function getFilePriority(filePath: string, plan: Plan): number {
  */
 function createChunkScope(files: PlanFile[], plan: Plan): string {
   const fileDescriptions = files.map((f) => {
-    const action = f.action === 'create' ? 'Creating' : f.action === 'modify' ? 'Modifying' : 'Deleting';
+    const action =
+      f.action === "create" ? "Creating" : f.action === "modify" ? "Modifying" : "Deleting";
     return `${action} ${f.path}`;
   });
 
-  return `Chunk of ${plan.summary}: ${fileDescriptions.slice(0, 3).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}`;
+  return `Chunk of ${plan.summary}: ${fileDescriptions.slice(0, 3).join(", ")}${files.length > 3 ? ` and ${files.length - 3} more` : ""}`;
 }
 
 /**
@@ -240,7 +235,7 @@ function getChunkDependencies(_files: PlanFile[], plan: Plan): string[] {
   let depsArray: string[] = [];
   if (Array.isArray(deps)) {
     depsArray = deps;
-  } else if (typeof deps === 'object') {
+  } else if (typeof deps === "object") {
     // Extract all dependency strings from object structure
     // Handle plan structure like: { internal: [...], external: [...], order: [...] }
     const depsObj = deps as any;
@@ -252,10 +247,7 @@ function getChunkDependencies(_files: PlanFile[], plan: Plan): string[] {
   }
 
   // Add a note that this is a chunked implementation
-  return [
-    ...depsArray,
-    'Previous chunks of this implementation (if any)',
-  ];
+  return [...depsArray, "Previous chunks of this implementation (if any)"];
 }
 
 /**
@@ -264,9 +256,9 @@ function getChunkDependencies(_files: PlanFile[], plan: Plan): string[] {
 export function isTokenLimitError(error: Error): boolean {
   const message = error.message.toLowerCase();
   return (
-    message.includes('token') ||
-    message.includes('truncat') ||
-    message.includes('unterminated string') ||
-    message.includes('parse') && message.includes('json')
+    message.includes("token") ||
+    message.includes("truncat") ||
+    message.includes("unterminated string") ||
+    (message.includes("parse") && message.includes("json"))
   );
 }

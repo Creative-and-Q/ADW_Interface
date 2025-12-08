@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash } from "crypto";
 
 /**
  * Sanitizes and validates the workflowId to prevent path traversal attacks.
@@ -14,9 +14,11 @@ import { createHash } from 'crypto';
  * validateWorkflowId('../malicious'); // Throws Error
  */
 export function validateWorkflowId(workflowId: string): string {
-  const sanitized = workflowId.replace(/[^a-zA-Z0-9_-]/g, '');
+  const sanitized = workflowId.replace(/[^a-zA-Z0-9_-]/g, "");
   if (sanitized.length === 0 || sanitized.length > 50) {
-    throw new Error('Invalid workflowId: must be 1-50 alphanumeric characters, hyphens, or underscores.');
+    throw new Error(
+      "Invalid workflowId: must be 1-50 alphanumeric characters, hyphens, or underscores."
+    );
   }
   return sanitized;
 }
@@ -31,7 +33,7 @@ export function validateWorkflowId(workflowId: string): string {
  * // checksum is a hex string like 'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3'
  */
 export function generateChecksum(data: string): string {
-  return createHash('sha256').update(data).digest('hex');
+  return createHash("sha256").update(data).digest("hex");
 }
 
 /**

@@ -3,12 +3,12 @@
  * Periodically checks modules with autoUpdate=true for updates on master branch
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
-import * as logger from './logger.js';
-import { getModulesPath, discoverModules } from './module-manager.js';
-import { query } from '../database.js';
+import { exec } from "child_process";
+import { promisify } from "util";
+import path from "path";
+import * as logger from "./logger.js";
+import { getModulesPath, discoverModules } from "./module-manager.js";
+import { query } from "../database.js";
 
 const execAsync = promisify(exec);
 
@@ -33,16 +33,15 @@ async function checkForUpdates(modulePath: string): Promise<{
 }> {
   try {
     // Fetch latest from origin without merging
-    await execAsync('git fetch origin master', {
+    await execAsync("git fetch origin master", {
       cwd: modulePath,
       timeout: 30000,
     });
 
     // Check how many commits behind we are
-    const { stdout } = await execAsync(
-      'git rev-list HEAD..origin/master --count',
-      { cwd: modulePath }
-    );
+    const { stdout } = await execAsync("git rev-list HEAD..origin/master --count", {
+      cwd: modulePath,
+    });
 
     const behindBy = parseInt(stdout.trim(), 10) || 0;
 
@@ -50,11 +49,11 @@ async function checkForUpdates(modulePath: string): Promise<{
       hasUpdates: behindBy > 0,
       behindBy,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       hasUpdates: false,
       behindBy: 0,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -68,31 +67,31 @@ async function pullUpdates(modulePath: string): Promise<{
 }> {
   try {
     // Check for uncommitted changes
-    const { stdout: statusOutput } = await execAsync('git status --porcelain', {
+    const { stdout: statusOutput } = await execAsync("git status --porcelain", {
       cwd: modulePath,
     });
 
     if (statusOutput.trim().length > 0) {
       return {
         success: false,
-        message: 'Module has uncommitted changes, skipping update',
+        message: "Module has uncommitted changes, skipping update",
       };
     }
 
     // Pull from origin master
-    const { stdout } = await execAsync('git pull origin master', {
+    const { stdout } = await execAsync("git pull origin master", {
       cwd: modulePath,
       timeout: 60000,
     });
 
     return {
       success: true,
-      message: stdout.trim() || 'Updated successfully',
+      message: stdout.trim() || "Updated successfully",
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     return {
       success: false,
-      message: error.message,
+      message: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -106,14 +105,14 @@ async function rebuildModule(modulePath: string): Promise<{
 }> {
   try {
     // Run npm install
-    await execAsync('npm install', {
+    await execAsync("npm install", {
       cwd: modulePath,
       timeout: 120000,
     });
 
     // Run build if available
     try {
-      await execAsync('npm run build', {
+      await execAsync("npm run build", {
         cwd: modulePath,
         timeout: 120000,
       });
@@ -121,9 +120,10 @@ async function rebuildModule(modulePath: string): Promise<{
       // Build script may not exist, that's ok
     }
 
-    return { success: true, message: 'Rebuild completed' };
-  } catch (error: any) {
-    return { success: false, message: `Rebuild failed: ${error.message}` };
+    return { success: true, message: "Rebuild completed" };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `Rebuild failed: ${message}` };
   }
 }
 
@@ -149,7 +149,7 @@ async function checkAndUpdateModule(moduleName: string): Promise<UpdateResult> {
     return {
       moduleName,
       updated: false,
-      message: 'Already up to date',
+      message: "Already up to date",
     };
   }
 
@@ -178,7 +178,7 @@ async function checkAndUpdateModule(moduleName: string): Promise<UpdateResult> {
     moduleName,
     updated: true,
     newCommits: behindBy,
-    message: `Updated with ${behindBy} new commit(s)${rebuildResult.success ? ', rebuilt successfully' : `, rebuild failed: ${rebuildResult.message}`}`,
+    message: `Updated with ${behindBy} new commit(s)${rebuildResult.success ? ", rebuilt successfully" : `, rebuild failed: ${rebuildResult.message}`}`,
   };
 }
 
@@ -187,12 +187,10 @@ async function checkAndUpdateModule(moduleName: string): Promise<UpdateResult> {
  */
 async function getAutoUpdateModules(): Promise<string[]> {
   try {
-    const result = await query(
-      'SELECT module_name FROM module_settings WHERE auto_update = TRUE'
-    );
+    const result = await query("SELECT module_name FROM module_settings WHERE auto_update = TRUE");
     return result.map((row: { module_name: string }) => row.module_name);
   } catch (error) {
-    logger.error('Failed to get auto-update modules from database', error as Error);
+    logger.error("Failed to get auto-update modules from database", error as Error);
     return [];
   }
 }
@@ -208,13 +206,13 @@ export async function checkAllModulesForUpdates(): Promise<UpdateResult[]> {
     const autoUpdateModuleNames = await getAutoUpdateModules();
 
     if (autoUpdateModuleNames.length === 0) {
-      logger.debug('No modules have auto-update enabled');
+      logger.debug("No modules have auto-update enabled");
       return results;
     }
 
     // Get all modules to check which have git
     const modules = await discoverModules();
-    const moduleMap = new Map(modules.map(m => [m.name, m]));
+    const moduleMap = new Map(modules.map((m) => [m.name, m]));
 
     for (const moduleName of autoUpdateModuleNames) {
       const module = moduleMap.get(moduleName);
@@ -241,14 +239,14 @@ export async function checkAllModulesForUpdates(): Promise<UpdateResult[]> {
     }
 
     // Log summary if any updates occurred
-    const updatedModules = results.filter(r => r.updated);
+    const updatedModules = results.filter((r) => r.updated);
     if (updatedModules.length > 0) {
       logger.info(`Auto-update: ${updatedModules.length} module(s) updated`, {
-        modules: updatedModules.map(m => m.moduleName),
+        modules: updatedModules.map((m) => m.moduleName),
       });
     }
   } catch (error) {
-    logger.error('Failed to check modules for updates', error as Error);
+    logger.error("Failed to check modules for updates", error as Error);
   }
 
   return results;
@@ -259,21 +257,21 @@ export async function checkAllModulesForUpdates(): Promise<UpdateResult[]> {
  */
 export function startAutoUpdateCheck(): void {
   if (updateIntervalId) {
-    logger.warn('Auto-update check already running');
+    logger.warn("Auto-update check already running");
     return;
   }
 
   logger.info(`Starting module auto-update check (every ${UPDATE_INTERVAL_MS / 1000}s)`);
 
   // Run immediately on start
-  checkAllModulesForUpdates().catch(err => {
-    logger.error('Initial auto-update check failed', err);
+  checkAllModulesForUpdates().catch((err) => {
+    logger.error("Initial auto-update check failed", err);
   });
 
   // Then run periodically
   updateIntervalId = setInterval(() => {
-    checkAllModulesForUpdates().catch(err => {
-      logger.error('Periodic auto-update check failed', err);
+    checkAllModulesForUpdates().catch((err) => {
+      logger.error("Periodic auto-update check failed", err);
     });
   }, UPDATE_INTERVAL_MS);
 }
@@ -285,7 +283,7 @@ export function stopAutoUpdateCheck(): void {
   if (updateIntervalId) {
     clearInterval(updateIntervalId);
     updateIntervalId = null;
-    logger.info('Stopped module auto-update check');
+    logger.info("Stopped module auto-update check");
   }
 }
 

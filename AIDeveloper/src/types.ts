@@ -4,64 +4,64 @@
 
 // Workflow types
 export enum WorkflowType {
-  FEATURE = 'feature',
-  BUGFIX = 'bugfix',
-  REFACTOR = 'refactor',
-  DOCUMENTATION = 'documentation',
-  REVIEW = 'review',
-  NEW_MODULE = 'new_module',
-  DOCKERIZE = 'dockerize',
+  FEATURE = "feature",
+  BUGFIX = "bugfix",
+  REFACTOR = "refactor",
+  DOCUMENTATION = "documentation",
+  REVIEW = "review",
+  NEW_MODULE = "new_module",
+  DOCKERIZE = "dockerize",
 }
 
 // Workflow statuses
 export enum WorkflowStatus {
-  PENDING = 'pending',
-  PENDING_FIX = 'pending_fix',  // Waiting for bugfix sub-workflow to complete
-  RUNNING = 'running',
-  PLANNING = 'planning',
-  CODING = 'coding',
-  SECURITY_LINTING = 'security_linting',
-  TESTING = 'testing',
-  REVIEWING = 'reviewing',
-  DOCUMENTING = 'documenting',
-  COMPLETED = 'completed',
-  COMPLETED_WITH_WARNINGS = 'completed_with_warnings',  // Non-critical issues (review/doc failures)
-  FAILED = 'failed',
-  CANCELLED = 'cancelled',  // Workflow was cancelled (e.g., by checkpoint resume)
+  PENDING = "pending",
+  PENDING_FIX = "pending_fix", // Waiting for bugfix sub-workflow to complete
+  RUNNING = "running",
+  PLANNING = "planning",
+  CODING = "coding",
+  SECURITY_LINTING = "security_linting",
+  TESTING = "testing",
+  REVIEWING = "reviewing",
+  DOCUMENTING = "documenting",
+  COMPLETED = "completed",
+  COMPLETED_WITH_WARNINGS = "completed_with_warnings", // Non-critical issues (review/doc failures)
+  FAILED = "failed",
+  CANCELLED = "cancelled", // Workflow was cancelled (e.g., by checkpoint resume)
 }
 
 // Agent types
 export enum AgentType {
-  ORCHESTRATOR = 'orchestrator',
-  PLAN = 'plan',
-  CODE = 'code',
-  SECURITY_LINT = 'security_lint',
-  TEST = 'test',
-  REVIEW = 'review',
-  DOCUMENT = 'document',
+  ORCHESTRATOR = "orchestrator",
+  PLAN = "plan",
+  CODE = "code",
+  SECURITY_LINT = "security_lint",
+  TEST = "test",
+  REVIEW = "review",
+  DOCUMENT = "document",
 }
 
 // Agent execution statuses
 export enum AgentStatus {
-  PENDING = 'pending',
-  RUNNING = 'running',
-  COMPLETED = 'completed',
-  FAILED = 'failed',
+  PENDING = "pending",
+  RUNNING = "running",
+  COMPLETED = "completed",
+  FAILED = "failed",
 }
 
 // Artifact types
 export enum ArtifactType {
-  PLAN = 'plan',
-  CODE = 'code',
-  SECURITY_LINT = 'security_lint',
-  TEST = 'test',
-  REVIEW_REPORT = 'review_report',
-  DOCUMENTATION = 'documentation',
+  PLAN = "plan",
+  CODE = "code",
+  SECURITY_LINT = "security_lint",
+  TEST = "test",
+  REVIEW_REPORT = "review_report",
+  DOCUMENTATION = "documentation",
 }
 
 // Webhook payload structure
 export interface WebhookPayload {
-  source: 'github' | 'gitlab' | 'custom' | 'manual';
+  source: "github" | "gitlab" | "custom" | "manual";
   eventType?: string;
   targetModule?: string; // Module restriction for agent file edits
   repository?: {
@@ -86,7 +86,7 @@ export interface WebhookPayload {
     title: string;
     body: string;
   };
-  customData?: Record<string, any>;
+  customData?: Record<string, unknown>;
 }
 
 // Workflow configuration
@@ -135,9 +135,9 @@ export interface SubTask {
   workflowType: WorkflowType;
   targetModule?: string;
   priority: number;
-  estimatedComplexity: 'low' | 'medium' | 'high';
+  estimatedComplexity: "low" | "medium" | "high";
   dependsOn?: number[]; // IDs of tasks this depends on
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // Sub-workflow queue entry
@@ -146,7 +146,7 @@ export interface SubWorkflowQueueEntry {
   parentWorkflowId: number;
   childWorkflowId: number;
   executionOrder: number;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+  status: "pending" | "in_progress" | "completed" | "failed" | "skipped";
   dependsOn?: number[];
   createdAt: Date;
   startedAt?: Date;
@@ -179,12 +179,12 @@ export interface AgentInput {
   codebaseContext?: CodebaseContext;
   previousArtifacts?: Artifact[];
   retryReason?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   workingDir: string; // Required - Isolated workflow repository directory
   context?: {
     previousResults?: AgentOutput[];
-    reviewFeedback?: any;
-    [key: string]: any;
+    reviewFeedback?: unknown;
+    [key: string]: unknown;
   };
 }
 
@@ -196,7 +196,7 @@ export interface AgentOutput {
   suggestions?: string[];
   requiresRetry?: boolean;
   retryReason?: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 // Artifact (generated code, tests, docs, etc.)
@@ -207,7 +207,7 @@ export interface Artifact {
   type: ArtifactType;
   filePath?: string;
   content: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
   createdAt?: Date;
 }
 
@@ -263,7 +263,7 @@ export interface CodebaseStatistics {
 
 // AI message format (for OpenRouter API)
 export interface AIMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
 }
 
@@ -317,7 +317,7 @@ export interface CodeReviewResult {
 
 // Review issue
 export interface ReviewIssue {
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  severity: "critical" | "high" | "medium" | "low";
   category: string;
   description: string;
   filePath?: string;
@@ -339,11 +339,14 @@ export interface ImplementationPlan {
 
 // File change specification
 export interface FileChange {
-  action: 'create' | 'modify' | 'delete';
+  action: "create" | "modify" | "delete";
   filePath: string;
   description: string;
-  priority: 'high' | 'medium' | 'low';
+  priority: "high" | "medium" | "low";
 }
+
+// API request/response body type
+export type APIBody = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
 // API specification
 export interface APISpecification {
@@ -351,8 +354,8 @@ export interface APISpecification {
   method: string;
   description: string;
   parameters?: Parameter[];
-  requestBody?: any;
-  responseBody?: any;
+  requestBody?: APIBody;
+  responseBody?: APIBody;
 }
 
 // Parameter definition
@@ -366,7 +369,7 @@ export interface Parameter {
 // Data model change
 export interface DataModelChange {
   table?: string;
-  action: 'create' | 'modify' | 'delete';
+  action: "create" | "modify" | "delete";
   description: string;
   fields?: Field[];
 }
@@ -384,7 +387,7 @@ export interface WebhookLog {
   id: number;
   source: string;
   eventType?: string;
-  payload: any;
+  payload: WebhookPayload;
   workflowId?: number;
   responseStatus?: number;
   receivedAt: Date;

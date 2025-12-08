@@ -1,0 +1,63 @@
+{
+  "agent_20251208_151553_opus": {
+    "start_time": "2025-12-08T20:15:53Z",
+    "files_locked": [
+      "AIDeveloper/src/api-routes.ts",
+      "AIDeveloper/src/api/workflow-hierarchy.ts"
+    ],
+    "features_working_on": [
+      "Fix @ts-ignore to @ts-expect-error ESLint errors"
+    ],
+    "plan_file": "coordination/planned_work/agent_20251208_151553_opus_plan.md",
+    "expected_completion": "2025-12-08T21:00:00Z"
+  },
+  "agent_1765225128_wurm": {
+    "start_time": "2025-12-08T20:18:48Z",
+    "files_locked": [
+      "AIDeveloper/src/types.ts",
+      "AIDeveloper/src/websocket-emitter.ts",
+      "AIDeveloper/src/workflow-messages.ts"
+    ],
+    "features_working_on": [
+      "typescript_type_safety",
+      "replace_any_with_proper_types",
+      "eslint_compliance"
+    ],
+    "plan_file": "coordination/planned_work/agent_1765225128_wurm_plan.md",
+    "expected_completion": "2025-12-08T21:00:00Z"
+  },
+  "agent_1765225146_nk92": {
+    "start_time": "2025-12-08T20:19:06Z",
+    "files_locked": [
+      "AIDeveloper/src/database.ts",
+      "AIDeveloper/src/server.ts",
+      "AIDeveloper/src/agent-communication.ts",
+      "AIDeveloper/src/utils/logger.ts",
+      "AIDeveloper/src/utils/branch-switcher.ts",
+      "AIDeveloper/src/api/module-plugins.ts"
+    ],
+    "features_working_on": [
+      "fix_no_explicit_any_warnings",
+      "improve_type_safety",
+      "eslint_compliance"
+    ],
+    "plan_file": "coordination/planned_work/agent_1765225146_nk92_plan.md",
+    "expected_completion": "2025-12-08T21:05:00Z"
+  },
+  "agent_1765225188_op45": {
+    "start_time": "2025-12-08T20:19:48Z",
+    "files_locked": [
+      "AIDeveloper/src/sub-workflow-queue.ts",
+      "AIDeveloper/src/utils/deployment-manager.ts",
+      "AIDeveloper/src/utils/execution-logger.ts",
+      "AIDeveloper/src/utils/module-auto-updater.ts"
+    ],
+    "features_working_on": [
+      "fix_no_explicit_any_warnings",
+      "improve_type_safety",
+      "eslint_compliance"
+    ],
+    "plan_file": "coordination/planned_work/agent_1765225188_op45_plan.md",
+    "expected_completion": "2025-12-08T21:20:00Z"
+  }
+}

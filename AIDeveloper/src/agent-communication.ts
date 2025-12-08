@@ -3,29 +3,32 @@
  * Provides message protocol and communication between agents
  */
 
-import { EventEmitter } from 'events';
-import * as logger from './utils/logger.js';
+import { EventEmitter } from "events";
+import * as logger from "./utils/logger.js";
 
 /**
  * Message types
  */
 export enum MessageType {
-  REQUEST = 'request',
-  RESPONSE = 'response',
-  STATUS = 'status',
-  ERROR = 'error',
-  BROADCAST = 'broadcast',
+  REQUEST = "request",
+  RESPONSE = "response",
+  STATUS = "status",
+  ERROR = "error",
+  BROADCAST = "broadcast",
 }
 
 /**
  * Message structure
  */
+// Payload can be any JSON-serializable value
+type MessagePayload = unknown;
+
 export interface AgentMessage {
   id: string;
   type: MessageType;
   from: string;
   to?: string;
-  payload: any;
+  payload: MessagePayload;
   timestamp: Date;
   correlationId?: string;
 }
@@ -74,7 +77,7 @@ export class AgentCommunicationBus extends EventEmitter {
       correlationId,
     };
 
-    logger.debug('Sending message to agent', {
+    logger.debug("Sending message to agent", {
       messageId: message.id,
       from,
       to,
@@ -97,15 +100,12 @@ export class AgentCommunicationBus extends EventEmitter {
    * Receive message for agent
    * Returns next message in queue or waits for one
    */
-  async receiveMessage(
-    agentId: string,
-    timeout: number = 5000
-  ): Promise<AgentMessage | null> {
+  async receiveMessage(agentId: string, timeout: number = 5000): Promise<AgentMessage | null> {
     // Check if message already in queue
     const queue = this.messageQueue.get(agentId);
     if (queue && queue.length > 0) {
       const message = queue.shift()!;
-      logger.debug('Message retrieved from queue', {
+      logger.debug("Message retrieved from queue", {
         messageId: message.id,
         agentId,
       });
@@ -160,7 +160,7 @@ export class AgentCommunicationBus extends EventEmitter {
         this.removeListener(`response:${correlationId}`, listener);
 
         if (message.type === MessageType.ERROR) {
-          reject(new Error(message.payload.message || 'Agent error'));
+          reject(new Error(message.payload.message || "Agent error"));
         } else {
           resolve(message.payload);
         }
@@ -173,12 +173,7 @@ export class AgentCommunicationBus extends EventEmitter {
   /**
    * Send response to a request
    */
-  async sendResponse(
-    to: string,
-    from: string,
-    payload: any,
-    correlationId: string
-  ): Promise<void> {
+  async sendResponse(to: string, from: string, payload: any, correlationId: string): Promise<void> {
     await this.sendToAgent(to, from, MessageType.RESPONSE, payload, correlationId);
     this.emit(`response:${correlationId}`, {
       id: this.generateMessageId(),
@@ -194,12 +189,7 @@ export class AgentCommunicationBus extends EventEmitter {
   /**
    * Send error response
    */
-  async sendError(
-    to: string,
-    from: string,
-    error: Error,
-    correlationId?: string
-  ): Promise<void> {
+  async sendError(to: string, from: string, error: Error, correlationId?: string): Promise<void> {
     const payload = {
       message: error.message,
       stack: error.stack,
@@ -224,7 +214,7 @@ export class AgentCommunicationBus extends EventEmitter {
    * Broadcast message to all agents
    */
   async broadcast(from: string, payload: any): Promise<void> {
-    logger.debug('Broadcasting message', { from });
+    logger.debug("Broadcasting message", { from });
 
     const message: AgentMessage = {
       id: this.generateMessageId(),
@@ -235,7 +225,7 @@ export class AgentCommunicationBus extends EventEmitter {
     };
 
     // Emit to all registered agents
-    this.emit('broadcast', message);
+    this.emit("broadcast", message);
   }
 
   /**
@@ -251,7 +241,7 @@ export class AgentCommunicationBus extends EventEmitter {
    */
   clearMessages(agentId: string): void {
     this.messageQueue.delete(agentId);
-    logger.debug('Cleared message queue', { agentId });
+    logger.debug("Cleared message queue", { agentId });
   }
 
   /**
@@ -270,7 +260,7 @@ export class AgentCommunicationBus extends EventEmitter {
     // Remove all listeners
     this.removeAllListeners();
 
-    logger.debug('Agent communication bus destroyed');
+    logger.debug("Agent communication bus destroyed");
   }
 }
 
